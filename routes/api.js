@@ -38,6 +38,8 @@ const LIMITS = {
     URL_LENGTH: 2048,
     QUERY_LENGTH: 200,
     CATEGORY_LENGTH: 50,
+    TEMPLATE_NAME_LENGTH: 200,
+    TEMPLATE_VARIABLES_LENGTH: 500,
     PAGINATION: {
         MESSAGES: 500,
         LOGS: 500,
@@ -62,6 +64,24 @@ function validateMessage(message) {
 function validateNote(note) {
     if (!note || typeof note !== 'string') return false;
     return note.length <= LIMITS.NOTE_LENGTH;
+}
+
+function normalizeTemplateVariables(rawVariables) {
+    if (!rawVariables) return [];
+    if (Array.isArray(rawVariables)) {
+        return rawVariables
+            .map(item => String(item).trim())
+            .filter(Boolean)
+            .slice(0, 50);
+    }
+    if (typeof rawVariables === 'string') {
+        return rawVariables
+            .split(',')
+            .map(item => item.trim())
+            .filter(Boolean)
+            .slice(0, 50);
+    }
+    return [];
 }
 
 function validateUrl(url) {
@@ -551,24 +571,49 @@ router.get('/auto-replies', (req, res) => {
 });
 
 router.post('/auto-replies', requireRole(['admin', 'manager']), (req, res) => {
-    const { trigger_word, response, match_type, is_active } = req.body;
-    if (!trigger_word || !response) {
-        return res.status(400).json({ error: 'trigger_word and response required' });
+    const { trigger_word, response, template_id, match_type, is_active } = req.body;
+    if (!trigger_word || (!response && !template_id)) {
+        return res.status(400).json({ error: 'trigger_word and response or template_id required' });
     }
     // Input length validation
     if (trigger_word.length > LIMITS.TRIGGER_LENGTH) {
         return res.status(400).json({ error: 'Trigger word too long (max ' + LIMITS.TRIGGER_LENGTH + ' chars)' });
     }
-    if (response.length > LIMITS.MESSAGE_LENGTH) {
+    if (response && response.length > LIMITS.MESSAGE_LENGTH) {
         return res.status(400).json({ error: 'Response too long (max ' + LIMITS.MESSAGE_LENGTH + ' chars)' });
     }
-    const result = req.account.db.autoReplies.create.run(trigger_word, response, match_type || 'contains', is_active !== false ? 1 : 0);
+    if (template_id) {
+        const template = req.account.db.messageTemplates.getById.get(template_id);
+        if (!template) {
+            return res.status(404).json({ error: 'Template not found' });
+        }
+    }
+    const result = req.account.db.autoReplies.create.run(
+        trigger_word,
+        response || '',
+        template_id || null,
+        match_type || 'contains',
+        is_active !== false ? 1 : 0
+    );
     res.json({ success: true, id: result.lastInsertRowid });
 });
 
 router.put('/auto-replies/:id', requireRole(['admin', 'manager']), (req, res) => {
-    const { trigger_word, response, match_type, is_active } = req.body;
-    req.account.db.autoReplies.update.run(trigger_word, response, match_type || 'contains', is_active ? 1 : 0, req.params.id);
+    const { trigger_word, response, template_id, match_type, is_active } = req.body;
+    if (template_id) {
+        const template = req.account.db.messageTemplates.getById.get(template_id);
+        if (!template) {
+            return res.status(404).json({ error: 'Template not found' });
+        }
+    }
+    req.account.db.autoReplies.update.run(
+        trigger_word,
+        response || '',
+        template_id || null,
+        match_type || 'contains',
+        is_active ? 1 : 0,
+        req.params.id
+    );
     res.json({ success: true });
 });
 
@@ -590,18 +635,36 @@ router.get('/scheduled', (req, res) => {
 });
 
 router.post('/scheduled', (req, res) => {
-    const { chat_id, chat_name, message, scheduled_at, is_recurring, cron_expression } = req.body;
-    if (!chat_id || !message || !scheduled_at) {
-        return res.status(400).json({ error: 'chat_id, message and scheduled_at required' });
+    const { chat_id, chat_name, message, template_id, scheduled_at, is_recurring, cron_expression } = req.body;
+    if (!chat_id || (!message && !template_id) || !scheduled_at) {
+        return res.status(400).json({ error: 'chat_id, message or template_id, and scheduled_at required' });
     }
     // Input validation
     if (!validateChatId(chat_id)) {
         return res.status(400).json({ error: 'Invalid chat_id format' });
     }
-    if (!validateMessage(message)) {
+    if (message && !validateMessage(message)) {
         return res.status(400).json({ error: 'Message too long or invalid' });
     }
-    const result = req.account.db.scheduled.create.run(chat_id, chat_name || '', message, scheduled_at, is_recurring ? 1 : 0, cron_expression || null);
+    let resolvedMessage = message || '';
+    if (template_id) {
+        const template = req.account.db.messageTemplates.getById.get(template_id);
+        if (!template) {
+            return res.status(404).json({ error: 'Template not found' });
+        }
+        if (!resolvedMessage) {
+            resolvedMessage = template.content;
+        }
+    }
+    const result = req.account.db.scheduled.create.run(
+        chat_id,
+        chat_name || '',
+        resolvedMessage,
+        template_id || null,
+        scheduled_at,
+        is_recurring ? 1 : 0,
+        cron_expression || null
+    );
     res.json({ success: true, id: result.lastInsertRowid });
 });
 
@@ -733,6 +796,68 @@ router.post('/scripts/test', async (req, res) => {
 router.get('/scripts/:id/logs', (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 50, LIMITS.PAGINATION.SCRIPT_LOGS);
     res.json(req.account.db.scriptLogs.getByScript.all(req.params.id, limit));
+});
+
+// ============ TEMPLATES ============
+router.get('/templates', (req, res) => {
+    res.json(req.account.db.messageTemplates.getAll.all());
+});
+
+router.get('/templates/:id', (req, res) => {
+    const template = req.account.db.messageTemplates.getById.get(req.params.id);
+    if (!template) return res.status(404).json({ error: 'Not found' });
+    res.json(template);
+});
+
+router.post('/templates', (req, res) => {
+    const { name, content, variables, category } = req.body;
+    if (!name || !content) {
+        return res.status(400).json({ error: 'name and content required' });
+    }
+    if (name.length > LIMITS.TEMPLATE_NAME_LENGTH) {
+        return res.status(400).json({ error: 'Template name too long (max ' + LIMITS.TEMPLATE_NAME_LENGTH + ' chars)' });
+    }
+    if (!validateMessage(content)) {
+        return res.status(400).json({ error: 'Template content too long or invalid' });
+    }
+    if (typeof variables === 'string' && variables.length > LIMITS.TEMPLATE_VARIABLES_LENGTH) {
+        return res.status(400).json({ error: 'Variables list too long (max ' + LIMITS.TEMPLATE_VARIABLES_LENGTH + ' chars)' });
+    }
+    if (category && category.length > LIMITS.CATEGORY_LENGTH) {
+        return res.status(400).json({ error: 'Category too long (max ' + LIMITS.CATEGORY_LENGTH + ' chars)' });
+    }
+    const normalizedVariables = normalizeTemplateVariables(variables);
+    const variablesJson = normalizedVariables.length ? JSON.stringify(normalizedVariables) : null;
+    const result = req.account.db.messageTemplates.create.run(name.trim(), content, variablesJson, category || null);
+    res.json({ success: true, id: result.lastInsertRowid });
+});
+
+router.put('/templates/:id', (req, res) => {
+    const { name, content, variables, category } = req.body;
+    if (!name || !content) {
+        return res.status(400).json({ error: 'name and content required' });
+    }
+    if (name.length > LIMITS.TEMPLATE_NAME_LENGTH) {
+        return res.status(400).json({ error: 'Template name too long (max ' + LIMITS.TEMPLATE_NAME_LENGTH + ' chars)' });
+    }
+    if (!validateMessage(content)) {
+        return res.status(400).json({ error: 'Template content too long or invalid' });
+    }
+    if (typeof variables === 'string' && variables.length > LIMITS.TEMPLATE_VARIABLES_LENGTH) {
+        return res.status(400).json({ error: 'Variables list too long (max ' + LIMITS.TEMPLATE_VARIABLES_LENGTH + ' chars)' });
+    }
+    if (category && category.length > LIMITS.CATEGORY_LENGTH) {
+        return res.status(400).json({ error: 'Category too long (max ' + LIMITS.CATEGORY_LENGTH + ' chars)' });
+    }
+    const normalizedVariables = normalizeTemplateVariables(variables);
+    const variablesJson = normalizedVariables.length ? JSON.stringify(normalizedVariables) : null;
+    req.account.db.messageTemplates.update.run(name.trim(), content, variablesJson, category || null, req.params.id);
+    res.json({ success: true });
+});
+
+router.delete('/templates/:id', (req, res) => {
+    req.account.db.messageTemplates.delete.run(req.params.id);
+    res.json({ success: true });
 });
 
 // ============ LOGS ============

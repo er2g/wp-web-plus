@@ -59,10 +59,21 @@ function createDatabase(config) {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         trigger_word TEXT NOT NULL,
         response TEXT NOT NULL,
+        template_id INTEGER,
         match_type TEXT DEFAULT 'contains',
         is_active INTEGER DEFAULT 1,
         reply_count INTEGER DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS message_templates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        content TEXT NOT NULL,
+        variables TEXT,
+        category TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS scheduled_messages (
@@ -70,6 +81,7 @@ function createDatabase(config) {
         chat_id TEXT NOT NULL,
         chat_name TEXT,
         message TEXT NOT NULL,
+        template_id INTEGER,
         scheduled_at DATETIME NOT NULL,
         is_sent INTEGER DEFAULT 0,
         sent_at DATETIME,
@@ -205,6 +217,7 @@ function createDatabase(config) {
     CREATE INDEX IF NOT EXISTS idx_messages_message_id ON messages(message_id);
     CREATE INDEX IF NOT EXISTS idx_chats_updated ON chats(updated_at);
     CREATE INDEX IF NOT EXISTS idx_scheduled_time ON scheduled_messages(scheduled_at);
+    CREATE INDEX IF NOT EXISTS idx_templates_category ON message_templates(category);
     CREATE INDEX IF NOT EXISTS idx_logs_created ON logs(created_at);
     CREATE INDEX IF NOT EXISTS idx_scripts_active ON scripts(is_active);
     CREATE INDEX IF NOT EXISTS idx_script_logs_script ON script_logs(script_id);
@@ -250,6 +263,24 @@ function createDatabase(config) {
             name: 'add_script_logs_created_index',
             apply: () => {
                 db.exec('CREATE INDEX IF NOT EXISTS idx_script_logs_created ON script_logs(created_at)');
+            }
+        },
+        {
+            version: 4,
+            name: 'add_template_id_to_auto_replies',
+            apply: () => {
+                if (!columnExists('auto_replies', 'template_id')) {
+                    db.exec('ALTER TABLE auto_replies ADD COLUMN template_id INTEGER');
+                }
+            }
+        },
+        {
+            version: 5,
+            name: 'add_template_id_to_scheduled_messages',
+            apply: () => {
+                if (!columnExists('scheduled_messages', 'template_id')) {
+                    db.exec('ALTER TABLE scheduled_messages ADD COLUMN template_id INTEGER');
+                }
             }
         }
     ];
@@ -356,11 +387,19 @@ function createDatabase(config) {
         getAll: db.prepare('SELECT * FROM auto_replies ORDER BY created_at DESC'),
         getActive: db.prepare('SELECT * FROM auto_replies WHERE is_active = 1'),
         getById: db.prepare('SELECT * FROM auto_replies WHERE id = ?'),
-        create: db.prepare(`INSERT INTO auto_replies (trigger_word, response, match_type, is_active) VALUES (?, ?, ?, ?)`),
-        update: db.prepare(`UPDATE auto_replies SET trigger_word = ?, response = ?, match_type = ?, is_active = ? WHERE id = ?`),
+        create: db.prepare(`INSERT INTO auto_replies (trigger_word, response, template_id, match_type, is_active) VALUES (?, ?, ?, ?, ?)`),
+        update: db.prepare(`UPDATE auto_replies SET trigger_word = ?, response = ?, template_id = ?, match_type = ?, is_active = ? WHERE id = ?`),
         delete: db.prepare('DELETE FROM auto_replies WHERE id = ?'),
         incrementCount: db.prepare('UPDATE auto_replies SET reply_count = reply_count + 1 WHERE id = ?'),
         toggle: db.prepare('UPDATE auto_replies SET is_active = ? WHERE id = ?')
+    };
+
+    const messageTemplates = {
+        getAll: db.prepare('SELECT * FROM message_templates ORDER BY created_at DESC'),
+        getById: db.prepare('SELECT * FROM message_templates WHERE id = ?'),
+        create: db.prepare(`INSERT INTO message_templates (name, content, variables, category) VALUES (?, ?, ?, ?)`),
+        update: db.prepare(`UPDATE message_templates SET name = ?, content = ?, variables = ?, category = ?, updated_at = datetime('now') WHERE id = ?`),
+        delete: db.prepare('DELETE FROM message_templates WHERE id = ?')
     };
 
     const scheduled = {
@@ -373,7 +412,7 @@ function createDatabase(config) {
           AND retry_count < ?
     `),
         getById: db.prepare('SELECT * FROM scheduled_messages WHERE id = ?'),
-        create: db.prepare(`INSERT INTO scheduled_messages (chat_id, chat_name, message, scheduled_at, is_recurring, cron_expression) VALUES (?, ?, ?, ?, ?, ?)`),
+        create: db.prepare(`INSERT INTO scheduled_messages (chat_id, chat_name, message, template_id, scheduled_at, is_recurring, cron_expression) VALUES (?, ?, ?, ?, ?, ?, ?)`),
         markSent: db.prepare(`
         UPDATE scheduled_messages
         SET is_sent = 1,
@@ -772,6 +811,7 @@ function createDatabase(config) {
         messages,
         chats,
         autoReplies,
+        messageTemplates,
         scheduled,
         webhooks,
         webhookDeliveries,
