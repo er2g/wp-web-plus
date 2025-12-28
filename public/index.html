@@ -59,6 +59,9 @@
                             <div class="dropdown-item" onclick="showTab('scheduled')">
                                 <i class="bi bi-clock-fill"></i> Zamanli Mesaj
                             </div>
+                            <div class="dropdown-item" onclick="showTab('templates')">
+                                <i class="bi bi-card-text"></i> Mesaj Sablonlari
+                            </div>
                             <div class="dropdown-item" onclick="showTab('webhooks')">
                                 <i class="bi bi-link-45deg"></i> Webhooks
                             </div>
@@ -203,6 +206,9 @@
                 <button class="icon-btn emoji-btn" onclick="toggleEmojiPicker()">
                     <i class="bi bi-emoji-smile"></i>
                 </button>
+                <button class="icon-btn" onclick="openTemplatePicker()" title="Sablon Sec">
+                    <i class="bi bi-card-text"></i>
+                </button>
                 <button class="icon-btn attach-btn" onclick="toggleAttachMenu()">
                     <i class="bi bi-paperclip"></i>
                 </button>
@@ -253,6 +259,13 @@
                 <div class="info">
                     <div class="title">Zamanli Mesajlar</div>
                     <div class="subtitle">Ileri tarihli mesaj gonder</div>
+                </div>
+            </div>
+            <div class="feature-item" onclick="showTab('templates')">
+                <div class="icon teal"><i class="bi bi-card-text"></i></div>
+                <div class="info">
+                    <div class="title">Mesaj Sablonlari</div>
+                    <div class="subtitle">Hazir mesaj kutuphanesi</div>
                 </div>
             </div>
             <div class="feature-item" onclick="showTab('webhooks')">

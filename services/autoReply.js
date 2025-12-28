@@ -11,6 +11,27 @@ class AutoReplyService {
         this.whatsapp = whatsapp;
     }
 
+    buildTemplateContext(msgData) {
+        return {
+            name: msgData.fromName || 'Friend',
+            message: msgData.body || '',
+            time: new Date().toLocaleTimeString(),
+            date: new Date().toLocaleDateString(),
+            chatId: msgData.chatId || '',
+            from: msgData.from || ''
+        };
+    }
+
+    renderTemplate(content, context) {
+        if (!content) return '';
+        return content.replace(/{(\w+)}/g, (match, key) => {
+            if (Object.prototype.hasOwnProperty.call(context, key)) {
+                return String(context[key]);
+            }
+            return match;
+        });
+    }
+
     async processMessage(msgData) {
         if (!this.whatsapp || !msgData || msgData.isFromMe) {
             return false;
@@ -18,6 +39,7 @@ class AutoReplyService {
 
         const rules = this.db.autoReplies.getActive.all();
         const messageBody = msgData.body.toLowerCase();
+        const context = this.buildTemplateContext(msgData);
 
         for (const rule of rules) {
             const trigger = rule.trigger_word.toLowerCase();
@@ -49,12 +71,22 @@ class AutoReplyService {
 
             if (matched) {
                 try {
-                    // Replace placeholders in response
-                    let response = rule.response
-                        .replace(/{name}/g, msgData.fromName || 'Friend')
-                        .replace(/{message}/g, msgData.body)
-                        .replace(/{time}/g, new Date().toLocaleTimeString())
-                        .replace(/{date}/g, new Date().toLocaleDateString());
+                    let responseTemplate = rule.response;
+                    if (rule.template_id) {
+                        const template = this.db.messageTemplates.getById.get(rule.template_id);
+                        if (template) {
+                            responseTemplate = template.content;
+                        }
+                    }
+
+                    const response = this.renderTemplate(responseTemplate, context);
+                    if (!response) {
+                        this.db.logs.add.run('error', 'auto-reply',
+                            'Auto-reply template rendered empty response',
+                            JSON.stringify({ rule: rule.id })
+                        );
+                        return false;
+                    }
 
                     await this.whatsapp.sendMessage(msgData.chatId, response);
                     this.db.autoReplies.incrementCount.run(rule.id);

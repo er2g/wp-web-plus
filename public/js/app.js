@@ -8,6 +8,8 @@ let currentChat = null;
 let chats = [];
 let monacoEditor = null;
 let editingScriptId = null;
+let templates = [];
+let editingTemplateId = null;
 let accounts = [];
 let activeAccountId = localStorage.getItem('activeAccountId');
 let settings = {
@@ -1240,6 +1242,16 @@ function showModal(feature) {
             content = getScheduledContent();
             loadScheduledData();
             break;
+        case 'templates':
+            title = 'Mesaj Sablonlari';
+            content = getTemplatesContent();
+            loadTemplatesData();
+            break;
+        case 'template-picker':
+            title = 'Sablon Sec';
+            content = getTemplatePickerContent();
+            loadTemplatePickerData();
+            break;
         case 'webhooks':
             title = 'Webhooks';
             content = getWebhooksContent();
@@ -1364,12 +1376,213 @@ async function loadAutoRepliesData() {
     }
 }
 
+// Templates Content
+function getTemplatesContent() {
+    return '<form id="templateFormModal" onsubmit="submitTemplate(event)" style="margin-bottom: 20px; padding: 16px; background: var(--bg-secondary); border-radius: 8px;">' +
+        '<div class="form-group"><label class="form-label">Sablon Adi</label><input type="text" class="form-input" id="templateNameModal" required></div>' +
+        '<div class="form-group"><label class="form-label">Kategori</label><input type="text" class="form-input" id="templateCategoryModal" placeholder="Kampanya, Bilgilendirme..."></div>' +
+        '<div class="form-group"><label class="form-label">Degiskenler (virgulle ayir)</label><input type="text" class="form-input" id="templateVariablesModal" placeholder="name, message, date"></div>' +
+        '<div class="form-group"><label class="form-label">Icerik</label><textarea class="form-input" id="templateContentModal" rows="4" required></textarea></div>' +
+        '<div style="display: flex; gap: 8px;">' +
+            '<button type="submit" class="btn btn-primary" id="templateSubmitButton">Kaydet</button>' +
+            '<button type="button" class="btn" onclick="resetTemplateForm()">Vazgec</button>' +
+        '</div>' +
+        '<div style="margin-top: 8px; color: var(--text-secondary); font-size: 12px;">Desteklenen degiskenler: {name}, {message}, {date}, {time}, {chatId}, {chatName}</div>' +
+        '</form>' +
+        '<div id="templatesListModal"></div>';
+}
+
+function getTemplatePickerContent() {
+    return '<div id="templatePickerListModal"></div>';
+}
+
+async function loadTemplatesCache() {
+    try {
+        templates = await api('api/templates');
+    } catch (err) {
+        console.error('Templates load error:', err);
+        templates = [];
+    }
+    return templates;
+}
+
+function parseTemplateVariables(template) {
+    if (!template || !template.variables) return [];
+    try {
+        const parsed = JSON.parse(template.variables);
+        if (Array.isArray(parsed)) return parsed;
+    } catch (err) {
+        console.warn('Template variables parse failed:', err);
+    }
+    return [];
+}
+
+async function loadTemplatesData() {
+    const templateList = await loadTemplatesCache();
+    const container = document.getElementById('templatesListModal');
+    if (!container) return;
+
+    if (templateList.length === 0) {
+        container.innerHTML = '<p style="color: var(--text-secondary)">Henuz sablon yok</p>';
+        return;
+    }
+
+    container.innerHTML = templateList.map(template => {
+        const variables = parseTemplateVariables(template);
+        const variableText = variables.length ? variables.join(', ') : 'Yok';
+        const categoryText = template.category ? template.category : 'Kategori yok';
+        return '<div class="settings-item" style="border: 1px solid var(--border-color); border-radius: 8px; margin-bottom: 8px; padding: 12px;">' +
+            '<div class="info" style="flex: 1;">' +
+                '<div class="title">' + escapeHtml(template.name) + '</div>' +
+                '<div class="subtitle">' + escapeHtml(categoryText) + ' • ' + escapeHtml(variableText) + '</div>' +
+                '<div class="subtitle">' + escapeHtml(template.content.substring(0, 80)) + '</div>' +
+            '</div>' +
+            '<button class="icon-btn" onclick="startTemplateEdit(' + template.id + ')" title="Duzenle"><i class="bi bi-pencil"></i></button>' +
+            '<button class="icon-btn" onclick="deleteTemplate(' + template.id + ')" title="Sil"><i class="bi bi-trash" style="color: #f15c6d;"></i></button>' +
+            '</div>';
+    }).join('');
+}
+
+async function loadTemplatePickerData() {
+    const templateList = await loadTemplatesCache();
+    const container = document.getElementById('templatePickerListModal');
+    if (!container) return;
+
+    if (templateList.length === 0) {
+        container.innerHTML = '<p style="color: var(--text-secondary)">Henuz sablon yok</p>';
+        return;
+    }
+
+    container.innerHTML = templateList.map(template => {
+        return '<div class="settings-item" style="border: 1px solid var(--border-color); border-radius: 8px; margin-bottom: 8px; padding: 12px;">' +
+            '<div class="info" style="flex: 1;">' +
+                '<div class="title">' + escapeHtml(template.name) + '</div>' +
+                '<div class="subtitle">' + escapeHtml(template.content.substring(0, 80)) + '</div>' +
+            '</div>' +
+            '<button class="btn btn-primary" onclick="useTemplate(' + template.id + ')">Sec</button>' +
+            '</div>';
+    }).join('');
+}
+
+function startTemplateEdit(id) {
+    const template = templates.find(item => item.id === id);
+    if (!template) return;
+    editingTemplateId = id;
+    document.getElementById('templateNameModal').value = template.name || '';
+    document.getElementById('templateCategoryModal').value = template.category || '';
+    document.getElementById('templateVariablesModal').value = parseTemplateVariables(template).join(', ');
+    document.getElementById('templateContentModal').value = template.content || '';
+    const submitButton = document.getElementById('templateSubmitButton');
+    if (submitButton) submitButton.textContent = 'Guncelle';
+}
+
+function resetTemplateForm() {
+    editingTemplateId = null;
+    const form = document.getElementById('templateFormModal');
+    if (form) {
+        form.reset();
+    }
+    const submitButton = document.getElementById('templateSubmitButton');
+    if (submitButton) submitButton.textContent = 'Kaydet';
+}
+
+async function submitTemplate(event) {
+    event.preventDefault();
+    const payload = {
+        name: document.getElementById('templateNameModal').value,
+        category: document.getElementById('templateCategoryModal').value,
+        variables: document.getElementById('templateVariablesModal').value,
+        content: document.getElementById('templateContentModal').value
+    };
+    try {
+        if (editingTemplateId) {
+            await api('api/templates/' + editingTemplateId, 'PUT', payload);
+            showToast('Sablon guncellendi', 'success');
+        } else {
+            await api('api/templates', 'POST', payload);
+            showToast('Sablon eklendi', 'success');
+        }
+        resetTemplateForm();
+        loadTemplatesData();
+    } catch (err) {
+        showToast('Hata: ' + err.message, 'error');
+    }
+}
+
+async function deleteTemplate(id) {
+    try {
+        await api('api/templates/' + id, 'DELETE');
+        showToast('Sablon silindi', 'success');
+        if (editingTemplateId === id) {
+            resetTemplateForm();
+        }
+        loadTemplatesData();
+    } catch (err) {
+        showToast('Hata: ' + err.message, 'error');
+    }
+}
+
+function populateTemplateSelect(selectId, templateList = templates) {
+    const select = document.getElementById(selectId);
+    if (!select) return;
+    const currentValue = select.value;
+    const options = ['<option value="">Sablon sec (opsiyonel)</option>'].concat(
+        templateList.map(template => '<option value="' + template.id + '">' + escapeHtml(template.name) + '</option>')
+    );
+    select.innerHTML = options.join('');
+    if (currentValue) {
+        select.value = currentValue;
+    }
+}
+
+function handleScheduledTemplateChange() {
+    const select = document.getElementById('schedTemplateIdModal');
+    const messageInput = document.getElementById('schedMessageModal');
+    if (!select || !messageInput) return;
+    const templateId = select.value;
+    const template = templates.find(item => String(item.id) === String(templateId));
+    if (template) {
+        messageInput.value = template.content;
+    }
+}
+
+function getScheduledPreviewText(scheduleItem, templateMap) {
+    if (scheduleItem.template_id) {
+        const template = templateMap.get(String(scheduleItem.template_id));
+        if (template) {
+            return '[Sablon] ' + (template.name || '');
+        }
+    }
+    return (scheduleItem.message || '').substring(0, 50);
+}
+
+function openTemplatePicker() {
+    if (!currentChat) {
+        showToast('Once bir sohbet secin', 'info');
+        return;
+    }
+    showModal('template-picker');
+}
+
+function useTemplate(id) {
+    const template = templates.find(item => item.id === id);
+    if (!template) return;
+    const input = document.getElementById('messageInput');
+    if (input) {
+        input.value = template.content || '';
+        autoResizeInput(input);
+        input.focus();
+    }
+    closeModal();
+}
+
 // Scheduled Content
 function getScheduledContent() {
     return '<form id="scheduledFormModal" onsubmit="submitScheduled(event)" style="margin-bottom: 20px; padding: 16px; background: var(--bg-secondary); border-radius: 8px;">' +
         '<div class="form-group"><label class="form-label">Sohbet ID</label><input type="text" class="form-input" id="schedChatIdModal" placeholder="905xxxxxxxxxx@c.us" required></div>' +
         '<div class="form-group"><label class="form-label">Sohbet Adi</label><input type="text" class="form-input" id="schedChatNameModal" required></div>' +
-        '<div class="form-group"><label class="form-label">Mesaj</label><textarea class="form-input" id="schedMessageModal" rows="3" required></textarea></div>' +
+        '<div class="form-group"><label class="form-label">Mesaj Sablonu</label><select class="form-input" id="schedTemplateIdModal" onchange="handleScheduledTemplateChange()"><option value="">Sablon sec (opsiyonel)</option></select></div>' +
+        '<div class="form-group"><label class="form-label">Mesaj</label><textarea class="form-input" id="schedMessageModal" rows="3" placeholder="Sablon secerseniz otomatik doldurulur"></textarea></div>' +
         '<div class="form-group"><label class="form-label">Gonderim Zamani</label><input type="datetime-local" class="form-input" id="schedTimeModal" required></div>' +
         '<button type="submit" class="btn btn-primary">Zamanla</button>' +
         '</form>' +
@@ -1378,12 +1591,18 @@ function getScheduledContent() {
 
 async function submitScheduled(event) {
     event.preventDefault();
+    const templateId = document.getElementById('schedTemplateIdModal').value;
     const data = {
         chat_id: document.getElementById('schedChatIdModal').value,
         chat_name: document.getElementById('schedChatNameModal').value,
         message: document.getElementById('schedMessageModal').value,
+        template_id: templateId || null,
         scheduled_at: document.getElementById('schedTimeModal').value
     };
+    if (!data.message && !data.template_id) {
+        showToast('Mesaj ya da sablon secmelisiniz', 'info');
+        return;
+    }
     try {
         await api('api/scheduled', 'POST', data);
         document.getElementById('scheduledFormModal').reset();
@@ -1397,6 +1616,8 @@ async function submitScheduled(event) {
 async function loadScheduledData() {
     try {
         const scheduled = await api('api/scheduled');
+        const templateList = await loadTemplatesCache();
+        populateTemplateSelect('schedTemplateIdModal', templateList);
         const container = document.getElementById('scheduledListModal');
         if (!container) return;
 
@@ -1405,11 +1626,13 @@ async function loadScheduledData() {
             return;
         }
 
+        const templateMap = new Map(templateList.map(template => [String(template.id), template]));
+
         container.innerHTML = scheduled.map(s =>
             '<div class="settings-item" style="border: 1px solid var(--border-color); border-radius: 8px; margin-bottom: 8px; padding: 12px;">' +
             '<div class="info" style="flex: 1;">' +
                 '<div class="title">' + escapeHtml(s.chat_name || s.chat_id) + '</div>' +
-                '<div class="subtitle">' + escapeHtml(s.message.substring(0, 50)) + ' - ' + formatDateTime(s.scheduled_at) + '</div>' +
+                '<div class="subtitle">' + escapeHtml(getScheduledPreviewText(s, templateMap)) + ' - ' + formatDateTime(s.scheduled_at) + '</div>' +
             '</div>' +
             '<span style="padding: 4px 8px; border-radius: 4px; font-size: 12px; background: ' + (s.is_sent ? 'var(--accent)' : '#ffc107') + '; color: ' + (s.is_sent ? 'white' : '#111') + ';">' + (s.is_sent ? 'Gonderildi' : 'Bekliyor') + '</span>' +
             '<button class="icon-btn" onclick="deleteScheduled(' + s.id + ')" title="Sil"><i class="bi bi-trash" style="color: #f15c6d;"></i></button>' +

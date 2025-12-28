@@ -16,6 +16,36 @@ class SchedulerService {
         this.whatsapp = whatsapp;
     }
 
+    buildTemplateContext(message) {
+        return {
+            chatId: message.chat_id || '',
+            chatName: message.chat_name || '',
+            time: new Date().toLocaleTimeString(),
+            date: new Date().toLocaleDateString()
+        };
+    }
+
+    renderTemplate(content, context) {
+        if (!content) return '';
+        return content.replace(/{(\w+)}/g, (match, key) => {
+            if (Object.prototype.hasOwnProperty.call(context, key)) {
+                return String(context[key]);
+            }
+            return match;
+        });
+    }
+
+    resolveScheduledMessage(msg) {
+        let templateContent = msg.message;
+        if (msg.template_id) {
+            const template = this.db.messageTemplates.getById.get(msg.template_id);
+            if (template) {
+                templateContent = template.content;
+            }
+        }
+        return this.renderTemplate(templateContent, this.buildTemplateContext(msg));
+    }
+
     start() {
         // Check for pending messages every minute
         this.checkInterval = setInterval(() => {
@@ -56,7 +86,11 @@ class SchedulerService {
 
             for (const msg of pending) {
                 try {
-                    await this.whatsapp.sendMessage(msg.chat_id, msg.message);
+                    const resolvedMessage = this.resolveScheduledMessage(msg);
+                    if (!resolvedMessage) {
+                        throw new Error('Resolved scheduled message is empty');
+                    }
+                    await this.whatsapp.sendMessage(msg.chat_id, resolvedMessage);
                     this.db.scheduled.markSent.run(msg.id);
 
                     this.db.logs.add.run('info', 'scheduler',
@@ -95,7 +129,7 @@ class SchedulerService {
     }
 
     // Setup recurring cron job
-    setupRecurring(id, cronExpression, chatId, message) {
+    setupRecurring(id, cronExpression, chatId, message, templateId, chatName) {
         if (this.cronJobs.has(id)) {
             this.cronJobs.get(id).stop();
         }
@@ -108,7 +142,16 @@ class SchedulerService {
         const job = cron.schedule(cronExpression, async () => {
             if (this.whatsapp && this.whatsapp.isReady()) {
                 try {
-                    await this.whatsapp.sendMessage(chatId, message);
+                    const resolvedMessage = this.resolveScheduledMessage({
+                        chat_id: chatId,
+                        chat_name: chatName || '',
+                        message,
+                        template_id: templateId
+                    });
+                    if (!resolvedMessage) {
+                        throw new Error('Resolved recurring message is empty');
+                    }
+                    await this.whatsapp.sendMessage(chatId, resolvedMessage);
                     this.db.logs.add.run('info', 'scheduler',
                         'Recurring message sent',
                         JSON.stringify({ id, chatId, cron: cronExpression })
