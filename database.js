@@ -3,6 +3,7 @@
  */
 const Database = require('better-sqlite3');
 const fs = require('fs');
+const { logger } = require('./services/logger');
 
 function createDatabase(config) {
     // Ensure data directory exists
@@ -125,12 +126,12 @@ function createDatabase(config) {
     // Note: ALTER TABLE will fail if column exists - this is expected
     try {
         db.exec("ALTER TABLE messages ADD COLUMN media_url TEXT");
-        console.log('Database migration: Added media_url column');
+        logger.info('Database migration: Added media_url column', { category: 'database' });
     } catch (e) {
         // Column already exists - this is expected, not an error
     }
 
-    console.log('Database initialized:', config.DB_PATH);
+    logger.info('Database initialized', { category: 'database', dbPath: config.DB_PATH });
 
     // Prepared statements
     const messages = {

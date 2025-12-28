@@ -2,6 +2,7 @@
  * WhatsApp Web Panel - Webhook Service
  */
 const axios = require('axios');
+const { logger } = require('./logger');
 
 class WebhookService {
     constructor(db, config) {
@@ -70,7 +71,11 @@ class WebhookService {
                     })
                 );
 
-                console.error('Webhook failed:', webhook.url, error.message);
+                logger.error('Webhook failed', {
+                    category: 'webhook',
+                    url: webhook.url,
+                    error: error.message
+                });
             }
         }
 

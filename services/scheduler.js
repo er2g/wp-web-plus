@@ -2,6 +2,7 @@
  * WhatsApp Web Panel - Scheduler Service
  */
 const cron = require('node-cron');
+const { logger } = require('./logger');
 
 class SchedulerService {
     constructor(db, whatsapp, config) {
@@ -25,7 +26,7 @@ class SchedulerService {
         // Initial check
         this.checkPendingMessages();
 
-        console.log('Scheduler service started');
+        logger.info('Scheduler service started', { category: 'scheduler' });
         this.db.logs.add.run('info', 'scheduler', 'Scheduler service started', null);
     }
 
@@ -41,7 +42,7 @@ class SchedulerService {
         }
         this.cronJobs.clear();
 
-        console.log('Scheduler service stopped');
+        logger.info('Scheduler service stopped', { category: 'scheduler' });
     }
 
     async checkPendingMessages() {
@@ -62,17 +63,21 @@ class SchedulerService {
                         JSON.stringify({ id: msg.id, chatId: msg.chat_id })
                     );
 
-                    console.log('Scheduled message sent:', msg.id);
+                    logger.info('Scheduled message sent', { category: 'scheduler', messageId: msg.id });
                 } catch (error) {
                     this.db.logs.add.run('error', 'scheduler',
                         'Failed to send scheduled message',
                         JSON.stringify({ id: msg.id, error: error.message })
                     );
-                    console.error('Failed to send scheduled message:', msg.id, error.message);
+                    logger.error('Failed to send scheduled message', {
+                        category: 'scheduler',
+                        messageId: msg.id,
+                        error: error.message
+                    });
                 }
             }
         } catch (error) {
-            console.error('Scheduler check error:', error.message);
+            logger.error('Scheduler check error', { category: 'scheduler', error: error.message });
         }
     }
 
@@ -83,7 +88,10 @@ class SchedulerService {
         }
 
         if (!cron.validate(cronExpression)) {
-            console.error('Invalid cron expression:', cronExpression);
+            logger.warn('Invalid cron expression', {
+                category: 'scheduler',
+                cronExpression
+            });
             return false;
         }
 

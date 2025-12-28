@@ -8,6 +8,7 @@ const { createAutoReplyService } = require('./autoReply');
 const { createSchedulerService } = require('./scheduler');
 const { createWebhookService } = require('./webhook');
 const { createScriptRunner } = require('./scriptRunner');
+const { logger } = require('./logger');
 
 const ACCOUNTS_FILE = path.join(config.DATA_DIR, 'accounts.json');
 const ACCOUNTS_DIR = path.join(config.DATA_DIR, 'accounts');
@@ -28,7 +29,7 @@ function readAccounts() {
             }
         }
     } catch (error) {
-        console.error('[ACCOUNTS] Failed to read accounts:', error.message);
+        logger.error('Failed to read accounts', { category: 'accounts', error: error.message });
     }
     return [];
 }
@@ -80,7 +81,11 @@ function migrateLegacyData(accountConfig) {
             try {
                 fs.renameSync(from, to);
             } catch (error) {
-                console.warn('[ACCOUNTS] Legacy data move failed for', from, error.message);
+                logger.warn('Legacy data move failed', {
+                    category: 'accounts',
+                    from,
+                    error: error.message
+                });
             }
         }
     });
