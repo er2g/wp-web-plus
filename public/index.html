@@ -17,7 +17,10 @@
                     <div class="avatar">
                         <i class="bi bi-person-fill"></i>
                     </div>
-                    <span class="premium-badge"><i class="bi bi-star-fill"></i> Premium</span>
+                    <div class="profile-info">
+                        <div class="profile-name" id="accountName">Hesap</div>
+                        <span class="premium-badge"><i class="bi bi-star-fill"></i> Premium</span>
+                    </div>
                 </div>
                 <div class="header-actions">
                     <button class="icon-btn" onclick="openFeatures()" title="Ozellikler">
@@ -26,6 +29,19 @@
                     <button class="icon-btn" onclick="startSync()" title="Senkronize Et">
                         <i class="bi bi-arrow-repeat"></i>
                     </button>
+                    <div class="dropdown">
+                        <button class="icon-btn" onclick="toggleDropdown('accountMenu')" title="Hesaplar">
+                            <i class="bi bi-people-fill"></i>
+                        </button>
+                        <div class="dropdown-menu account-menu" id="accountMenu">
+                            <div class="dropdown-header">Hesaplar</div>
+                            <div id="accountMenuList"></div>
+                            <div class="dropdown-divider"></div>
+                            <div class="dropdown-item" onclick="createAccount()">
+                                <i class="bi bi-plus-circle"></i> Yeni Hesap
+                            </div>
+                        </div>
+                    </div>
                     <div class="dropdown">
                         <button class="icon-btn" onclick="toggleDropdown('mainMenu')" title="Menu">
                             <i class="bi bi-three-dots-vertical"></i>
@@ -317,6 +333,27 @@
                         <div class="subtitle">Gozu yormayan karanlik tema</div>
                     </div>
                     <div class="toggle" id="toggleDarkMode"></div>
+                </div>
+                <div class="settings-item">
+                    <i class="icon bi bi-palette-fill"></i>
+                    <div class="info">
+                        <div class="title">Vurgu Rengi</div>
+                        <div class="subtitle">Arayuz ana rengini degistir</div>
+                    </div>
+                    <input type="color" id="accentColorPicker" class="color-picker" onchange="updateAccentColor(this.value)">
+                </div>
+                <div class="settings-item">
+                    <i class="icon bi bi-image"></i>
+                    <div class="info">
+                        <div class="title">Sohbet Duvari</div>
+                        <div class="subtitle">Arka plan desenini sec</div>
+                    </div>
+                    <select id="wallpaperSelect" class="select-input" onchange="updateWallpaperChoice(this.value)">
+                        <option value="default">Varsayilan</option>
+                        <option value="subtle">Sade</option>
+                        <option value="grid">Grid</option>
+                        <option value="solid">Duz</option>
+                    </select>
                 </div>
             </div>
 

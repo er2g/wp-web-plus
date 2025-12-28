@@ -7,20 +7,20 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const url = require('url');
-const config = require('./config');
 
 const SCOPES = ['https://www.googleapis.com/auth/drive.file'];
-const CREDENTIALS_PATH = path.join(config.DATA_DIR, 'drive-oauth-credentials.json');
-const TOKEN_PATH = path.join(config.DATA_DIR, 'drive-token.json');
 const SHARED_FOLDER_ID = '1ulDoH965gkHDCzUngvPfOJXn6xQ4cRaM';
 
 class DriveService {
-    constructor() {
+    constructor(config) {
         this.drive = null;
         this.oauth2Client = null;
         this.folderId = SHARED_FOLDER_ID;
         this.initialized = false;
         this.authUrl = null;
+        this.config = config;
+        this.credentialsPath = path.join(config.DATA_DIR, 'drive-oauth-credentials.json');
+        this.tokenPath = path.join(config.DATA_DIR, 'drive-token.json');
     }
 
     /**
@@ -31,13 +31,13 @@ class DriveService {
             return true;
         }
 
-        if (!fs.existsSync(CREDENTIALS_PATH)) {
-            console.log('[DRIVE] OAuth credentials not found at:', CREDENTIALS_PATH);
+        if (!fs.existsSync(this.credentialsPath)) {
+            console.log('[DRIVE] OAuth credentials not found at:', this.credentialsPath);
             return false;
         }
 
         try {
-            const credentials = JSON.parse(fs.readFileSync(CREDENTIALS_PATH, 'utf8'));
+            const credentials = JSON.parse(fs.readFileSync(this.credentialsPath, 'utf8'));
             const { client_id, client_secret, redirect_uris } = credentials.installed || credentials.web;
 
             this.oauth2Client = new google.auth.OAuth2(
@@ -47,16 +47,16 @@ class DriveService {
             );
 
             // Token varsa yukle
-            if (fs.existsSync(TOKEN_PATH)) {
-                const token = JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf8'));
+            if (fs.existsSync(this.tokenPath)) {
+                const token = JSON.parse(fs.readFileSync(this.tokenPath, 'utf8'));
                 this.oauth2Client.setCredentials(token);
 
                 // Token refresh gerekiyorsa
                 this.oauth2Client.on('tokens', (tokens) => {
                     if (tokens.refresh_token) {
-                        const currentToken = JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf8'));
+                        const currentToken = JSON.parse(fs.readFileSync(this.tokenPath, 'utf8'));
                         currentToken.refresh_token = tokens.refresh_token;
-                        fs.writeFileSync(TOKEN_PATH, JSON.stringify(currentToken, null, 2));
+                        fs.writeFileSync(this.tokenPath, JSON.stringify(currentToken, null, 2));
                     }
                 });
 
@@ -78,12 +78,12 @@ class DriveService {
      * Yetkilendirme URL'si al
      */
     getAuthUrl() {
-        if (!fs.existsSync(CREDENTIALS_PATH)) {
+        if (!fs.existsSync(this.credentialsPath)) {
             return null;
         }
 
         try {
-            const credentials = JSON.parse(fs.readFileSync(CREDENTIALS_PATH, 'utf8'));
+            const credentials = JSON.parse(fs.readFileSync(this.credentialsPath, 'utf8'));
             const { client_id, client_secret } = credentials.installed || credentials.web;
 
             const oauth2Client = new google.auth.OAuth2(
@@ -107,11 +107,11 @@ class DriveService {
      * Authorization code ile token al
      */
     async authorize(code) {
-        if (!fs.existsSync(CREDENTIALS_PATH)) {
+        if (!fs.existsSync(this.credentialsPath)) {
             throw new Error('OAuth credentials not found');
         }
 
-        const credentials = JSON.parse(fs.readFileSync(CREDENTIALS_PATH, 'utf8'));
+        const credentials = JSON.parse(fs.readFileSync(this.credentialsPath, 'utf8'));
         const { client_id, client_secret } = credentials.installed || credentials.web;
 
         const oauth2Client = new google.auth.OAuth2(
@@ -124,7 +124,7 @@ class DriveService {
         oauth2Client.setCredentials(tokens);
 
         // Token'i kaydet
-        fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens, null, 2));
+        fs.writeFileSync(this.tokenPath, JSON.stringify(tokens, null, 2));
         console.log('[DRIVE] Token saved');
 
         this.oauth2Client = oauth2Client;
@@ -284,14 +284,18 @@ class DriveService {
      */
     getStatus() {
         return {
-            configured: fs.existsSync(CREDENTIALS_PATH),
-            authorized: fs.existsSync(TOKEN_PATH),
-            credentialsPath: CREDENTIALS_PATH,
-            tokenPath: TOKEN_PATH,
+            configured: fs.existsSync(this.credentialsPath),
+            authorized: fs.existsSync(this.tokenPath),
+            credentialsPath: this.credentialsPath,
+            tokenPath: this.tokenPath,
             initialized: this.initialized,
             folderId: this.folderId
         };
     }
 }
 
-module.exports = new DriveService();
+function createDriveService(config) {
+    return new DriveService(config);
+}
+
+module.exports = { createDriveService };

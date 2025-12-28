@@ -2,17 +2,17 @@
  * WhatsApp Web Panel - Webhook Service
  */
 const axios = require('axios');
-const db = require('../database');
-const config = require('../config');
 
 class WebhookService {
-    constructor() {
+    constructor(db, config) {
+        this.db = db;
+        this.config = config;
         this.queue = [];
         this.processing = false;
     }
 
     async trigger(event, data) {
-        const webhooks = db.webhooks.getActive.all();
+        const webhooks = this.db.webhooks.getActive.all();
 
         for (const webhook of webhooks) {
             const events = webhook.events.split(',').map(e => e.trim());
@@ -43,24 +43,24 @@ class WebhookService {
                 };
 
                 await axios.post(webhook.url, payload, {
-                    timeout: config.WEBHOOK_TIMEOUT,
+                    timeout: this.config.WEBHOOK_TIMEOUT,
                     headers: {
                         'Content-Type': 'application/json',
                         'X-Webhook-Event': event
                     }
                 });
 
-                db.webhooks.recordSuccess.run(webhook.id);
+                this.db.webhooks.recordSuccess.run(webhook.id);
 
-                db.logs.add.run('info', 'webhook',
+                this.db.logs.add.run('info', 'webhook',
                     'Webhook triggered successfully',
                     JSON.stringify({ webhookId: webhook.id, event, url: webhook.url })
                 );
 
             } catch (error) {
-                db.webhooks.recordFail.run(webhook.id);
+                this.db.webhooks.recordFail.run(webhook.id);
 
-                db.logs.add.run('error', 'webhook',
+                this.db.logs.add.run('error', 'webhook',
                     'Webhook failed',
                     JSON.stringify({
                         webhookId: webhook.id,
@@ -79,7 +79,7 @@ class WebhookService {
 
     // Test webhook
     async test(webhookId) {
-        const webhook = db.webhooks.getById.get(webhookId);
+        const webhook = this.db.webhooks.getById.get(webhookId);
         if (!webhook) {
             throw new Error('Webhook not found');
         }
@@ -93,7 +93,7 @@ class WebhookService {
         };
 
         const response = await axios.post(webhook.url, payload, {
-            timeout: config.WEBHOOK_TIMEOUT,
+            timeout: this.config.WEBHOOK_TIMEOUT,
             headers: {
                 'Content-Type': 'application/json',
                 'X-Webhook-Event': 'test'
@@ -107,4 +107,8 @@ class WebhookService {
     }
 }
 
-module.exports = new WebhookService();
+function createWebhookService(db, config) {
+    return new WebhookService(db, config);
+}
+
+module.exports = { createWebhookService };

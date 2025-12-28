@@ -1,11 +1,10 @@
 /**
  * WhatsApp Web Panel - Auto Reply Service
  */
-const db = require('../database');
-
 class AutoReplyService {
-    constructor() {
-        this.whatsapp = null;
+    constructor(db, whatsapp) {
+        this.db = db;
+        this.whatsapp = whatsapp;
     }
 
     setWhatsApp(whatsapp) {
@@ -17,7 +16,7 @@ class AutoReplyService {
             return false;
         }
 
-        const rules = db.autoReplies.getActive.all();
+        const rules = this.db.autoReplies.getActive.all();
         const messageBody = msgData.body.toLowerCase();
 
         for (const rule of rules) {
@@ -58,16 +57,16 @@ class AutoReplyService {
                         .replace(/{date}/g, new Date().toLocaleDateString());
 
                     await this.whatsapp.sendMessage(msgData.chatId, response);
-                    db.autoReplies.incrementCount.run(rule.id);
+                    this.db.autoReplies.incrementCount.run(rule.id);
 
-                    db.logs.add.run('info', 'auto-reply',
+                    this.db.logs.add.run('info', 'auto-reply',
                         'Auto-reply sent for trigger: ' + rule.trigger_word,
                         JSON.stringify({ chatId: msgData.chatId, trigger: rule.trigger_word })
                     );
 
                     return true;
                 } catch (error) {
-                    db.logs.add.run('error', 'auto-reply',
+                    this.db.logs.add.run('error', 'auto-reply',
                         'Failed to send auto-reply',
                         JSON.stringify({ error: error.message, rule: rule.id })
                     );
@@ -79,4 +78,8 @@ class AutoReplyService {
     }
 }
 
-module.exports = new AutoReplyService();
+function createAutoReplyService(db, whatsapp) {
+    return new AutoReplyService(db, whatsapp);
+}
+
+module.exports = { createAutoReplyService };

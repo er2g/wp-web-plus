@@ -3,11 +3,11 @@
  * Executes user scripts in a sandboxed environment
  */
 const vm = require('vm');
-const db = require('../database');
 
 class ScriptRunner {
-    constructor() {
-        this.whatsapp = null;
+    constructor(db, whatsapp) {
+        this.db = db;
+        this.whatsapp = whatsapp;
         this.runningScripts = new Map();
     }
 
@@ -36,9 +36,9 @@ class ScriptRunner {
             },
 
             // Data access
-            getChats: () => db.chats.getAll.all(),
-            getMessages: (chatId, limit = 50) => db.messages.getByChatId.all(chatId, limit),
-            searchMessages: (query) => db.messages.search.all('%' + query + '%'),
+            getChats: () => self.db.chats.getAll.all(),
+            getMessages: (chatId, limit = 50) => self.db.messages.getByChatId.all(chatId, limit),
+            searchMessages: (query) => self.db.messages.search.all('%' + query + '%'),
 
             // Trigger data
             msg: triggerData,
@@ -118,7 +118,7 @@ class ScriptRunner {
 
     scriptLog(scriptId, level, message) {
         try {
-            db.scriptLogs.add.run(scriptId, level, message, null);
+            this.db.scriptLogs.add.run(scriptId, level, message, null);
         } catch (e) {
             console.error('Script log error:', e);
         }
@@ -147,7 +147,7 @@ class ScriptRunner {
                 timeout: 30000
             });
 
-            db.scripts.recordRun.run(script.id);
+            this.db.scripts.recordRun.run(script.id);
 
             const duration = Date.now() - startTime;
             this.scriptLog(script.id, 'info', 'Script completed in ' + duration + 'ms');
@@ -155,7 +155,7 @@ class ScriptRunner {
             return { success: true, duration };
 
         } catch (error) {
-            db.scripts.recordError.run(error.message, script.id);
+            this.db.scripts.recordError.run(error.message, script.id);
             this.scriptLog(script.id, 'error', 'Error: ' + error.message);
 
             return { success: false, error: error.message };
@@ -165,7 +165,7 @@ class ScriptRunner {
     async processMessage(msgData) {
         if (!msgData) return;
 
-        const scripts = db.scripts.getByTrigger.all('message');
+        const scripts = this.db.scripts.getByTrigger.all('message');
 
         for (const script of scripts) {
             try {
@@ -212,4 +212,8 @@ class ScriptRunner {
     }
 }
 
-module.exports = new ScriptRunner();
+function createScriptRunner(db, whatsapp) {
+    return new ScriptRunner(db, whatsapp);
+}
+
+module.exports = { createScriptRunner };

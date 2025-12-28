@@ -35,8 +35,13 @@
     --shadow-lg: 0 2px 5px 0 rgba(11,20,26,0.26), 0 2px 10px 0 rgba(11,20,26,0.16);
 
     /* Chat wallpaper */
-    --chat-wallpaper: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADIAAAAyCAMAAAAp4XiDAAAAUVBMVEWFhYWDg4N3d3dtbW17e3t1dXWBgYGHh4d5. eXlsbGxwcHCQkJBycnKphases are not defined properlyKCgoeli4ueli4ueli4ueli4ueli4ueli4ueli4ueli4ueli4ueli4u"),
+    --wallpaper-default: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADIAAAAyCAMAAAAp4XiDAAAAUVBMVEWFhYWDg4N3d3dtbW17e3t1dXWBgYGHh4d5eXlsbGxwcHCQkJBycnKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqoN1s7aAAAAFHRSTlMAEBAgIDAwQEBQUGBgcHBwcICBEmM/hAAAAb1JREFUeJzt1MkOgjAQRdH7BRYoG5MS3P//yWYbVbJNd9O5oTi4bE/xbp/pE2l3nJsNi2v3kJFlqUqBSeFp+7mp5qYxg0xL0poPzLcnIZx6R6prl9qQpG7qZ1ytq6NEpsIyEfYzX4I0RAZKD3n5dOa1bAStqYkqEVB1gKxL8hXbO3rJv4MSnCXXVQga5RgrKuJx6mV7HLKEG9C0g2C7WmMO0SR4CPsDo8q9zLxq8i5xK1x3lNwsx0yQ9+0r9lK0K7eRqr1aW0X5fM3E1t9ZB3w9PRuC0X7cH3w8mG1/4QOx1G+f6Kp7Q9RZ1zKx1j8u2s2l39c9aDMeVCqFQp3Wy0s8gGk3kC+2v8NwB7L0K4Xqg1UMuJ4pXzrmNhFW2kqPdrO0H+7pfi+2Gq0xg8+2fC1R1yqN2UeSj7Ok0H+N2mX3/ATbqS7P1q4mJwAAAABJRU5ErkJggg=="),
                           linear-gradient(to bottom, rgba(229,221,213,0.95), rgba(229,221,213,0.95));
+    --wallpaper-subtle: linear-gradient(135deg, rgba(0,168,132,0.12), rgba(255,255,255,0.7));
+    --wallpaper-grid: linear-gradient(90deg, rgba(0,0,0,0.04) 1px, transparent 1px) 0 0 / 24px 24px,
+                      linear-gradient(180deg, rgba(0,0,0,0.04) 1px, transparent 1px) 0 0 / 24px 24px;
+    --wallpaper-solid: linear-gradient(180deg, rgba(255,255,255,0.9), rgba(255,255,255,0.9));
+    --chat-wallpaper: var(--wallpaper-default);
 }
 
 /* Dark Theme */
@@ -66,8 +71,13 @@
     --icon-color: #aebac1;
     --icon-active: #00a884;
 
-    --chat-wallpaper: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADwAAAA8CAMAAAANIilAAAAAP1BMVEUAAAAOGh8QHCEQHCEPGyARHSIPGyAQHCEPGyARHSIRHSIPGyAQHCEQHCEPGyAQHCEQHCAQHCEPGyAQHCEQHCFr1a/UAAAAFHRSTlMA"),
+    --wallpaper-default: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADwAAAA8CAMAAAANIilAAAAAP1BMVEUAAAAOGh8QHCEQHCEPGyARHSIPGyAQHCEPGyARHSIRHSIPGyAQHCEQHCEPGyAQHCEQHCAQHCEPGyAQHCEQHCFr1a/UAAAAFHRSTlMAEBAgIDAwQEBQUGBgcHBwcICBEmM/hAAAAZ1JREFUeJzt0kEOgDAQRNEZg10IB7n/p1NZZtIs2lM4wE9c8o0ob8q8JX9dXGpF6ODkIE2Kl0t9oL8PUA5qKzzY3bFN7JmGfIYsp9tAcNg0hOLsveY1Qe+pb5rw4mS8X6SJ4j8i28Okh7P0wDFx1xQ9cQVrQgOSm5qKG6WmXAtMOJ2k1G6P2wSG35G2a7+iyw1XkQYHGiXbM0I5CqL7miuVFKpPA1Wc1VGqF2u7rG7Fov2XxkO+9pbdT/LG6X7mH9bo3Jv6Q8ZUR+Z/fHzt3iA4x1gv7aw4bYf6xRZ1dr6bK1rL0P0Al2Dw8g4DAAAAAElFTkSuQmCC"),
                           linear-gradient(to bottom, rgba(11,20,26,0.95), rgba(11,20,26,0.95));
+    --wallpaper-subtle: linear-gradient(135deg, rgba(0,168,132,0.2), rgba(11,20,26,0.85));
+    --wallpaper-grid: linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px) 0 0 / 24px 24px,
+                      linear-gradient(180deg, rgba(255,255,255,0.05) 1px, transparent 1px) 0 0 / 24px 24px;
+    --wallpaper-solid: linear-gradient(180deg, rgba(11,20,26,0.9), rgba(11,20,26,0.9));
+    --chat-wallpaper: var(--wallpaper-default);
 }
 
 * {
@@ -102,7 +112,7 @@ body {
     }
 
     body {
-        background: linear-gradient(180deg, #00a884 0%, #00a884 127px, var(--bg-secondary) 127px);
+        background: linear-gradient(180deg, var(--accent) 0%, var(--accent) 127px, var(--bg-secondary) 127px);
     }
 }
 
@@ -131,6 +141,19 @@ body {
     align-items: center;
     gap: 12px;
     cursor: pointer;
+}
+
+.profile-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.profile-name {
+    font-weight: 600;
+    color: var(--text-primary);
+    font-size: 14px;
+    line-height: 1.2;
 }
 
 .sidebar-header .avatar {
@@ -791,6 +814,23 @@ body {
     margin-top: 2px;
 }
 
+.settings-item .color-picker {
+    width: 44px;
+    height: 32px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+}
+
+.settings-item .select-input {
+    border: 1px solid var(--border-color);
+    background-color: var(--bg-input);
+    color: var(--text-primary);
+    padding: 6px 10px;
+    border-radius: 8px;
+    font-size: 13px;
+}
+
 .settings-item .toggle {
     width: 44px;
     height: 24px;
@@ -994,6 +1034,15 @@ body {
     display: block;
 }
 
+.dropdown-header {
+    padding: 10px 14px;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-light);
+    border-bottom: 1px solid var(--border-color);
+}
+
 .dropdown-item {
     display: flex;
     align-items: center;
@@ -1011,6 +1060,33 @@ body {
     margin-right: 16px;
     color: var(--icon-color);
     width: 20px;
+}
+
+.account-menu {
+    min-width: 240px;
+}
+
+.account-item {
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.account-item .account-status {
+    font-size: 11px;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: 999px;
+    background-color: var(--bg-hover);
+    color: var(--text-secondary);
+}
+
+.account-item.active {
+    font-weight: 600;
+}
+
+.account-item.active .account-status {
+    background-color: var(--accent-light);
+    color: var(--accent);
 }
 
 .dropdown-divider {
