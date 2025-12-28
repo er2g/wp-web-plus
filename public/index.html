@@ -91,6 +91,12 @@
                     <i class="bi bi-search"></i>
                     <input type="text" id="searchInput" placeholder="Ara veya yeni sohbet baslat" oninput="filterChats()">
                 </div>
+                <div class="search-filters">
+                    <select id="tagFilter" onchange="filterChats()">
+                        <option value="">Tum Etiketler</option>
+                    </select>
+                    <input type="text" id="noteSearchInput" placeholder="Notta ara" oninput="filterChats()">
+                </div>
             </div>
 
             <!-- Tab Navigation -->
@@ -180,6 +186,31 @@
                                     <i class="bi bi-trash"></i> Sohbeti Temizle
                                 </div>
                             </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="chat-meta-panel">
+                    <div class="meta-section">
+                        <div class="meta-header">
+                            <span>Etiketler</span>
+                        </div>
+                        <div class="tag-list" id="chatTagsList"></div>
+                        <div class="tag-actions">
+                            <input type="text" id="tagNameInput" list="tagNameOptions" placeholder="Etiket adi">
+                            <datalist id="tagNameOptions"></datalist>
+                            <input type="color" id="tagColorInput" value="#00a884" title="Etiket rengi">
+                            <button class="btn" type="button" onclick="addTagToChat()">Ekle</button>
+                        </div>
+                    </div>
+                    <div class="meta-section">
+                        <div class="meta-header">
+                            <span>Notlar</span>
+                        </div>
+                        <div class="notes-list" id="chatNotesList"></div>
+                        <div class="note-actions">
+                            <textarea id="noteInput" rows="2" placeholder="Bu sohbete not ekleyin"></textarea>
+                            <button class="btn" type="button" onclick="addNoteToChat()">Not Ekle</button>
                         </div>
                     </div>
                 </div>

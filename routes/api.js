@@ -31,6 +31,8 @@ const LIMITS = {
     FILE_SIZE_BYTES: 16 * 1024 * 1024,  // 16 MB
     MESSAGE_LENGTH: 10000,
     TRIGGER_LENGTH: 500,
+    TAG_LENGTH: 60,
+    NOTE_LENGTH: 2000,
     URL_LENGTH: 2048,
     QUERY_LENGTH: 200,
     CATEGORY_LENGTH: 50,
@@ -52,6 +54,11 @@ function validateChatId(chatId) {
 function validateMessage(message) {
     if (!message || typeof message !== 'string') return false;
     return message.length <= LIMITS.MESSAGE_LENGTH;
+}
+
+function validateNote(note) {
+    if (!note || typeof note !== 'string') return false;
+    return note.length <= LIMITS.NOTE_LENGTH;
 }
 
 function validateUrl(url) {
@@ -204,34 +211,285 @@ router.post('/settings', (req, res) => {
 
 // ============ CHATS ============
 router.get('/chats', (req, res) => {
-    res.json(req.account.db.chats.getAll.all());
+    const tagFilter = (req.query.tag || '').trim();
+    if (!tagFilter) {
+        return res.json(req.account.db.chats.getAll.all());
+    }
+
+    const tagId = /^\d+$/.test(tagFilter) ? parseInt(tagFilter, 10) : null;
+    const chatIdsRows = tagId
+        ? req.account.db.contactTags.getChatIdsByTagId.all(tagId)
+        : req.account.db.contactTags.getChatIdsByTagName.all(tagFilter);
+    const chatIds = chatIdsRows.map(row => row.chat_id);
+    if (!chatIds.length) {
+        return res.json([]);
+    }
+
+    const placeholders = chatIds.map(() => '?').join(',');
+    const chats = req.account.db.db.prepare(
+        `SELECT * FROM chats WHERE chat_id IN (${placeholders}) ORDER BY last_message_at DESC`
+    ).all(...chatIds);
+    res.json(chats);
 });
 
 router.get('/chats/search', (req, res) => {
     const query = (req.query.q || '').substring(0, LIMITS.QUERY_LENGTH).trim();
+    const tagFilter = (req.query.tag || '').trim();
+    const noteQuery = (req.query.note || '').substring(0, LIMITS.QUERY_LENGTH).trim();
     const limit = Math.min(parseInt(req.query.limit) || 50, LIMITS.PAGINATION.MESSAGES);
     const offset = Math.max(parseInt(req.query.offset) || 0, 0);
-    if (!query) return res.json([]);
-    res.json(req.account.db.chats.search.all('%' + query + '%', limit, offset));
+
+    if (!query && !tagFilter && !noteQuery) return res.json([]);
+
+    let chatIds = null;
+    if (tagFilter) {
+        const tagId = /^\d+$/.test(tagFilter) ? parseInt(tagFilter, 10) : null;
+        const rows = tagId
+            ? req.account.db.contactTags.getChatIdsByTagId.all(tagId)
+            : req.account.db.contactTags.getChatIdsByTagName.all(tagFilter);
+        chatIds = new Set(rows.map(row => row.chat_id));
+    }
+
+    if (noteQuery) {
+        const rows = req.account.db.notes.searchChatIds.all('%' + noteQuery + '%');
+        const noteIds = new Set(rows.map(row => row.chat_id));
+        if (chatIds) {
+            chatIds = new Set([...chatIds].filter(id => noteIds.has(id)));
+        } else {
+            chatIds = noteIds;
+        }
+    }
+
+    if (chatIds && chatIds.size === 0) {
+        return res.json([]);
+    }
+
+    if (!chatIds && query) {
+        return res.json(req.account.db.chats.search.all('%' + query + '%', limit, offset));
+    }
+
+    const filterIds = chatIds ? Array.from(chatIds) : null;
+    if (query) {
+        const placeholders = filterIds ? filterIds.map(() => '?').join(',') : '';
+        const params = ['%' + query + '%'];
+        if (filterIds) {
+            params.push(...filterIds);
+        }
+        params.push(limit, offset);
+        const results = req.account.db.db.prepare(`
+            SELECT * FROM chats
+            WHERE name LIKE ?
+            ${filterIds ? `AND chat_id IN (${placeholders})` : ''}
+            ORDER BY last_message_at DESC
+            LIMIT ? OFFSET ?
+        `).all(...params);
+        return res.json(results);
+    }
+
+    const placeholders = filterIds.map(() => '?').join(',');
+    const results = req.account.db.db.prepare(`
+        SELECT * FROM chats
+        WHERE chat_id IN (${placeholders})
+        ORDER BY last_message_at DESC
+        LIMIT ? OFFSET ?
+    `).all(...filterIds, limit, offset);
+    res.json(results);
 });
 
 router.get('/chats/:id/messages', (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 50, LIMITS.PAGINATION.MESSAGES);
     const offset = Math.max(parseInt(req.query.offset) || 0, 0);
-    res.json(req.account.db.messages.getByChatId.all(req.params.id, limit, offset));
+    const messages = req.account.db.messages.getByChatId.all(req.params.id, limit, offset);
+    const tags = req.account.db.contactTags.getByChatId.all(req.params.id);
+    const notes = req.account.db.notes.getByChatId.all(req.params.id);
+    res.json({ messages, tags, notes });
 });
 
 // ============ MESSAGES ============
 router.get('/messages', (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 100, LIMITS.PAGINATION.MESSAGES);
     const offset = Math.max(parseInt(req.query.offset) || 0, 0);
-    res.json(req.account.db.messages.getAll.all(limit, offset));
+    const messages = req.account.db.messages.getAll.all(limit, offset);
+    const chatIds = Array.from(new Set(messages.map(message => message.chat_id).filter(Boolean)));
+    if (!chatIds.length) {
+        return res.json({ messages, tagsByChat: {}, notesByChat: {} });
+    }
+
+    const placeholders = chatIds.map(() => '?').join(',');
+    const tagRows = req.account.db.db.prepare(`
+        SELECT contact_tags.chat_id, tags.id, tags.name, tags.color
+        FROM contact_tags
+        JOIN tags ON tags.id = contact_tags.tag_id
+        WHERE contact_tags.chat_id IN (${placeholders})
+        ORDER BY tags.name ASC
+    `).all(...chatIds);
+    const noteRows = req.account.db.db.prepare(`
+        SELECT id, chat_id, content, created_at, updated_at
+        FROM notes
+        WHERE chat_id IN (${placeholders})
+        ORDER BY created_at DESC
+    `).all(...chatIds);
+
+    const tagsByChat = {};
+    tagRows.forEach(row => {
+        if (!tagsByChat[row.chat_id]) {
+            tagsByChat[row.chat_id] = [];
+        }
+        tagsByChat[row.chat_id].push({ id: row.id, name: row.name, color: row.color });
+    });
+
+    const notesByChat = {};
+    noteRows.forEach(note => {
+        if (!notesByChat[note.chat_id]) {
+            notesByChat[note.chat_id] = [];
+        }
+        notesByChat[note.chat_id].push(note);
+    });
+
+    res.json({ messages, tagsByChat, notesByChat });
 });
 
 router.get('/messages/search', (req, res) => {
     const query = (req.query.q || '').substring(0, LIMITS.QUERY_LENGTH);
     if (!query) return res.json([]);
     res.json(req.account.db.messages.search.all('%' + query + '%'));
+});
+
+// ============ TAGS & NOTES ============
+router.get('/tags', (req, res) => {
+    res.json(req.account.db.tags.getAll.all());
+});
+
+router.post('/tags', (req, res) => {
+    const name = (req.body?.name || '').trim();
+    const color = (req.body?.color || '').trim() || null;
+    if (!name) {
+        return res.status(400).json({ error: 'name required' });
+    }
+    if (name.length > LIMITS.TAG_LENGTH) {
+        return res.status(400).json({ error: 'Tag name too long' });
+    }
+    const existing = req.account.db.tags.getByName.get(name);
+    if (existing) {
+        return res.json({ success: true, id: existing.id, tag: existing });
+    }
+    const result = req.account.db.tags.create.run(name, color);
+    res.json({ success: true, id: result.lastInsertRowid });
+});
+
+router.put('/tags/:id', (req, res) => {
+    const name = (req.body?.name || '').trim();
+    const color = (req.body?.color || '').trim() || null;
+    if (!name) {
+        return res.status(400).json({ error: 'name required' });
+    }
+    if (name.length > LIMITS.TAG_LENGTH) {
+        return res.status(400).json({ error: 'Tag name too long' });
+    }
+    req.account.db.tags.update.run(name, color, req.params.id);
+    res.json({ success: true });
+});
+
+router.delete('/tags/:id', (req, res) => {
+    req.account.db.db.prepare('DELETE FROM contact_tags WHERE tag_id = ?').run(req.params.id);
+    req.account.db.tags.delete.run(req.params.id);
+    res.json({ success: true });
+});
+
+router.get('/chats/:id/tags', (req, res) => {
+    res.json(req.account.db.contactTags.getByChatId.all(req.params.id));
+});
+
+router.post('/chats/:id/tags', (req, res) => {
+    const chatId = req.params.id;
+    const tagId = req.body?.tag_id;
+    if (!tagId) {
+        return res.status(400).json({ error: 'tag_id required' });
+    }
+    if (!validateChatId(chatId)) {
+        return res.status(400).json({ error: 'Invalid chatId format' });
+    }
+    const tag = req.account.db.tags.getById.get(tagId);
+    if (!tag) {
+        return res.status(404).json({ error: 'Tag not found' });
+    }
+    const chat = req.account.db.chats.getById.get(chatId);
+    const name = chat?.name || chatId;
+    const phone = chatId && chatId.includes('@c.us') ? chatId.split('@')[0] : null;
+    req.account.db.contacts.upsert.run(chatId, name, phone);
+    req.account.db.contactTags.add.run(chatId, tagId);
+    res.json({ success: true });
+});
+
+router.delete('/chats/:id/tags/:tagId', (req, res) => {
+    req.account.db.contactTags.remove.run(req.params.id, req.params.tagId);
+    res.json({ success: true });
+});
+
+router.get('/contacts/:id/tags', (req, res) => {
+    res.json(req.account.db.contactTags.getByChatId.all(req.params.id));
+});
+
+router.post('/contacts/:id/tags', (req, res) => {
+    const chatId = req.params.id;
+    const tagId = req.body?.tag_id;
+    if (!tagId) {
+        return res.status(400).json({ error: 'tag_id required' });
+    }
+    if (!validateChatId(chatId)) {
+        return res.status(400).json({ error: 'Invalid chatId format' });
+    }
+    const tag = req.account.db.tags.getById.get(tagId);
+    if (!tag) {
+        return res.status(404).json({ error: 'Tag not found' });
+    }
+    const chat = req.account.db.chats.getById.get(chatId);
+    const name = chat?.name || chatId;
+    const phone = chatId && chatId.includes('@c.us') ? chatId.split('@')[0] : null;
+    req.account.db.contacts.upsert.run(chatId, name, phone);
+    req.account.db.contactTags.add.run(chatId, tagId);
+    res.json({ success: true });
+});
+
+router.delete('/contacts/:id/tags/:tagId', (req, res) => {
+    req.account.db.contactTags.remove.run(req.params.id, req.params.tagId);
+    res.json({ success: true });
+});
+
+router.get('/chats/:id/notes', (req, res) => {
+    res.json(req.account.db.notes.getByChatId.all(req.params.id));
+});
+
+router.post('/chats/:id/notes', (req, res) => {
+    const content = (req.body?.content || '').trim();
+    if (!content) {
+        return res.status(400).json({ error: 'content required' });
+    }
+    if (!validateNote(content)) {
+        return res.status(400).json({ error: 'Note too long' });
+    }
+    if (!validateChatId(req.params.id)) {
+        return res.status(400).json({ error: 'Invalid chatId format' });
+    }
+    req.account.db.notes.create.run(req.params.id, content);
+    res.json({ success: true });
+});
+
+router.put('/chats/:id/notes/:noteId', (req, res) => {
+    const content = (req.body?.content || '').trim();
+    if (!content) {
+        return res.status(400).json({ error: 'content required' });
+    }
+    if (!validateNote(content)) {
+        return res.status(400).json({ error: 'Note too long' });
+    }
+    req.account.db.notes.update.run(content, req.params.noteId, req.params.id);
+    res.json({ success: true });
+});
+
+router.delete('/chats/:id/notes/:noteId', (req, res) => {
+    req.account.db.notes.delete.run(req.params.noteId, req.params.id);
+    res.json({ success: true });
 });
 
 router.post('/send', upload.single('media'), async (req, res) => {
