@@ -41,6 +41,13 @@ module.exports = {
     
     // Scheduler
     SCHEDULER_CHECK_INTERVAL: 60000, // 1 minute
+
+    // Cleanup
+    MESSAGE_RETENTION_DAYS: parseInt(process.env.MESSAGE_RETENTION_DAYS, 10) || 90,
+    LOG_RETENTION_DAYS: parseInt(process.env.LOG_RETENTION_DAYS, 10) || 90,
+    SCRIPT_LOG_RETENTION_DAYS: parseInt(process.env.SCRIPT_LOG_RETENTION_DAYS, 10) || 90,
+    CLEANUP_DAILY_CRON: process.env.CLEANUP_DAILY_CRON || '30 2 * * *',
+    CLEANUP_WEEKLY_CRON: process.env.CLEANUP_WEEKLY_CRON || '0 3 * * 0',
     
     // Webhook
     WEBHOOK_TIMEOUT: 10000, // 10 seconds
