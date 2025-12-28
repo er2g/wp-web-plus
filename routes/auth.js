@@ -4,6 +4,8 @@
 const express = require('express');
 const router = express.Router();
 const config = require('../config');
+const accountManager = require('../services/accountManager');
+const { passwordMeetsPolicy, verifyPassword } = require('../services/passwords');
 
 const isProduction = process.env.NODE_ENV === 'production';
 
@@ -66,17 +68,6 @@ function clearAttempts(ip) {
     loginAttempts.delete(ip);
 }
 
-function passwordMeetsPolicy(password) {
-    if (typeof password !== 'string') return false;
-    const policy = config.PASSWORD_POLICY;
-    if (password.length < policy.MIN_LENGTH) return false;
-    if (policy.REQUIRE_UPPER && !/[A-Z]/.test(password)) return false;
-    if (policy.REQUIRE_LOWER && !/[a-z]/.test(password)) return false;
-    if (policy.REQUIRE_NUMBER && !/[0-9]/.test(password)) return false;
-    if (policy.REQUIRE_SYMBOL && !/[^A-Za-z0-9]/.test(password)) return false;
-    return true;
-}
-
 // Login
 router.post('/login', (req, res) => {
     const ip = getClientIp(req);
@@ -88,13 +79,22 @@ router.post('/login', (req, res) => {
         });
     }
 
-    const { password } = req.body;
+    const { username, password } = req.body;
 
-    if (!passwordMeetsPolicy(password)) {
+    if (!passwordMeetsPolicy(password, config.PASSWORD_POLICY)) {
         console.warn(`Password policy violation on login attempt from ${ip}.`);
     }
 
-    if (password === config.SITE_PASSWORD) {
+    const normalizedUsername = (username || '').trim().toLowerCase();
+    if (!normalizedUsername || !password) {
+        recordFailedAttempt(ip);
+        return res.status(400).json({ error: 'Username and password required' });
+    }
+
+    const db = accountManager.getAccountContext(accountManager.getDefaultAccountId()).db;
+    const user = db.users.getByUsername.get(normalizedUsername);
+
+    if (user && user.is_active && verifyPassword(password, user.password_salt, user.password_hash)) {
         clearAttempts(ip);
         req.session.regenerate(err => {
             if (err) {
@@ -102,11 +102,13 @@ router.post('/login', (req, res) => {
                 return res.status(500).json({ error: 'Session error' });
             }
             req.session.authenticated = true;
+            req.session.userId = user.id;
+            req.session.role = user.role || 'agent';
             res.json({ success: true });
         });
     } else {
         recordFailedAttempt(ip);
-        res.status(401).json({ error: 'Invalid password' });
+        res.status(401).json({ error: 'Invalid credentials' });
     }
 });
 
@@ -128,7 +130,11 @@ router.post('/logout', (req, res) => {
 
 // Check auth status
 router.get('/check', (req, res) => {
-    res.json({ authenticated: req.session && req.session.authenticated === true });
+    res.json({
+        authenticated: req.session && req.session.authenticated === true,
+        userId: req.session?.userId || null,
+        role: req.session?.role || null
+    });
 });
 
 module.exports = router;

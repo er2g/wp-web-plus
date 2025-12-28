@@ -4,6 +4,7 @@
 const Database = require('better-sqlite3');
 const fs = require('fs');
 const { logger } = require('./services/logger');
+const { hashPassword } = require('./services/passwords');
 
 function createDatabase(config) {
     // Ensure data directory exists
@@ -140,6 +141,32 @@ function createDatabase(config) {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS roles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE NOT NULL,
+        description TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        display_name TEXT,
+        password_hash TEXT NOT NULL,
+        password_salt TEXT NOT NULL,
+        is_active INTEGER DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS user_roles (
+        user_id INTEGER NOT NULL,
+        role_id INTEGER NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (user_id, role_id),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id);
     CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
     CREATE INDEX IF NOT EXISTS idx_messages_chat_timestamp ON messages(chat_id, timestamp);
@@ -152,6 +179,8 @@ function createDatabase(config) {
     CREATE INDEX IF NOT EXISTS idx_script_logs_created ON script_logs(created_at);
     CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_webhook ON webhook_deliveries(webhook_id);
     CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_created ON webhook_deliveries(created_at);
+    CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+    CREATE INDEX IF NOT EXISTS idx_user_roles_role ON user_roles(role_id);
 `);
 
     const columnExists = (tableName, columnName) => {
@@ -395,6 +424,49 @@ function createDatabase(config) {
         cleanup: db.prepare(`DELETE FROM logs WHERE created_at < datetime('now', ?)`)
     };
 
+    const roles = {
+        getAll: db.prepare('SELECT * FROM roles ORDER BY name ASC'),
+        getById: db.prepare('SELECT * FROM roles WHERE id = ?'),
+        getByName: db.prepare('SELECT * FROM roles WHERE name = ?'),
+        create: db.prepare('INSERT INTO roles (name, description) VALUES (?, ?)'),
+        delete: db.prepare('DELETE FROM roles WHERE id = ?'),
+        count: db.prepare('SELECT COUNT(*) as count FROM roles')
+    };
+
+    const users = {
+        getAll: db.prepare(`
+        SELECT users.id, users.username, users.display_name, users.is_active, users.created_at,
+               roles.name as role
+        FROM users
+        LEFT JOIN user_roles ON user_roles.user_id = users.id
+        LEFT JOIN roles ON roles.id = user_roles.role_id
+        ORDER BY users.created_at DESC
+    `),
+        getById: db.prepare(`
+        SELECT users.*, roles.name as role
+        FROM users
+        LEFT JOIN user_roles ON user_roles.user_id = users.id
+        LEFT JOIN roles ON roles.id = user_roles.role_id
+        WHERE users.id = ?
+    `),
+        getByUsername: db.prepare(`
+        SELECT users.*, roles.name as role
+        FROM users
+        LEFT JOIN user_roles ON user_roles.user_id = users.id
+        LEFT JOIN roles ON roles.id = user_roles.role_id
+        WHERE users.username = ?
+    `),
+        create: db.prepare('INSERT INTO users (username, display_name, password_hash, password_salt, is_active) VALUES (?, ?, ?, ?, ?)'),
+        delete: db.prepare('DELETE FROM users WHERE id = ?'),
+        count: db.prepare('SELECT COUNT(*) as count FROM users')
+    };
+
+    const userRoles = {
+        assign: db.prepare('INSERT OR REPLACE INTO user_roles (user_id, role_id) VALUES (?, ?)'),
+        clear: db.prepare('DELETE FROM user_roles WHERE user_id = ?'),
+        countByRole: db.prepare('SELECT COUNT(*) as count FROM user_roles WHERE role_id = ?')
+    };
+
     const maintenance = {
         cleanupMessages: db.prepare(`DELETE FROM messages WHERE timestamp < ?`)
     };
@@ -575,10 +647,58 @@ function createDatabase(config) {
     `)
     };
 
-    return { db, messages, chats, autoReplies, scheduled, webhooks, webhookDeliveries, scripts, scriptLogs, logs, maintenance, reports };
-}
+    const bootstrapAdmin = () => {
+        const defaultRoles = [
+            { name: 'admin', description: 'Tam yetkili' },
+            { name: 'manager', description: 'Yonetici' },
+            { name: 'agent', description: 'Agent' }
+        ];
 
-module.exports = { createDatabase };
+        defaultRoles.forEach(role => {
+            if (!roles.getByName.get(role.name)) {
+                roles.create.run(role.name, role.description);
+            }
+        });
+
+        const userCount = users.count.get().count;
+        if (userCount > 0) return;
+
+        const username = (config.ADMIN_BOOTSTRAP_USERNAME || '').trim().toLowerCase();
+        const password = config.ADMIN_BOOTSTRAP_PASSWORD;
+        const displayName = config.ADMIN_BOOTSTRAP_NAME || username;
+
+        if (!username || !password) {
+            logger.warn('[AUTH] Admin bootstrap skipped: missing config values.', { category: 'auth' });
+            return;
+        }
+
+        const { hash, salt } = hashPassword(password);
+        const result = users.create.run(username, displayName, hash, salt, 1);
+        const adminRole = roles.getByName.get('admin');
+        if (adminRole) {
+            userRoles.assign.run(result.lastInsertRowid, adminRole.id);
+        }
+    };
+
+    bootstrapAdmin();
+
+    return {
+        db,
+        messages,
+        chats,
+        autoReplies,
+        scheduled,
+        webhooks,
+        webhookDeliveries,
+        scripts,
+        scriptLogs,
+        logs,
+        roles,
+        users,
+        userRoles,
+        maintenance,
+        reports
+    };
 }
 
 module.exports = { createDatabase };
