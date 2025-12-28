@@ -573,6 +573,11 @@ body {
     white-space: pre-wrap;
 }
 
+.message-bubble .message-text.muted {
+    color: var(--text-secondary);
+    font-style: italic;
+}
+
 .message-bubble .message-media {
     margin: -3px -4px 4px -6px;
 }
@@ -662,6 +667,32 @@ body {
 }
 
 /* Chat Input */
+.attachment-preview {
+    padding: 6px 16px 0;
+    background-color: var(--bg-header);
+}
+
+.attachment-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background-color: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    padding: 6px 10px;
+    font-size: 13px;
+    color: var(--text-primary);
+}
+
+.attachment-chip .icon-btn {
+    width: 28px;
+    height: 28px;
+}
+
+.file-input {
+    display: none;
+}
+
 .chat-input-area {
     display: flex;
     align-items: flex-end;

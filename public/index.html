@@ -188,24 +188,28 @@
                     <!-- Messages will be rendered here -->
                 </div>
 
-                <!-- Quick Replies -->
-                <div class="quick-replies" id="quickReplies" style="display:none;">
-                    <!-- Quick reply chips -->
-                </div>
+            <!-- Quick Replies -->
+            <div class="quick-replies" id="quickReplies" style="display:none;">
+                <!-- Quick reply chips -->
+            </div>
 
-                <!-- Chat Input -->
-                <div class="chat-input-area">
-                    <button class="icon-btn emoji-btn" onclick="toggleEmojiPicker()">
-                        <i class="bi bi-emoji-smile"></i>
-                    </button>
-                    <button class="icon-btn attach-btn" onclick="toggleAttachMenu()">
-                        <i class="bi bi-paperclip"></i>
-                    </button>
-                    <div class="chat-input-container">
-                        <textarea id="messageInput" placeholder="Bir mesaj yazin" rows="1" onkeydown="handleInputKeydown(event)" oninput="autoResizeInput(this)"></textarea>
-                    </div>
-                    <button class="send-btn" onclick="sendMessage()">
-                        <i class="bi bi-send-fill"></i>
+            <!-- Attachment Preview -->
+            <div class="attachment-preview" id="attachmentPreview" style="display:none;"></div>
+
+            <!-- Chat Input -->
+            <div class="chat-input-area">
+                <button class="icon-btn emoji-btn" onclick="toggleEmojiPicker()">
+                    <i class="bi bi-emoji-smile"></i>
+                </button>
+                <button class="icon-btn attach-btn" onclick="toggleAttachMenu()">
+                    <i class="bi bi-paperclip"></i>
+                </button>
+                <input type="file" id="mediaInput" class="file-input" />
+                <div class="chat-input-container">
+                    <textarea id="messageInput" placeholder="Bir mesaj yazin" rows="1" onkeydown="handleInputKeydown(event)" oninput="autoResizeInput(this)"></textarea>
+                </div>
+                <button class="send-btn" onclick="sendMessage()">
+                    <i class="bi bi-send-fill"></i>
                     </button>
                 </div>
             </div>

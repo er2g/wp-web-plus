@@ -228,17 +228,18 @@ router.get('/messages/search', (req, res) => {
 router.post('/send', upload.single('media'), async (req, res) => {
     try {
         const { chatId, message } = req.body;
-        if (!chatId || !message) {
-            return res.status(400).json({ error: 'chatId and message required' });
+        const trimmedMessage = (message || '').trim();
+        if (!chatId || (!trimmedMessage && !req.file)) {
+            return res.status(400).json({ error: 'chatId and message or media required' });
         }
         if (!validateChatId(chatId)) {
             return res.status(400).json({ error: 'Invalid chatId format' });
         }
-        if (!validateMessage(message)) {
+        if (trimmedMessage && !validateMessage(trimmedMessage)) {
             return res.status(400).json({ error: 'Message too long or invalid' });
         }
         const options = req.file ? { mediaPath: req.file.path } : {};
-        const result = await req.account.whatsapp.sendMessage(chatId, message, options);
+        const result = await req.account.whatsapp.sendMessage(chatId, trimmedMessage, options);
         res.json({ success: true, messageId: result.id._serialized });
     } catch (error) {
         res.status(500).json({ error: error.message });

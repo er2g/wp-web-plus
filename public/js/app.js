@@ -22,12 +22,14 @@ let uiPreferences = {
     accentColor: localStorage.getItem('uiAccent') || '',
     wallpaper: localStorage.getItem('uiWallpaper') || 'default'
 };
+let selectedAttachment = null;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     loadTheme();
     loadCustomizations();
     initMonaco();
+    setupAttachmentPicker();
     initializeApp();
 
     // Close dropdowns when clicking outside
@@ -553,12 +555,13 @@ function renderMessagesList() {
     container.innerHTML = allMessages.slice(0, 50).map(m => {
         const isMine = m.is_from_me === 1 || m.is_from_me === true;
         const direction = isMine ? '<i class="bi bi-arrow-up-right" style="color: var(--accent)"></i>' : '<i class="bi bi-arrow-down-left" style="color: #34b7f1"></i>';
+        const displayName = getDisplayNameFromMessage(m);
 
         return '<div class="chat-item" onclick="openChatForMessage(\'' + (m.chat_id || '') + '\')">' +
             '<div class="avatar"><i class="bi bi-chat-text-fill"></i></div>' +
             '<div class="chat-info">' +
                 '<div class="top-row">' +
-                    '<div class="chat-name">' + direction + ' ' + escapeHtml(formatSenderName(m.from_name)) + '</div>' +
+                    '<div class="chat-name">' + direction + ' ' + escapeHtml(formatSenderName(displayName)) + '</div>' +
                     '<span class="chat-time">' + formatTime(m.timestamp) + '</span>' +
                 '</div>' +
                 '<div class="chat-preview">' +
@@ -632,10 +635,13 @@ function renderChatMessages(messages) {
         let textHtml = '';
         if (m.body && (m.type === 'chat' || (mediaUrl && m.body && m.type !== 'document'))) {
             textHtml = '<div class="message-text">' + escapeHtml(m.body) + '</div>';
+        } else if (!mediaHtml) {
+            textHtml = '<div class="message-text muted">[Bos mesaj]</div>';
         }
 
-        const senderHtml = (!isMine && m.from_name) ?
-            '<div class="sender-name">' + escapeHtml(formatSenderName(m.from_name)) + '</div>' : '';
+        const displayName = getDisplayNameFromMessage(m);
+        const senderHtml = (!isMine && displayName) ?
+            '<div class="sender-name">' + escapeHtml(formatSenderName(displayName)) + '</div>' : '';
 
         const checkIcon = isMine ? '<i class="bi bi-check2-all check-icon read"></i>' : '';
 
@@ -715,16 +721,21 @@ async function sendMessage() {
     const input = document.getElementById('messageInput');
     const message = input.value.trim();
 
-    if (!currentChat || !message) return;
+    if (!currentChat || (!message && !selectedAttachment)) return;
 
     input.value = '';
     autoResizeInput(input);
 
     // Add temporary message
-    appendTempMessage(message);
+    appendTempMessage(message, selectedAttachment ? selectedAttachment.name : null);
 
     try {
-        await api('api/send', 'POST', { chatId: currentChat, message });
+        if (selectedAttachment) {
+            await sendMessageWithAttachment(message, selectedAttachment);
+            clearAttachment();
+        } else {
+            await api('api/send', 'POST', { chatId: currentChat, message });
+        }
         // Socket event will refresh
     } catch (err) {
         showToast('Gonderme hatasi: ' + err.message, 'error');
@@ -744,13 +755,19 @@ function autoResizeInput(el) {
     el.style.height = Math.min(el.scrollHeight, 100) + 'px';
 }
 
-function appendTempMessage(text) {
+function appendTempMessage(text, attachmentName) {
     const container = document.getElementById('messagesContainer');
     if (!container) return;
 
+    const attachmentHtml = attachmentName
+        ? '<div class="message-text">[Dosya] ' + escapeHtml(attachmentName) + '</div>'
+        : '';
+    const bodyHtml = text ? '<div class="message-text">' + escapeHtml(text) + '</div>' : '';
+
     const messageHtml = '<div class="message-row sent">' +
         '<div class="message-bubble sent">' +
-        '<div class="message-text">' + escapeHtml(text) + '</div>' +
+        attachmentHtml +
+        bodyHtml +
         '<div class="message-footer"><span class="message-time">' + formatTime(Date.now()) + '</span><i class="bi bi-check2 check-icon"></i></div>' +
         '</div></div>';
 
@@ -763,7 +780,8 @@ function handleNewMessage(msg) {
     console.log('New message received:', msg, 'currentChat:', currentChat, 'msg.chatId:', msg.chatId);
 
     if (settings.notifications) {
-        showToast('Yeni mesaj: ' + formatSenderName(msg.fromName), 'info');
+        const displayName = getDisplayNameFromMessage(msg);
+        showToast('Yeni mesaj: ' + formatSenderName(displayName), 'info');
     }
 
     if (currentChat) {
@@ -798,10 +816,13 @@ function appendNewMessage(msg) {
     let textHtml = '';
     if (msg.body && (msg.type === 'chat' || msg.type === undefined)) {
         textHtml = '<div class="message-text">' + escapeHtml(msg.body) + '</div>';
+    } else if (!mediaHtml) {
+        textHtml = '<div class="message-text muted">[Bos mesaj]</div>';
     }
 
-    const senderHtml = (!isMine && msg.fromName) ?
-        '<div class="sender-name">' + escapeHtml(formatSenderName(msg.fromName)) + '</div>' : '';
+    const displayName = getDisplayNameFromMessage(msg);
+    const senderHtml = (!isMine && displayName) ?
+        '<div class="sender-name">' + escapeHtml(formatSenderName(displayName)) + '</div>' : '';
 
     const checkIcon = isMine ? '<i class="bi bi-check2-all check-icon read"></i>' : '';
     const time = msg.timestamp ? formatTime(msg.timestamp) : formatTime(Date.now());
@@ -887,7 +908,74 @@ function toggleEmojiPicker() {
 }
 
 function toggleAttachMenu() {
-    showToast('Dosya ekleme yakinda gelecek', 'info');
+    const input = document.getElementById('mediaInput');
+    if (input) {
+        input.click();
+    }
+}
+
+function setupAttachmentPicker() {
+    const input = document.getElementById('mediaInput');
+    if (!input) return;
+    input.addEventListener('change', handleMediaSelect);
+}
+
+function handleMediaSelect(event) {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+    selectedAttachment = file;
+    renderAttachmentPreview();
+}
+
+function renderAttachmentPreview() {
+    const preview = document.getElementById('attachmentPreview');
+    if (!preview) return;
+    if (!selectedAttachment) {
+        preview.style.display = 'none';
+        preview.innerHTML = '';
+        return;
+    }
+    preview.style.display = 'flex';
+    preview.innerHTML = `
+        <div class="attachment-chip">
+            <i class="bi bi-paperclip"></i>
+            <span>${escapeHtml(selectedAttachment.name)}</span>
+            <button class="icon-btn" onclick="clearAttachment()" title="Kaldir">
+                <i class="bi bi-x"></i>
+            </button>
+        </div>
+    `;
+}
+
+function clearAttachment() {
+    selectedAttachment = null;
+    const input = document.getElementById('mediaInput');
+    if (input) {
+        input.value = '';
+    }
+    renderAttachmentPreview();
+}
+
+async function sendMessageWithAttachment(message, file) {
+    const formData = new FormData();
+    formData.append('chatId', currentChat);
+    formData.append('message', message || '');
+    formData.append('media', file);
+
+    const headers = {};
+    if (activeAccountId) {
+        headers['X-Account-Id'] = activeAccountId;
+    }
+
+    const response = await fetch('api/send', {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: formData
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'API Error');
+    return data;
 }
 
 // Media Lightbox
@@ -1411,10 +1499,18 @@ function sanitizeUrl(url) {
 
 function formatSenderName(name) {
     if (!name) return '';
-    if (/^\d{10,15}$/.test(name)) {
-        return '+' + name.substring(0, 2) + ' xxx ' + name.slice(-4);
+    if (name.includes('@')) {
+        return name.split('@')[0];
+    }
+    if (/^\d{7,16}$/.test(name)) {
+        return '+' + name;
     }
     return name;
+}
+
+function getDisplayNameFromMessage(message) {
+    if (!message) return '';
+    return message.from_name || message.fromName || message.from_number || message.fromNumber || message.from || '';
 }
 
 function formatTime(ts) {

@@ -46,7 +46,14 @@ class WhatsAppClient {
         if (contact) {
             return contact.pushname || contact.name || contact.number || this.extractPhoneFromId(msg.from);
         }
-        return this.extractPhoneFromId(msg.from);
+        return this.extractPhoneFromId(msg.author || msg.from);
+    }
+
+    getSenderNumber(contact, msg) {
+        if (contact && contact.number) {
+            return contact.number;
+        }
+        return this.extractPhoneFromId(msg.author || msg.from);
     }
 
     extractPhoneFromId(id) {
@@ -207,6 +214,7 @@ class WhatsAppClient {
                 from: msg.from,
                 to: msg.to,
                 fromName: fromMe ? (this.info ? this.info.pushname : 'Me') : this.getSenderName(contact, msg),
+                fromNumber: fromMe ? (this.info?.wid?.user || this.extractPhoneFromId(msg.from)) : this.getSenderNumber(contact, msg),
                 body: msg.body,
                 type: msg.type,
                 timestamp: msg.timestamp * 1000,
@@ -227,7 +235,7 @@ class WhatsAppClient {
             this.db.messages.save.run(
                 msgData.messageId,
                 msgData.chatId,
-                msgData.from,
+                msgData.fromNumber,
                 msgData.to,
                 msgData.fromName,
                 msgData.body,
@@ -266,17 +274,18 @@ class WhatsAppClient {
             for (const msg of messages) {
                 const contact = await this.getContactCached(msg);
 
-                const msgData = {
-                    messageId: msg.id._serialized,
-                    chatId: chat.id._serialized,
-                    from: msg.from,
-                    to: msg.to,
-                    fromName: msg.fromMe ? (this.info ? this.info.pushname : 'Me') : this.getSenderName(contact, msg),
-                    body: msg.body,
-                    type: msg.type,
-                    timestamp: msg.timestamp * 1000,
-                    isGroup: chat.isGroup,
-                    isFromMe: msg.fromMe
+            const msgData = {
+                messageId: msg.id._serialized,
+                chatId: chat.id._serialized,
+                from: msg.from,
+                to: msg.to,
+                fromName: msg.fromMe ? (this.info ? this.info.pushname : 'Me') : this.getSenderName(contact, msg),
+                fromNumber: msg.fromMe ? (this.info?.wid?.user || this.extractPhoneFromId(msg.from)) : this.getSenderNumber(contact, msg),
+                body: msg.body,
+                type: msg.type,
+                timestamp: msg.timestamp * 1000,
+                isGroup: chat.isGroup,
+                isFromMe: msg.fromMe
                 };
 
                 if (msg.hasMedia && (this.settings.downloadMediaOnSync || this.settings.downloadMedia)) {
@@ -292,7 +301,7 @@ class WhatsAppClient {
                 this.db.messages.save.run(
                     msgData.messageId,
                     msgData.chatId,
-                    msgData.from,
+                    msgData.fromNumber,
                     msgData.to,
                     msgData.fromName,
                     msgData.body,
