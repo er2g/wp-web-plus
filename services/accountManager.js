@@ -5,6 +5,7 @@ const { createDatabase } = require('../database');
 const { createWhatsAppClient } = require('../whatsapp');
 const { createDriveService } = require('../drive');
 const { createAutoReplyService } = require('./autoReply');
+const { createCleanupService } = require('./cleanup');
 const { createSchedulerService } = require('./scheduler');
 const { createWebhookService } = require('./webhook');
 const { createScriptRunner } = require('./scriptRunner');
@@ -148,6 +149,7 @@ class AccountManager {
         const drive = createDriveService(accountConfig);
         const whatsapp = createWhatsAppClient(accountConfig, db, drive);
         const autoReply = createAutoReplyService(db, whatsapp);
+        const cleanup = createCleanupService(db, config);
         const scheduler = createSchedulerService(db, whatsapp, config);
         const webhook = createWebhookService(db, config);
         const scriptRunner = createScriptRunner(db, whatsapp);
@@ -159,6 +161,7 @@ class AccountManager {
             drive,
             whatsapp,
             autoReply,
+            cleanup,
             scheduler,
             webhook,
             scriptRunner
@@ -185,6 +188,7 @@ class AccountManager {
         }
 
         scheduler.start();
+        cleanup.start();
 
         this.contexts.set(resolvedId, context);
         return context;
@@ -219,6 +223,7 @@ class AccountManager {
 
     async shutdown() {
         for (const context of this.contexts.values()) {
+            context.cleanup.stop();
             context.scheduler.stop();
             await context.whatsapp.destroy();
         }

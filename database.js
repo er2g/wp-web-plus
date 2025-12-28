@@ -13,6 +13,14 @@ function createDatabase(config) {
     const db = new Database(config.DB_PATH);
     db.pragma('journal_mode = WAL');
 
+    // Schema migrations tracking
+    db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+        version INTEGER PRIMARY KEY,
+        applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+`);
+
     // Initialize database schema
     db.exec(`
     CREATE TABLE IF NOT EXISTS messages (
@@ -121,20 +129,69 @@ function createDatabase(config) {
 
     CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id);
     CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_messages_chat_timestamp ON messages(chat_id, timestamp);
+    CREATE INDEX IF NOT EXISTS idx_messages_message_id ON messages(message_id);
     CREATE INDEX IF NOT EXISTS idx_chats_updated ON chats(updated_at);
     CREATE INDEX IF NOT EXISTS idx_scheduled_time ON scheduled_messages(scheduled_at);
     CREATE INDEX IF NOT EXISTS idx_logs_created ON logs(created_at);
     CREATE INDEX IF NOT EXISTS idx_scripts_active ON scripts(is_active);
     CREATE INDEX IF NOT EXISTS idx_script_logs_script ON script_logs(script_id);
+    CREATE INDEX IF NOT EXISTS idx_script_logs_created ON script_logs(created_at);
 `);
-    // Add media_url column if not exists (for existing databases)
-    // Note: ALTER TABLE will fail if column exists - this is expected
-    try {
-        db.exec("ALTER TABLE messages ADD COLUMN media_url TEXT");
-        console.log('Database migration: Added media_url column');
-    } catch (e) {
-        // Column already exists - this is expected, not an error
-    }
+
+    const columnExists = (tableName, columnName) => {
+        const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
+        return columns.some(column => column.name === columnName);
+    };
+
+    const migrations = [
+        {
+            version: 1,
+            name: 'add_media_url_to_messages',
+            apply: () => {
+                if (!columnExists('messages', 'media_url')) {
+                    db.exec('ALTER TABLE messages ADD COLUMN media_url TEXT');
+                }
+            }
+        },
+        {
+            version: 2,
+            name: 'add_message_indexes',
+            apply: () => {
+                db.exec(`
+                    CREATE INDEX IF NOT EXISTS idx_messages_chat_timestamp ON messages(chat_id, timestamp);
+                    CREATE INDEX IF NOT EXISTS idx_messages_message_id ON messages(message_id);
+                `);
+            }
+        },
+        {
+            version: 3,
+            name: 'add_script_logs_created_index',
+            apply: () => {
+                db.exec('CREATE INDEX IF NOT EXISTS idx_script_logs_created ON script_logs(created_at)');
+            }
+        }
+    ];
+
+    const appliedMigrations = new Set(
+        db.prepare('SELECT version FROM schema_migrations ORDER BY version').all().map(row => row.version)
+    );
+
+    const insertMigration = db.prepare(
+        'INSERT INTO schema_migrations (version, applied_at) VALUES (?, datetime(\'now\'))'
+    );
+
+    migrations.forEach(migration => {
+        if (appliedMigrations.has(migration.version)) {
+            return;
+        }
+
+        db.transaction(() => {
+            migration.apply();
+            insertMigration.run(migration.version);
+            console.log(`Database migration applied: ${migration.name}`);
+        })();
+    });
 
     try {
         db.exec("ALTER TABLE scheduled_messages ADD COLUMN retry_count INTEGER DEFAULT 0");
@@ -298,17 +355,21 @@ function createDatabase(config) {
     const scriptLogs = {
     add: db.prepare(`INSERT INTO script_logs (script_id, level, message, data) VALUES (?, ?, ?, ?)`),
     getByScript: db.prepare(`SELECT * FROM script_logs WHERE script_id = ? ORDER BY created_at DESC LIMIT ?`),
-    cleanup: db.prepare(`DELETE FROM script_logs WHERE created_at < datetime('now', '-3 days')`)
+    cleanup: db.prepare(`DELETE FROM script_logs WHERE created_at < datetime('now', ?)`)
     };
 
     const logs = {
     add: db.prepare(`INSERT INTO logs (level, category, message, data) VALUES (?, ?, ?, ?)`),
     getRecent: db.prepare(`SELECT * FROM logs ORDER BY created_at DESC LIMIT ?`),
     getByCategory: db.prepare(`SELECT * FROM logs WHERE category = ? ORDER BY created_at DESC LIMIT ?`),
-    cleanup: db.prepare(`DELETE FROM logs WHERE created_at < datetime('now', '-7 days')`)
+    cleanup: db.prepare(`DELETE FROM logs WHERE created_at < datetime('now', ?)`)
     };
 
-    return { db, messages, chats, autoReplies, scheduled, webhooks, scripts, scriptLogs, logs };
+    const maintenance = {
+    cleanupMessages: db.prepare(`DELETE FROM messages WHERE timestamp < ?`)
+    };
+
+    return { db, messages, chats, autoReplies, scheduled, webhooks, scripts, scriptLogs, logs, maintenance };
 }
 
 module.exports = { createDatabase };
