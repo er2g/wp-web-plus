@@ -25,12 +25,22 @@ const storage = multer.diskStorage({
         cb(null, Date.now() + '-' + safeName);
     }
 });
-const upload = multer({ storage, limits: { fileSize: 16 * 1024 * 1024 } });
+// Constants
+const LIMITS = {
+    FILE_SIZE_BYTES: 16 * 1024 * 1024,  // 16 MB
+    MESSAGE_LENGTH: 10000,
+    TRIGGER_LENGTH: 500,
+    URL_LENGTH: 2048,
+    QUERY_LENGTH: 200,
+    CATEGORY_LENGTH: 50,
+    PAGINATION: {
+        MESSAGES: 500,
+        LOGS: 500,
+        SCRIPT_LOGS: 200
+    }
+};
 
-// Input validation helpers
-const MAX_MESSAGE_LENGTH = 10000;
-const MAX_TRIGGER_LENGTH = 500;
-const MAX_URL_LENGTH = 2048;
+const upload = multer({ storage, limits: { fileSize: LIMITS.FILE_SIZE_BYTES } });
 
 function validateChatId(chatId) {
     if (!chatId || typeof chatId !== 'string') return false;
@@ -40,12 +50,12 @@ function validateChatId(chatId) {
 
 function validateMessage(message) {
     if (!message || typeof message !== 'string') return false;
-    return message.length <= MAX_MESSAGE_LENGTH;
+    return message.length <= LIMITS.MESSAGE_LENGTH;
 }
 
 function validateUrl(url) {
     if (!url || typeof url !== 'string') return false;
-    if (url.length > MAX_URL_LENGTH) return false;
+    if (url.length > LIMITS.URL_LENGTH) return false;
     try {
         const parsed = new URL(url);
 
@@ -155,19 +165,19 @@ router.get('/chats', (req, res) => {
 });
 
 router.get('/chats/:id/messages', (req, res) => {
-    const limit = Math.min(parseInt(req.query.limit) || 50, 500); // Cap at 500
+    const limit = Math.min(parseInt(req.query.limit) || 50, LIMITS.PAGINATION.MESSAGES);
     res.json(db.messages.getByChatId.all(req.params.id, limit));
 });
 
 // ============ MESSAGES ============
 router.get('/messages', (req, res) => {
-    const limit = Math.min(parseInt(req.query.limit) || 100, 500); // Cap at 500
-    const offset = Math.max(parseInt(req.query.offset) || 0, 0); // Ensure non-negative
+    const limit = Math.min(parseInt(req.query.limit) || 100, LIMITS.PAGINATION.MESSAGES);
+    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
     res.json(db.messages.getAll.all(limit, offset));
 });
 
 router.get('/messages/search', (req, res) => {
-    const query = (req.query.q || '').substring(0, 200); // Limit query length
+    const query = (req.query.q || '').substring(0, LIMITS.QUERY_LENGTH);
     if (!query) return res.json([]);
     res.json(db.messages.search.all('%' + query + '%'));
 });
@@ -203,11 +213,11 @@ router.post('/auto-replies', (req, res) => {
         return res.status(400).json({ error: 'trigger_word and response required' });
     }
     // Input length validation
-    if (trigger_word.length > MAX_TRIGGER_LENGTH) {
-        return res.status(400).json({ error: 'Trigger word too long (max ' + MAX_TRIGGER_LENGTH + ' chars)' });
+    if (trigger_word.length > LIMITS.TRIGGER_LENGTH) {
+        return res.status(400).json({ error: 'Trigger word too long (max ' + LIMITS.TRIGGER_LENGTH + ' chars)' });
     }
-    if (response.length > MAX_MESSAGE_LENGTH) {
-        return res.status(400).json({ error: 'Response too long (max ' + MAX_MESSAGE_LENGTH + ' chars)' });
+    if (response.length > LIMITS.MESSAGE_LENGTH) {
+        return res.status(400).json({ error: 'Response too long (max ' + LIMITS.MESSAGE_LENGTH + ' chars)' });
     }
     const result = db.autoReplies.create.run(trigger_word, response, match_type || 'contains', is_active !== false ? 1 : 0);
     res.json({ success: true, id: result.lastInsertRowid });
@@ -359,14 +369,14 @@ router.post('/scripts/test', async (req, res) => {
 });
 
 router.get('/scripts/:id/logs', (req, res) => {
-    const limit = Math.min(parseInt(req.query.limit) || 50, 200); // Cap at 200
+    const limit = Math.min(parseInt(req.query.limit) || 50, LIMITS.PAGINATION.SCRIPT_LOGS);
     res.json(db.scriptLogs.getByScript.all(req.params.id, limit));
 });
 
 // ============ LOGS ============
 router.get('/logs', (req, res) => {
-    const limit = Math.min(parseInt(req.query.limit) || 100, 500); // Cap at 500
-    const category = (req.query.category || '').substring(0, 50); // Limit category length
+    const limit = Math.min(parseInt(req.query.limit) || 100, LIMITS.PAGINATION.LOGS);
+    const category = (req.query.category || '').substring(0, LIMITS.CATEGORY_LENGTH);
     if (category) {
         res.json(db.logs.getByCategory.all(category, limit));
     } else {

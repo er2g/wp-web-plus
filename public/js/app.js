@@ -820,25 +820,35 @@ async function toggleAutoReply(id) {
     loadAutoReplies();
 }
 
-async function deleteAutoReply(id) {
-    if (!confirm('Silmek istediginize emin misiniz?')) return;
-    await api('api/auto-replies/' + id, 'DELETE');
-    loadAutoReplies();
-    showToast('Silindi', 'success');
+/**
+ * Generic delete function to reduce code duplication
+ * @param {string} endpoint - API endpoint path
+ * @param {number|string} id - Resource ID
+ * @param {Function} reloadFn - Function to reload the list after deletion
+ * @param {string} confirmMessage - Confirmation dialog message
+ * @param {string} successMessage - Success toast message
+ */
+async function deleteResource(endpoint, id, reloadFn, confirmMessage, successMessage) {
+    if (!confirm(confirmMessage || 'Silmek istediginize emin misiniz?')) return;
+    try {
+        await api(endpoint + '/' + id, 'DELETE');
+        reloadFn();
+        showToast(successMessage || 'Silindi', 'success');
+    } catch (err) {
+        showToast('Silme hatasi: ' + err.message, 'danger');
+    }
 }
 
-async function deleteScheduled(id) {
-    if (!confirm('Silmek istediginize emin misiniz?')) return;
-    await api('api/scheduled/' + id, 'DELETE');
-    loadScheduled();
-    showToast('Silindi', 'success');
+function deleteAutoReply(id) {
+    deleteResource('api/auto-replies', id, loadAutoReplies);
 }
 
-async function deleteWebhook(id) {
-    if (!confirm('Silmek istediginize emin misiniz?')) return;
-    await api('api/webhooks/' + id, 'DELETE');
-    loadWebhooks();
-    showToast('Silindi', 'success');
+function deleteScheduled(id) {
+    deleteResource('api/scheduled', id, loadScheduled);
+}
+
+function deleteWebhook(id) {
+    deleteResource('api/webhooks', id, loadWebhooks);
 }
 
 // Script functions
@@ -928,11 +938,8 @@ async function toggleScript(id) {
     loadScripts();
 }
 
-async function deleteScript(id) {
-    if (!confirm('Scripti silmek istediginize emin misiniz?')) return;
-    await api('api/scripts/' + id, 'DELETE');
-    loadScripts();
-    showToast('Script silindi', 'success');
+function deleteScript(id) {
+    deleteResource('api/scripts', id, loadScripts, 'Scripti silmek istediginize emin misiniz?', 'Script silindi');
 }
 
 async function showScriptLogs(id) {

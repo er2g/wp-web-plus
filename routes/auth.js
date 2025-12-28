@@ -5,10 +5,25 @@ const express = require('express');
 const router = express.Router();
 const config = require('../config');
 
+// Rate limiting constants
+const RATE_LIMIT = {
+    MAX_ATTEMPTS: 5,
+    LOCKOUT_DURATION_MS: 15 * 60 * 1000, // 15 minutes
+    CLEANUP_INTERVAL_MS: 60 * 60 * 1000   // 1 hour
+};
+
 // Simple in-memory rate limiting for login attempts
 const loginAttempts = new Map();
-const MAX_ATTEMPTS = 5;
-const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
+
+// Periodic cleanup of old entries to prevent memory leaks
+setInterval(() => {
+    const now = Date.now();
+    for (const [ip, data] of loginAttempts.entries()) {
+        if (now - data.firstAttempt > RATE_LIMIT.LOCKOUT_DURATION_MS) {
+            loginAttempts.delete(ip);
+        }
+    }
+}, RATE_LIMIT.CLEANUP_INTERVAL_MS);
 
 function getClientIp(req) {
     return req.ip || req.connection.remoteAddress || 'unknown';
@@ -21,13 +36,13 @@ function checkRateLimit(ip) {
     if (!attempts) return { allowed: true };
 
     // Clean up old entries
-    if (now - attempts.firstAttempt > LOCKOUT_TIME) {
+    if (now - attempts.firstAttempt > RATE_LIMIT.LOCKOUT_DURATION_MS) {
         loginAttempts.delete(ip);
         return { allowed: true };
     }
 
-    if (attempts.count >= MAX_ATTEMPTS) {
-        const remainingTime = Math.ceil((LOCKOUT_TIME - (now - attempts.firstAttempt)) / 1000);
+    if (attempts.count >= RATE_LIMIT.MAX_ATTEMPTS) {
+        const remainingTime = Math.ceil((RATE_LIMIT.LOCKOUT_DURATION_MS - (now - attempts.firstAttempt)) / 1000);
         return { allowed: false, remainingTime };
     }
 
@@ -38,7 +53,7 @@ function recordFailedAttempt(ip) {
     const now = Date.now();
     const attempts = loginAttempts.get(ip);
 
-    if (!attempts || now - attempts.firstAttempt > LOCKOUT_TIME) {
+    if (!attempts || now - attempts.firstAttempt > RATE_LIMIT.LOCKOUT_DURATION_MS) {
         loginAttempts.set(ip, { count: 1, firstAttempt: now });
     } else {
         attempts.count++;

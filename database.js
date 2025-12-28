@@ -121,7 +121,15 @@ db.exec(`
     CREATE INDEX IF NOT EXISTS idx_scripts_active ON scripts(is_active);
     CREATE INDEX IF NOT EXISTS idx_script_logs_script ON script_logs(script_id);
 `);
-// Add media_url column if not exists (for existing databases)try { db.exec("ALTER TABLE messages ADD COLUMN media_url TEXT"); } catch(e) {}
+// Add media_url column if not exists (for existing databases)
+// Note: ALTER TABLE will fail if column exists - this is expected
+try {
+    db.exec("ALTER TABLE messages ADD COLUMN media_url TEXT");
+    console.log('Database migration: Added media_url column');
+} catch (e) {
+    // Column already exists - this is expected, not an error
+}
+
 console.log('Database initialized');
 
 // Prepared statements

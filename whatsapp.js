@@ -9,6 +9,18 @@ const db = require('./database');
 const fs = require('fs');
 const path = require('path');
 
+// Constants
+const CONSTANTS = {
+    SYNC_DELAY_MS: 2000,
+    SYNC_THROTTLE_MS: 100,
+    DEFAULT_MAX_RETRIES: 3,
+    DEFAULT_DOWNLOAD_TIMEOUT_MS: 60000,
+    SYNC_DOWNLOAD_TIMEOUT_MS: 30000,
+    SYNC_MAX_RETRIES: 2,
+    BACKOFF_MULTIPLIER_MS: 2000,
+    MEDIA_URL_PREFIX: 'api/media/'
+};
+
 // Drive servisi (lazy load)
 let driveService = null;
 function getDrive() {
@@ -16,7 +28,7 @@ function getDrive() {
         try {
             driveService = require('./drive');
         } catch (e) {
-            console.log('[WHATSAPP] Drive module not available');
+            // Drive module not available - this is expected in some environments
         }
     }
     return driveService;
@@ -38,6 +50,29 @@ class WhatsAppClient {
         };
     }
 
+    /**
+     * Safely extract sender name from contact or message
+     * @param {Object|null} contact - Contact object
+     * @param {Object} msg - Message object
+     * @returns {string} Sender name
+     */
+    getSenderName(contact, msg) {
+        if (contact) {
+            return contact.pushname || contact.name || contact.number || this.extractPhoneFromId(msg.from);
+        }
+        return this.extractPhoneFromId(msg.from);
+    }
+
+    /**
+     * Extract phone number from WhatsApp ID
+     * @param {string} id - WhatsApp ID (e.g., "905551234567@c.us")
+     * @returns {string} Phone number or "Unknown"
+     */
+    extractPhoneFromId(id) {
+        if (!id) return 'Unknown';
+        return id.split('@')[0] || 'Unknown';
+    }
+
     setSocketIO(io) {
         this.io = io;
     }
@@ -48,7 +83,12 @@ class WhatsAppClient {
 
     log(level, category, message, data = null) {
         const logData = data ? JSON.stringify(data) : null;
-        try { db.logs.add.run(level, category, message, logData); } catch(e) {}
+        try {
+            db.logs.add.run(level, category, message, logData);
+        } catch (e) {
+            // Database logging failed - still output to console
+            console.error('[LOG_ERROR] Failed to write log to database:', e.message);
+        }
         console.log('[' + level.toUpperCase() + '] [' + category + '] ' + message);
     }
 
@@ -87,7 +127,7 @@ class WhatsAppClient {
             }
 
             if (this.settings.syncOnConnect) {
-                setTimeout(() => this.fullSync(), 2000);
+                setTimeout(() => this.fullSync(), CONSTANTS.SYNC_DELAY_MS);
             }
         });
 
@@ -122,7 +162,7 @@ class WhatsAppClient {
     /**
      * Medya indirme - retry mekanizmasi ile
      */
-    async downloadMediaWithRetry(msg, maxRetries = 3, timeoutMs = 60000) {
+    async downloadMediaWithRetry(msg, maxRetries = CONSTANTS.DEFAULT_MAX_RETRIES, timeoutMs = CONSTANTS.DEFAULT_DOWNLOAD_TIMEOUT_MS) {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
                 // Timeout ile download
@@ -142,7 +182,7 @@ class WhatsAppClient {
 
                 if (attempt < maxRetries) {
                     // Exponential backoff
-                    const waitTime = 2000 * attempt;
+                    const waitTime = CONSTANTS.BACKOFF_MULTIPLIER_MS * attempt;
                     await new Promise(r => setTimeout(r, waitTime));
                 }
             }
@@ -191,7 +231,7 @@ class WhatsAppClient {
             // Drive basarisiz veya devre disi ise lokal path dondur
             return {
                 mediaPath: localPath,
-                mediaUrl: 'api/media/' + filename
+                mediaUrl: CONSTANTS.MEDIA_URL_PREFIX + filename
             };
         } catch (error) {
             this.log('error', 'media', 'Save media failed: ' + error.message);
@@ -216,8 +256,8 @@ class WhatsAppClient {
                 }
             }
 
-            // Gonderici ismini al
-            const fromName = contact.pushname || contact.name || contact.number || msg.from.split('@')[0];
+            // Gonderici ismini al (null-safe)
+            const fromName = this.getSenderName(contact, msg);
 
             db.messages.save.run(
                 msg.id._serialized,
@@ -309,7 +349,7 @@ class WhatsAppClient {
                             let mediaUrl = null;
 
                             if (this.settings.downloadMedia && msg.hasMedia) {
-                                const media = await this.downloadMediaWithRetry(msg, 2, 30000);
+                                const media = await this.downloadMediaWithRetry(msg, CONSTANTS.SYNC_MAX_RETRIES, CONSTANTS.SYNC_DOWNLOAD_TIMEOUT_MS);
                                 if (media) {
                                     const saved = await this.saveMedia(media, msg.id._serialized, msg.timestamp);
                                     mediaPath = saved.mediaPath;
@@ -318,8 +358,7 @@ class WhatsAppClient {
                             }
 
                             const msgContact = await msg.getContact().catch(() => null);
-                            const senderName = (msgContact ? msgContact.pushname || msgContact.name || msgContact.number : null)
-                                || (msg.from ? msg.from.split('@')[0] : 'Unknown');
+                            const senderName = this.getSenderName(msgContact, msg);
 
                             db.messages.save.run(
                                 msg.id._serialized,
@@ -360,7 +399,7 @@ class WhatsAppClient {
                     this.log('warn', 'sync', 'Error syncing chat ' + chat.name, { error: error.message });
                 }
 
-                await new Promise(r => setTimeout(r, 100));
+                await new Promise(r => setTimeout(r, CONSTANTS.SYNC_THROTTLE_MS));
             }
 
             this.syncProgress = { syncing: false, current: 0, total: 0, chat: '' };
