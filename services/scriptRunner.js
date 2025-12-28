@@ -124,6 +124,15 @@ class ScriptRunner {
         }
     }
 
+    scriptLogWithData(scriptId, level, message, data) {
+        try {
+            const payload = data ? JSON.stringify(data) : null;
+            this.db.scriptLogs.add.run(scriptId, level, message, payload);
+        } catch (e) {
+            console.error('Script log error:', e);
+        }
+    }
+
     async runScript(script, triggerData = null) {
         const startTime = Date.now();
 
@@ -156,7 +165,11 @@ class ScriptRunner {
 
         } catch (error) {
             this.db.scripts.recordError.run(error.message, script.id);
-            this.scriptLog(script.id, 'error', 'Error: ' + error.message);
+            this.scriptLogWithData(script.id, 'error', 'Error: ' + error.message, {
+                script_id: script.id,
+                stack: error.stack,
+                trigger_data: triggerData
+            });
 
             return { success: false, error: error.message };
         }

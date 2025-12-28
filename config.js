@@ -41,9 +41,13 @@ module.exports = {
     
     // Scheduler
     SCHEDULER_CHECK_INTERVAL: 60000, // 1 minute
+    SCHEDULER_MAX_RETRIES: 5,
+    SCHEDULER_RETRY_BASE_MS: 60000, // 1 minute
     
     // Webhook
     WEBHOOK_TIMEOUT: 10000, // 10 seconds
+    WEBHOOK_MAX_RETRIES: 3,
+    WEBHOOK_RETRY_BASE_MS: 1000, // 1 second
     
     // Logging
     LOG_LEVEL: 'info'
