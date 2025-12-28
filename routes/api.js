@@ -4,21 +4,22 @@
  */
 const express = require('express');
 const router = express.Router();
-const db = require('../database');
-const whatsapp = require('../whatsapp');
-const scriptRunner = require('../services/scriptRunner');
+const accountManager = require('../services/accountManager');
 const multer = require('multer');
 const path = require('path');
-const config = require('../config');
 const fs = require('fs');
 
-// Ensure media directory exists
-if (!fs.existsSync(config.MEDIA_DIR)) {
-    fs.mkdirSync(config.MEDIA_DIR, { recursive: true });
-}
-
 const storage = multer.diskStorage({
-    destination: config.MEDIA_DIR,
+    destination: (req, file, cb) => {
+        const mediaDir = req.account?.config.MEDIA_DIR;
+        if (!mediaDir) {
+            return cb(new Error('Account media directory not available'));
+        }
+        if (!fs.existsSync(mediaDir)) {
+            fs.mkdirSync(mediaDir, { recursive: true });
+        }
+        cb(null, mediaDir);
+    },
     filename: (req, file, cb) => {
         // Sanitize filename to prevent path traversal
         const safeName = file.originalname.replace(/[^a-zA-Z0-9.\-_]/g, '_');
@@ -102,9 +103,51 @@ function requireAuth(req, res, next) {
 }
 
 router.use(requireAuth);
+router.use(accountManager.attachAccount.bind(accountManager));
+
+// ============ ACCOUNTS ============
+router.get('/accounts', (req, res) => {
+    const accounts = accountManager.listAccounts().map(account => {
+        const context = accountManager.getAccountContext(account.id);
+        return {
+            ...account,
+            status: context.whatsapp.getStatus().status
+        };
+    });
+
+    res.json({
+        accounts,
+        currentAccountId: req.session.accountId || accountManager.getDefaultAccountId()
+    });
+});
+
+router.post('/accounts', (req, res) => {
+    const name = (req.body?.name || '').trim();
+    if (!name) {
+        return res.status(400).json({ error: 'Account name required' });
+    }
+
+    const account = accountManager.createAccount(name);
+    res.json({ success: true, account });
+});
+
+router.post('/accounts/select', (req, res) => {
+    const accountId = req.body?.accountId;
+    if (!accountId) {
+        return res.status(400).json({ error: 'Account id required' });
+    }
+    const account = accountManager.findAccount(accountId);
+    if (!account) {
+        return res.status(404).json({ error: 'Account not found' });
+    }
+    req.session.accountId = accountId;
+    accountManager.getAccountContext(accountId);
+    res.json({ success: true, accountId });
+});
 
 // ============ STATUS ============
 router.get('/status', (req, res) => {
+    const { whatsapp, db } = req.account;
     const waStatus = whatsapp.getStatus();
     const stats = db.messages.getStats.get();
     res.json({
@@ -114,13 +157,13 @@ router.get('/status', (req, res) => {
 });
 
 router.get('/qr', (req, res) => {
-    const status = whatsapp.getStatus();
+    const status = req.account.whatsapp.getStatus();
     res.json({ qr: status.qrCode, status: status.status });
 });
 
 router.post('/connect', async (req, res) => {
     try {
-        await whatsapp.initialize();
+        await req.account.whatsapp.initialize();
         res.json({ success: true, message: 'Initializing...' });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -129,7 +172,7 @@ router.post('/connect', async (req, res) => {
 
 router.post('/disconnect', async (req, res) => {
     try {
-        await whatsapp.logout();
+        await req.account.whatsapp.logout();
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -139,7 +182,7 @@ router.post('/disconnect', async (req, res) => {
 // ============ SYNC & SETTINGS ============
 router.post('/sync', async (req, res) => {
     try {
-        const result = await whatsapp.fullSync();
+        const result = await req.account.whatsapp.fullSync();
         res.json(result);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -147,39 +190,39 @@ router.post('/sync', async (req, res) => {
 });
 
 router.get('/sync/progress', (req, res) => {
-    res.json(whatsapp.getSyncProgress());
+    res.json(req.account.whatsapp.getSyncProgress());
 });
 
 router.get('/settings', (req, res) => {
-    res.json(whatsapp.getSettings());
+    res.json(req.account.whatsapp.getSettings());
 });
 
 router.post('/settings', (req, res) => {
-    const settings = whatsapp.updateSettings(req.body);
+    const settings = req.account.whatsapp.updateSettings(req.body);
     res.json({ success: true, settings });
 });
 
 // ============ CHATS ============
 router.get('/chats', (req, res) => {
-    res.json(db.chats.getAll.all());
+    res.json(req.account.db.chats.getAll.all());
 });
 
 router.get('/chats/:id/messages', (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 50, LIMITS.PAGINATION.MESSAGES);
-    res.json(db.messages.getByChatId.all(req.params.id, limit));
+    res.json(req.account.db.messages.getByChatId.all(req.params.id, limit));
 });
 
 // ============ MESSAGES ============
 router.get('/messages', (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 100, LIMITS.PAGINATION.MESSAGES);
     const offset = Math.max(parseInt(req.query.offset) || 0, 0);
-    res.json(db.messages.getAll.all(limit, offset));
+    res.json(req.account.db.messages.getAll.all(limit, offset));
 });
 
 router.get('/messages/search', (req, res) => {
     const query = (req.query.q || '').substring(0, LIMITS.QUERY_LENGTH);
     if (!query) return res.json([]);
-    res.json(db.messages.search.all('%' + query + '%'));
+    res.json(req.account.db.messages.search.all('%' + query + '%'));
 });
 
 router.post('/send', upload.single('media'), async (req, res) => {
@@ -195,7 +238,7 @@ router.post('/send', upload.single('media'), async (req, res) => {
             return res.status(400).json({ error: 'Message too long or invalid' });
         }
         const options = req.file ? { mediaPath: req.file.path } : {};
-        const result = await whatsapp.sendMessage(chatId, message, options);
+        const result = await req.account.whatsapp.sendMessage(chatId, message, options);
         res.json({ success: true, messageId: result.id._serialized });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -204,7 +247,7 @@ router.post('/send', upload.single('media'), async (req, res) => {
 
 // ============ AUTO REPLIES ============
 router.get('/auto-replies', (req, res) => {
-    res.json(db.autoReplies.getAll.all());
+    res.json(req.account.db.autoReplies.getAll.all());
 });
 
 router.post('/auto-replies', (req, res) => {
@@ -219,31 +262,31 @@ router.post('/auto-replies', (req, res) => {
     if (response.length > LIMITS.MESSAGE_LENGTH) {
         return res.status(400).json({ error: 'Response too long (max ' + LIMITS.MESSAGE_LENGTH + ' chars)' });
     }
-    const result = db.autoReplies.create.run(trigger_word, response, match_type || 'contains', is_active !== false ? 1 : 0);
+    const result = req.account.db.autoReplies.create.run(trigger_word, response, match_type || 'contains', is_active !== false ? 1 : 0);
     res.json({ success: true, id: result.lastInsertRowid });
 });
 
 router.put('/auto-replies/:id', (req, res) => {
     const { trigger_word, response, match_type, is_active } = req.body;
-    db.autoReplies.update.run(trigger_word, response, match_type || 'contains', is_active ? 1 : 0, req.params.id);
+    req.account.db.autoReplies.update.run(trigger_word, response, match_type || 'contains', is_active ? 1 : 0, req.params.id);
     res.json({ success: true });
 });
 
 router.delete('/auto-replies/:id', (req, res) => {
-    db.autoReplies.delete.run(req.params.id);
+    req.account.db.autoReplies.delete.run(req.params.id);
     res.json({ success: true });
 });
 
 router.post('/auto-replies/:id/toggle', (req, res) => {
-    const reply = db.autoReplies.getById.get(req.params.id);
+    const reply = req.account.db.autoReplies.getById.get(req.params.id);
     if (!reply) return res.status(404).json({ error: 'Not found' });
-    db.autoReplies.toggle.run(reply.is_active ? 0 : 1, req.params.id);
+    req.account.db.autoReplies.toggle.run(reply.is_active ? 0 : 1, req.params.id);
     res.json({ success: true, is_active: !reply.is_active });
 });
 
 // ============ SCHEDULED ============
 router.get('/scheduled', (req, res) => {
-    res.json(db.scheduled.getAll.all());
+    res.json(req.account.db.scheduled.getAll.all());
 });
 
 router.post('/scheduled', (req, res) => {
@@ -258,18 +301,18 @@ router.post('/scheduled', (req, res) => {
     if (!validateMessage(message)) {
         return res.status(400).json({ error: 'Message too long or invalid' });
     }
-    const result = db.scheduled.create.run(chat_id, chat_name || '', message, scheduled_at, is_recurring ? 1 : 0, cron_expression || null);
+    const result = req.account.db.scheduled.create.run(chat_id, chat_name || '', message, scheduled_at, is_recurring ? 1 : 0, cron_expression || null);
     res.json({ success: true, id: result.lastInsertRowid });
 });
 
 router.delete('/scheduled/:id', (req, res) => {
-    db.scheduled.delete.run(req.params.id);
+    req.account.db.scheduled.delete.run(req.params.id);
     res.json({ success: true });
 });
 
 // ============ WEBHOOKS ============
 router.get('/webhooks', (req, res) => {
-    res.json(db.webhooks.getAll.all());
+    res.json(req.account.db.webhooks.getAll.all());
 });
 
 router.post('/webhooks', (req, res) => {
@@ -278,7 +321,7 @@ router.post('/webhooks', (req, res) => {
     if (!validateUrl(url)) {
         return res.status(400).json({ error: 'Invalid URL. Must be http or https.' });
     }
-    const result = db.webhooks.create.run(name || 'Webhook', url, events || 'message', is_active !== false ? 1 : 0);
+    const result = req.account.db.webhooks.create.run(name || 'Webhook', url, events || 'message', is_active !== false ? 1 : 0);
     res.json({ success: true, id: result.lastInsertRowid });
 });
 
@@ -287,22 +330,22 @@ router.put('/webhooks/:id', (req, res) => {
     if (url && !validateUrl(url)) {
         return res.status(400).json({ error: 'Invalid URL. Must be http or https.' });
     }
-    db.webhooks.update.run(name, url, events, is_active ? 1 : 0, req.params.id);
+    req.account.db.webhooks.update.run(name, url, events, is_active ? 1 : 0, req.params.id);
     res.json({ success: true });
 });
 
 router.delete('/webhooks/:id', (req, res) => {
-    db.webhooks.delete.run(req.params.id);
+    req.account.db.webhooks.delete.run(req.params.id);
     res.json({ success: true });
 });
 
 // ============ SCRIPTS ============
 router.get('/scripts', (req, res) => {
-    res.json(db.scripts.getAll.all());
+    res.json(req.account.db.scripts.getAll.all());
 });
 
 router.get('/scripts/:id', (req, res) => {
-    const script = db.scripts.getById.get(req.params.id);
+    const script = req.account.db.scripts.getById.get(req.params.id);
     if (!script) return res.status(404).json({ error: 'Not found' });
     res.json(script);
 });
@@ -313,31 +356,31 @@ router.post('/scripts', (req, res) => {
         return res.status(400).json({ error: 'name and code required' });
     }
     const filterJson = trigger_filter ? JSON.stringify(trigger_filter) : null;
-    const result = db.scripts.create.run(name, description || '', code, trigger_type || 'message', filterJson, is_active !== false ? 1 : 0);
+    const result = req.account.db.scripts.create.run(name, description || '', code, trigger_type || 'message', filterJson, is_active !== false ? 1 : 0);
     res.json({ success: true, id: result.lastInsertRowid });
 });
 
 router.put('/scripts/:id', (req, res) => {
     const { name, description, code, trigger_type, trigger_filter, is_active } = req.body;
     const filterJson = trigger_filter ? JSON.stringify(trigger_filter) : null;
-    db.scripts.update.run(name, description || '', code, trigger_type || 'message', filterJson, is_active ? 1 : 0, req.params.id);
+    req.account.db.scripts.update.run(name, description || '', code, trigger_type || 'message', filterJson, is_active ? 1 : 0, req.params.id);
     res.json({ success: true });
 });
 
 router.delete('/scripts/:id', (req, res) => {
-    db.scripts.delete.run(req.params.id);
+    req.account.db.scripts.delete.run(req.params.id);
     res.json({ success: true });
 });
 
 router.post('/scripts/:id/toggle', (req, res) => {
-    const script = db.scripts.getById.get(req.params.id);
+    const script = req.account.db.scripts.getById.get(req.params.id);
     if (!script) return res.status(404).json({ error: 'Not found' });
-    db.scripts.toggle.run(script.is_active ? 0 : 1, req.params.id);
+    req.account.db.scripts.toggle.run(script.is_active ? 0 : 1, req.params.id);
     res.json({ success: true, is_active: !script.is_active });
 });
 
 router.post('/scripts/:id/run', async (req, res) => {
-    const script = db.scripts.getById.get(req.params.id);
+    const script = req.account.db.scripts.getById.get(req.params.id);
     if (!script) return res.status(404).json({ error: 'Not found' });
 
     const testData = req.body.testData || {
@@ -348,7 +391,7 @@ router.post('/scripts/:id/run', async (req, res) => {
         isGroup: false
     };
 
-    const result = await scriptRunner.runScript(script, testData);
+    const result = await req.account.scriptRunner.runScript(script, testData);
     res.json(result);
 });
 
@@ -364,13 +407,13 @@ router.post('/scripts/test', async (req, res) => {
         isGroup: false
     };
 
-    const result = await scriptRunner.testScript(code, data);
+    const result = await req.account.scriptRunner.testScript(code, data);
     res.json(result);
 });
 
 router.get('/scripts/:id/logs', (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 50, LIMITS.PAGINATION.SCRIPT_LOGS);
-    res.json(db.scriptLogs.getByScript.all(req.params.id, limit));
+    res.json(req.account.db.scriptLogs.getByScript.all(req.params.id, limit));
 });
 
 // ============ LOGS ============
@@ -378,19 +421,19 @@ router.get('/logs', (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 100, LIMITS.PAGINATION.LOGS);
     const category = (req.query.category || '').substring(0, LIMITS.CATEGORY_LENGTH);
     if (category) {
-        res.json(db.logs.getByCategory.all(category, limit));
+        res.json(req.account.db.logs.getByCategory.all(category, limit));
     } else {
-        res.json(db.logs.getRecent.all(limit));
+        res.json(req.account.db.logs.getRecent.all(limit));
     }
 });
 
 // ============ STATS ============
 router.get('/stats', (req, res) => {
-    const msgStats = db.messages.getStats.get() || { total: 0, sent: 0, received: 0, today: 0 };
-    const autoReplies = db.autoReplies.getAll.all();
-    const scheduled = db.scheduled.getAll.all();
-    const webhooks = db.webhooks.getAll.all();
-    const scripts = db.scripts.getAll.all();
+    const msgStats = req.account.db.messages.getStats.get() || { total: 0, sent: 0, received: 0, today: 0 };
+    const autoReplies = req.account.db.autoReplies.getAll.all();
+    const scheduled = req.account.db.scheduled.getAll.all();
+    const webhooks = req.account.db.webhooks.getAll.all();
+    const scripts = req.account.db.scripts.getAll.all();
 
     res.json({
         messages: msgStats,
@@ -430,11 +473,11 @@ router.get('/media/:filename', (req, res) => {
         return res.status(400).json({ error: 'Invalid filename characters' });
     }
 
-    const filePath = path.join(config.MEDIA_DIR, filename);
+    const filePath = path.join(req.account.config.MEDIA_DIR, filename);
 
     // Verify the resolved path is still within MEDIA_DIR
     const resolvedPath = path.resolve(filePath);
-    const resolvedMediaDir = path.resolve(config.MEDIA_DIR);
+    const resolvedMediaDir = path.resolve(req.account.config.MEDIA_DIR);
     if (!resolvedPath.startsWith(resolvedMediaDir + path.sep)) {
         return res.status(400).json({ error: 'Invalid file path' });
     }
@@ -447,33 +490,22 @@ router.get('/media/:filename', (req, res) => {
 
 // ============ GOOGLE DRIVE ============
 router.get('/drive/status', (req, res) => {
-    try {
-        const drive = require('../drive');
-        res.json(drive.getStatus());
-    } catch (error) {
-        const keyPath = path.join(config.DATA_DIR, 'drive-service-account.json');
-        res.json({
-            configured: fs.existsSync(keyPath),
-            keyPath: keyPath,
-            initialized: false,
-            error: error.message
-        });
-    }
+    res.json(req.account.drive.getStatus());
 });
 
 router.post('/drive/migrate', async (req, res) => {
     try {
-        const drive = require('../drive');
+        const drive = req.account.drive;
         const initialized = await drive.initialize();
 
         if (!initialized) {
             return res.json({
                 success: false,
-                error: 'Drive not configured. Please upload service account JSON to ' + path.join(config.DATA_DIR, 'drive-service-account.json')
+                error: 'Drive not configured. Please upload OAuth credentials to ' + req.account.config.DATA_DIR
             });
         }
 
-        const result = await drive.migrateExistingFiles(config.MEDIA_DIR, db.db);
+        const result = await drive.migrateExistingFiles(req.account.config.MEDIA_DIR, req.account.db.db);
         res.json({
             success: true,
             migrated: result.migrated,
@@ -490,7 +522,7 @@ router.post('/drive/upload', upload.single('file'), async (req, res) => {
     }
 
     try {
-        const drive = require('../drive');
+        const drive = req.account.drive;
         const initialized = await drive.initialize();
 
         if (!initialized) {

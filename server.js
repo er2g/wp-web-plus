@@ -8,11 +8,7 @@ const { Server } = require('socket.io');
 const path = require('path');
 
 const config = require('./config');
-const whatsapp = require('./whatsapp');
-const autoReply = require('./services/autoReply');
-const scheduler = require('./services/scheduler');
-const webhook = require('./services/webhook');
-const scriptRunner = require('./services/scriptRunner');
+const accountManager = require('./services/accountManager');
 
 const authRoutes = require('./routes/auth');
 const apiRoutes = require('./routes/api');
@@ -93,8 +89,14 @@ io.on('connection', (socket) => {
         return;
     }
 
-    console.log('Client connected:', socket.id);
-    socket.emit('status', whatsapp.getStatus());
+    const requestedAccount = socket.handshake.auth?.accountId;
+    const accountId = requestedAccount || session.accountId || accountManager.getDefaultAccountId();
+    const context = accountManager.getAccountContext(accountId);
+    session.accountId = accountId;
+
+    socket.join(accountId);
+    console.log('Client connected:', socket.id, 'account:', accountId);
+    socket.emit('status', context.whatsapp.getStatus());
 
     socket.on('disconnect', () => {
         console.log('Client disconnected:', socket.id);
@@ -102,31 +104,7 @@ io.on('connection', (socket) => {
 });
 
 // Initialize services
-whatsapp.setSocketIO(io);
-autoReply.setWhatsApp(whatsapp);
-scheduler.setWhatsApp(whatsapp);
-scriptRunner.setWhatsApp(whatsapp);
-
-// Handle incoming messages for all services
-const originalHandleMessage = whatsapp.handleMessage.bind(whatsapp);
-whatsapp.handleMessage = async function(msg, fromMe) {
-    const result = await originalHandleMessage(msg, fromMe);
-
-    if (result) {
-        // Process auto-reply (only for incoming)
-        if (!fromMe) {
-            await autoReply.processMessage(result.msgData);
-        }
-
-        // Trigger webhooks
-        await webhook.trigger('message', result.msgData);
-
-        // Run scripts
-        await scriptRunner.processMessage(result.msgData);
-    }
-
-    return result;
-};
+accountManager.setSocketIO(io);
 
 // Start server
 server.listen(config.PORT, () => {
@@ -137,10 +115,10 @@ server.listen(config.PORT, () => {
     console.log('Password: [PROTECTED]');
     console.log('='.repeat(50));
 
-    scheduler.start();
+    const defaultContext = accountManager.getAccountContext(accountManager.getDefaultAccountId());
 
     setTimeout(() => {
-        whatsapp.initialize().catch(err => {
+        defaultContext.whatsapp.initialize().catch(err => {
             console.error('WhatsApp init error:', err.message);
         });
     }, 2000);
@@ -149,13 +127,11 @@ server.listen(config.PORT, () => {
 // Graceful shutdown
 process.on('SIGINT', async () => {
     console.log('\nShutting down...');
-    scheduler.stop();
-    await whatsapp.destroy();
+    await accountManager.shutdown();
     process.exit(0);
 });
 
 process.on('SIGTERM', async () => {
-    scheduler.stop();
-    await whatsapp.destroy();
+    await accountManager.shutdown();
     process.exit(0);
 });
