@@ -37,7 +37,8 @@ const LIMITS = {
     PAGINATION: {
         MESSAGES: 500,
         LOGS: 500,
-        SCRIPT_LOGS: 200
+        SCRIPT_LOGS: 200,
+        WEBHOOK_DELIVERIES: 200
     }
 };
 
@@ -347,6 +348,25 @@ router.put('/webhooks/:id', (req, res) => {
 router.delete('/webhooks/:id', (req, res) => {
     req.account.db.webhooks.delete.run(req.params.id);
     res.json({ success: true });
+});
+
+router.get('/webhooks/:id/deliveries', (req, res) => {
+    const limit = Math.min(parseInt(req.query.limit) || 50, LIMITS.PAGINATION.WEBHOOK_DELIVERIES);
+    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+    res.json(req.account.db.webhookDeliveries.getByWebhookId.all(req.params.id, limit, offset));
+});
+
+router.post('/webhooks/deliveries/:id/replay', async (req, res) => {
+    try {
+        const delivery = req.account.db.webhookDeliveries.getById.get(req.params.id);
+        if (!delivery) {
+            return res.status(404).json({ error: 'Delivery not found' });
+        }
+        await req.account.webhook.replayDelivery(delivery);
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 });
 
 // ============ SCRIPTS ============
