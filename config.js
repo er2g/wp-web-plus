@@ -18,8 +18,25 @@ module.exports = {
     SITE_PASSWORD: process.env.SITE_PASSWORD || 'changeme',
     SESSION_SECRET: process.env.SESSION_SECRET || 'change-this-secret-in-production',
 
-    // CORS Origins
-    CORS_ORIGINS: process.env.CORS_ORIGINS || 'http://localhost:3000',
+    // CORS Origins (required)
+    CORS_ORIGINS: process.env.CORS_ORIGINS,
+
+    // Password policy
+    PASSWORD_POLICY: {
+        MIN_LENGTH: parseInt(process.env.PASSWORD_MIN_LENGTH || '8', 10),
+        REQUIRE_UPPER: process.env.PASSWORD_REQUIRE_UPPER === 'true',
+        REQUIRE_LOWER: process.env.PASSWORD_REQUIRE_LOWER === 'true',
+        REQUIRE_NUMBER: process.env.PASSWORD_REQUIRE_NUMBER === 'true',
+        REQUIRE_SYMBOL: process.env.PASSWORD_REQUIRE_SYMBOL === 'true'
+    },
+
+    // API Rate limits
+    API_RATE_LIMIT: {
+        IP_WINDOW_MS: parseInt(process.env.API_RATE_LIMIT_IP_WINDOW_MS || String(15 * 60 * 1000), 10),
+        IP_MAX: parseInt(process.env.API_RATE_LIMIT_IP_MAX || '300', 10),
+        USER_WINDOW_MS: parseInt(process.env.API_RATE_LIMIT_USER_WINDOW_MS || String(15 * 60 * 1000), 10),
+        USER_MAX: parseInt(process.env.API_RATE_LIMIT_USER_MAX || '150', 10)
+    },
     
     // Paths
     DATA_DIR: path.join(__dirname, 'data'),
@@ -41,9 +58,13 @@ module.exports = {
     
     // Scheduler
     SCHEDULER_CHECK_INTERVAL: 60000, // 1 minute
+    SCHEDULER_MAX_RETRIES: 5,
+    SCHEDULER_RETRY_BASE_MS: 60000, // 1 minute
     
     // Webhook
     WEBHOOK_TIMEOUT: 10000, // 10 seconds
+    WEBHOOK_MAX_RETRIES: 3,
+    WEBHOOK_RETRY_BASE_MS: 1000, // 1 second
     
     // Logging
     LOG_LEVEL: 'info'

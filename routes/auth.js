@@ -5,6 +5,8 @@ const express = require('express');
 const router = express.Router();
 const config = require('../config');
 
+const isProduction = process.env.NODE_ENV === 'production';
+
 // Rate limiting constants
 const RATE_LIMIT = {
     MAX_ATTEMPTS: 5,
@@ -64,6 +66,17 @@ function clearAttempts(ip) {
     loginAttempts.delete(ip);
 }
 
+function passwordMeetsPolicy(password) {
+    if (typeof password !== 'string') return false;
+    const policy = config.PASSWORD_POLICY;
+    if (password.length < policy.MIN_LENGTH) return false;
+    if (policy.REQUIRE_UPPER && !/[A-Z]/.test(password)) return false;
+    if (policy.REQUIRE_LOWER && !/[a-z]/.test(password)) return false;
+    if (policy.REQUIRE_NUMBER && !/[0-9]/.test(password)) return false;
+    if (policy.REQUIRE_SYMBOL && !/[^A-Za-z0-9]/.test(password)) return false;
+    return true;
+}
+
 // Login
 router.post('/login', (req, res) => {
     const ip = getClientIp(req);
@@ -77,10 +90,20 @@ router.post('/login', (req, res) => {
 
     const { password } = req.body;
 
+    if (!passwordMeetsPolicy(password)) {
+        console.warn(`Password policy violation on login attempt from ${ip}.`);
+    }
+
     if (password === config.SITE_PASSWORD) {
         clearAttempts(ip);
-        req.session.authenticated = true;
-        res.json({ success: true });
+        req.session.regenerate(err => {
+            if (err) {
+                console.error('Failed to regenerate session after login:', err);
+                return res.status(500).json({ error: 'Session error' });
+            }
+            req.session.authenticated = true;
+            res.json({ success: true });
+        });
     } else {
         recordFailedAttempt(ip);
         res.status(401).json({ error: 'Invalid password' });
@@ -89,8 +112,18 @@ router.post('/login', (req, res) => {
 
 // Logout
 router.post('/logout', (req, res) => {
-    req.session.destroy();
-    res.json({ success: true });
+    req.session.destroy(err => {
+        if (err) {
+            console.error('Failed to destroy session on logout:', err);
+            return res.status(500).json({ error: 'Session error' });
+        }
+        res.clearCookie('whatsapp.sid', {
+            path: '/',
+            secure: isProduction,
+            sameSite: 'lax'
+        });
+        res.json({ success: true });
+    });
 });
 
 // Check auth status
