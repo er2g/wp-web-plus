@@ -967,12 +967,25 @@ function escapeHtml(text) {
 // Sanitize URL to prevent XSS via javascript: or data: URLs
 function sanitizeUrl(url) {
     if (!url) return '';
-    // Only allow http, https, and relative URLs
     const trimmed = url.trim().toLowerCase();
+
+    // Block dangerous protocols
     if (trimmed.startsWith('javascript:') || trimmed.startsWith('data:') || trimmed.startsWith('vbscript:')) {
         return '';
     }
-    return escapeHtml(url);
+
+    // Block protocol-relative URLs that could load external malicious content
+    if (trimmed.startsWith('//')) {
+        return '';
+    }
+
+    // Only allow http, https, or relative paths (starting with / or alphanumeric)
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://') ||
+        trimmed.startsWith('/') || trimmed.startsWith('api/') || /^[a-z0-9]/.test(trimmed)) {
+        return escapeHtml(url);
+    }
+
+    return '';
 }
 
 function formatTime(ts) {

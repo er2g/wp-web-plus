@@ -48,7 +48,35 @@ function validateUrl(url) {
     if (url.length > MAX_URL_LENGTH) return false;
     try {
         const parsed = new URL(url);
-        return ['http:', 'https:'].includes(parsed.protocol);
+
+        // Only allow http/https
+        if (!['http:', 'https:'].includes(parsed.protocol)) {
+            return false;
+        }
+
+        // SSRF Protection: Block localhost and internal IPs
+        const hostname = parsed.hostname.toLowerCase();
+
+        // Block localhost variations
+        if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
+            return false;
+        }
+
+        // Block private IP ranges (10.x.x.x, 172.16-31.x.x, 192.168.x.x)
+        const ipv4Match = hostname.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+        if (ipv4Match) {
+            const [, a, b] = ipv4Match.map(Number);
+            if (a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || a === 0) {
+                return false;
+            }
+        }
+
+        // Block metadata endpoints (AWS, GCP, Azure)
+        if (hostname === '169.254.169.254' || hostname.endsWith('.internal')) {
+            return false;
+        }
+
+        return true;
     } catch {
         return false;
     }
@@ -174,6 +202,13 @@ router.post('/auto-replies', (req, res) => {
     if (!trigger_word || !response) {
         return res.status(400).json({ error: 'trigger_word and response required' });
     }
+    // Input length validation
+    if (trigger_word.length > MAX_TRIGGER_LENGTH) {
+        return res.status(400).json({ error: 'Trigger word too long (max ' + MAX_TRIGGER_LENGTH + ' chars)' });
+    }
+    if (response.length > MAX_MESSAGE_LENGTH) {
+        return res.status(400).json({ error: 'Response too long (max ' + MAX_MESSAGE_LENGTH + ' chars)' });
+    }
     const result = db.autoReplies.create.run(trigger_word, response, match_type || 'contains', is_active !== false ? 1 : 0);
     res.json({ success: true, id: result.lastInsertRowid });
 });
@@ -205,6 +240,13 @@ router.post('/scheduled', (req, res) => {
     const { chat_id, chat_name, message, scheduled_at, is_recurring, cron_expression } = req.body;
     if (!chat_id || !message || !scheduled_at) {
         return res.status(400).json({ error: 'chat_id, message and scheduled_at required' });
+    }
+    // Input validation
+    if (!validateChatId(chat_id)) {
+        return res.status(400).json({ error: 'Invalid chat_id format' });
+    }
+    if (!validateMessage(message)) {
+        return res.status(400).json({ error: 'Message too long or invalid' });
     }
     const result = db.scheduled.create.run(chat_id, chat_name || '', message, scheduled_at, is_recurring ? 1 : 0, cron_expression || null);
     res.json({ success: true, id: result.lastInsertRowid });
@@ -317,14 +359,14 @@ router.post('/scripts/test', async (req, res) => {
 });
 
 router.get('/scripts/:id/logs', (req, res) => {
-    const limit = parseInt(req.query.limit) || 50;
+    const limit = Math.min(parseInt(req.query.limit) || 50, 200); // Cap at 200
     res.json(db.scriptLogs.getByScript.all(req.params.id, limit));
 });
 
 // ============ LOGS ============
 router.get('/logs', (req, res) => {
-    const limit = parseInt(req.query.limit) || 100;
-    const category = req.query.category;
+    const limit = Math.min(parseInt(req.query.limit) || 100, 500); // Cap at 500
+    const category = (req.query.category || '').substring(0, 50); // Limit category length
     if (category) {
         res.json(db.logs.getByCategory.all(category, limit));
     } else {
