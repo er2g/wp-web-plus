@@ -542,7 +542,7 @@ async function sendMessage() {
 
     try {
         await api('api/send', 'POST', { chatId: currentChat, message });
-        setTimeout(() => loadChatMessages(currentChat), 500);
+        // Socket event will refresh
     } catch (err) {
         showToast('Gonderme hatasi: ' + err.message, 'error');
         loadChatMessages(currentChat);
@@ -577,14 +577,14 @@ function appendTempMessage(text) {
 
 // Handle new incoming message
 function handleNewMessage(msg) {
-    console.log('New message received:', msg);
+    console.log('New message received:', msg, 'currentChat:', currentChat, 'msg.chatId:', msg.chatId);
 
     if (settings.notifications) {
         showToast('Yeni mesaj: ' + formatSenderName(msg.fromName), 'info');
     }
 
-    if (currentChat && currentChat === msg.chatId) {
-        appendNewMessage(msg);
+    if (currentChat) {
+        loadChatMessages(currentChat);
     }
 
     loadChats();
