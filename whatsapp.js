@@ -338,7 +338,8 @@ class WhatsAppClient {
                             );
                             totalMessages++;
                         } catch (e) {
-                            // Mesaj isleme hatasi - devam et
+                            // Log message processing error but continue with other messages
+                            this.log('debug', 'sync', 'Message processing error: ' + e.message);
                         }
                     }
 
@@ -432,7 +433,9 @@ class WhatsAppClient {
             try {
                 await this.client.logout();
                 this.log('info', 'whatsapp', 'Logged out');
-            } catch (error) {}
+            } catch (error) {
+                this.log('warn', 'whatsapp', 'Logout error: ' + error.message);
+            }
         }
         this.status = 'disconnected';
         this.info = null;
@@ -441,7 +444,11 @@ class WhatsAppClient {
 
     async destroy() {
         if (this.client) {
-            try { await this.client.destroy(); } catch (e) {}
+            try {
+                await this.client.destroy();
+            } catch (e) {
+                this.log('warn', 'whatsapp', 'Destroy error: ' + e.message);
+            }
             this.client = null;
         }
         this.status = 'disconnected';

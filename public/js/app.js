@@ -419,22 +419,25 @@ function renderChatMessages(messages) {
         const mediaUrl = m.media_url || m.mediaUrl;
 
         if (mediaUrl) {
-            const type = m.type || 'chat';
-            if (type === 'image' || type === 'sticker') {
-                mediaHtml = '<div class="message-media"><img src="' + mediaUrl + '" onclick="openMediaLightbox(this.src)" loading="lazy" alt=""></div>';
-            } else if (type === 'video') {
-                mediaHtml = '<div class="message-media"><video src="' + mediaUrl + '" controls></video></div>';
-            } else if (type === 'audio' || type === 'ptt') {
-                mediaHtml = '<div class="message-media"><audio src="' + mediaUrl + '" controls></audio></div>';
-            } else if (type === 'document') {
-                const fileName = m.body || 'Belge';
-                const ext = fileName.split('.').pop().toLowerCase();
-                const iconClass = ext === 'pdf' ? 'bi-file-earmark-pdf' : 'bi-file-earmark';
-                const iconColor = ext === 'pdf' ? '#e74c3c' : '#667781';
-                mediaHtml = '<div class="message-document">' +
-                    '<div class="doc-icon" style="background:' + iconColor + '"><i class="bi ' + iconClass + '"></i></div>' +
-                    '<div class="doc-info"><div class="doc-name">' + escapeHtml(fileName) + '</div>' +
-                    '<a href="' + mediaUrl + '" target="_blank" class="doc-link">Indir</a></div></div>';
+            const safeMediaUrl = sanitizeUrl(mediaUrl);
+            if (safeMediaUrl) {
+                const type = m.type || 'chat';
+                if (type === 'image' || type === 'sticker') {
+                    mediaHtml = '<div class="message-media"><img src="' + safeMediaUrl + '" onclick="openMediaLightbox(this.src)" loading="lazy" alt=""></div>';
+                } else if (type === 'video') {
+                    mediaHtml = '<div class="message-media"><video src="' + safeMediaUrl + '" controls></video></div>';
+                } else if (type === 'audio' || type === 'ptt') {
+                    mediaHtml = '<div class="message-media"><audio src="' + safeMediaUrl + '" controls></audio></div>';
+                } else if (type === 'document') {
+                    const fileName = m.body || 'Belge';
+                    const ext = fileName.split('.').pop().toLowerCase();
+                    const iconClass = ext === 'pdf' ? 'bi-file-earmark-pdf' : 'bi-file-earmark';
+                    const iconColor = ext === 'pdf' ? '#e74c3c' : '#667781';
+                    mediaHtml = '<div class="message-document">' +
+                        '<div class="doc-icon" style="background:' + iconColor + '"><i class="bi ' + iconClass + '"></i></div>' +
+                        '<div class="doc-info"><div class="doc-name">' + escapeHtml(fileName) + '</div>' +
+                        '<a href="' + safeMediaUrl + '" target="_blank" class="doc-link">Indir</a></div></div>';
+                }
             }
         }
 
@@ -478,9 +481,14 @@ function formatSenderName(name) {
 
 // Media lightbox
 function openMediaLightbox(src) {
+    const safeSrc = sanitizeUrl(src);
+    if (!safeSrc) return;
     const lightbox = document.createElement('div');
     lightbox.className = 'media-lightbox';
-    lightbox.innerHTML = '<img src="' + src + '" alt="">';
+    const img = document.createElement('img');
+    img.src = safeSrc;
+    img.alt = '';
+    lightbox.appendChild(img);
     lightbox.onclick = () => lightbox.remove();
     document.body.appendChild(lightbox);
 }
@@ -502,17 +510,20 @@ function renderMessagesTable(messages) {
         const mediaUrl = m.media_url || m.mediaUrl;
         let mediaCol = '';
         if (mediaUrl) {
-            if (m.type === 'image' || m.type === 'sticker') {
-                mediaCol = '<a href="' + mediaUrl + '" target="_blank"><img src="' + mediaUrl + '" style="max-height:40px" loading="lazy"></a>';
-            } else {
-                mediaCol = '<a href="' + mediaUrl + '" target="_blank" class="btn btn-sm btn-outline-info"><i class="bi bi-download"></i></a>';
+            const safeMediaUrl = sanitizeUrl(mediaUrl);
+            if (safeMediaUrl) {
+                if (m.type === 'image' || m.type === 'sticker') {
+                    mediaCol = '<a href="' + safeMediaUrl + '" target="_blank"><img src="' + safeMediaUrl + '" style="max-height:40px" loading="lazy"></a>';
+                } else {
+                    mediaCol = '<a href="' + safeMediaUrl + '" target="_blank" class="btn btn-sm btn-outline-info"><i class="bi bi-download"></i></a>';
+                }
             }
         }
         const isMine = m.is_from_me === 1 || m.is_from_me === true;
         const direction = isMine ? '<i class="bi bi-arrow-up-right text-success"></i>' : '<i class="bi bi-arrow-down-left text-primary"></i>';
         return '<tr><td>' + formatDateTime(m.timestamp) + '</td><td>' + direction + ' ' + escapeHtml(formatSenderName(m.from_name)) + '</td>' +
             '<td>' + escapeHtml((m.body || '').substring(0, 100)) + '</td>' +
-            '<td><span class="badge bg-' + (m.type === 'chat' ? 'secondary' : 'info') + '">' + m.type + '</span> ' + mediaCol + '</td></tr>';
+            '<td><span class="badge bg-' + (m.type === 'chat' ? 'secondary' : 'info') + '">' + escapeHtml(m.type) + '</span> ' + mediaCol + '</td></tr>';
     }).join('');
 }
 
@@ -595,18 +606,21 @@ function appendNewMessage(msg) {
     const mediaUrl = msg.mediaUrl;
 
     if (mediaUrl) {
-        const type = msg.type || 'chat';
-        if (type === 'image' || type === 'sticker') {
-            mediaHtml = '<div class="message-media"><img src="' + mediaUrl + '" onclick="openMediaLightbox(this.src)" loading="lazy" alt=""></div>';
-        } else if (type === 'video') {
-            mediaHtml = '<div class="message-media"><video src="' + mediaUrl + '" controls></video></div>';
-        } else if (type === 'audio' || type === 'ptt') {
-            mediaHtml = '<div class="message-media"><audio src="' + mediaUrl + '" controls></audio></div>';
-        } else if (type === 'document') {
-            const fileName = msg.body || 'Belge';
-            mediaHtml = '<div class="message-document"><div class="doc-icon"><i class="bi bi-file-earmark-pdf"></i></div>' +
-                '<div class="doc-info"><div class="doc-name">' + escapeHtml(fileName) + '</div>' +
-                '<a href="' + mediaUrl + '" target="_blank" class="doc-link">Indir</a></div></div>';
+        const safeMediaUrl = sanitizeUrl(mediaUrl);
+        if (safeMediaUrl) {
+            const type = msg.type || 'chat';
+            if (type === 'image' || type === 'sticker') {
+                mediaHtml = '<div class="message-media"><img src="' + safeMediaUrl + '" onclick="openMediaLightbox(this.src)" loading="lazy" alt=""></div>';
+            } else if (type === 'video') {
+                mediaHtml = '<div class="message-media"><video src="' + safeMediaUrl + '" controls></video></div>';
+            } else if (type === 'audio' || type === 'ptt') {
+                mediaHtml = '<div class="message-media"><audio src="' + safeMediaUrl + '" controls></audio></div>';
+            } else if (type === 'document') {
+                const fileName = msg.body || 'Belge';
+                mediaHtml = '<div class="message-document"><div class="doc-icon"><i class="bi bi-file-earmark-pdf"></i></div>' +
+                    '<div class="doc-info"><div class="doc-name">' + escapeHtml(fileName) + '</div>' +
+                    '<a href="' + safeMediaUrl + '" target="_blank" class="doc-link">Indir</a></div></div>';
+            }
         }
     }
 
@@ -948,6 +962,17 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+// Sanitize URL to prevent XSS via javascript: or data: URLs
+function sanitizeUrl(url) {
+    if (!url) return '';
+    // Only allow http, https, and relative URLs
+    const trimmed = url.trim().toLowerCase();
+    if (trimmed.startsWith('javascript:') || trimmed.startsWith('data:') || trimmed.startsWith('vbscript:')) {
+        return '';
+    }
+    return escapeHtml(url);
 }
 
 function formatTime(ts) {

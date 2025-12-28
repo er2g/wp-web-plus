@@ -19,9 +19,40 @@ if (!fs.existsSync(config.MEDIA_DIR)) {
 
 const storage = multer.diskStorage({
     destination: config.MEDIA_DIR,
-    filename: (req, file, cb) => cb(null, Date.now() + '-' + file.originalname)
+    filename: (req, file, cb) => {
+        // Sanitize filename to prevent path traversal
+        const safeName = file.originalname.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+        cb(null, Date.now() + '-' + safeName);
+    }
 });
 const upload = multer({ storage, limits: { fileSize: 16 * 1024 * 1024 } });
+
+// Input validation helpers
+const MAX_MESSAGE_LENGTH = 10000;
+const MAX_TRIGGER_LENGTH = 500;
+const MAX_URL_LENGTH = 2048;
+
+function validateChatId(chatId) {
+    if (!chatId || typeof chatId !== 'string') return false;
+    // WhatsApp chat IDs are typically phone@c.us or groupId@g.us
+    return /^[\w\-@.]+$/.test(chatId) && chatId.length <= 100;
+}
+
+function validateMessage(message) {
+    if (!message || typeof message !== 'string') return false;
+    return message.length <= MAX_MESSAGE_LENGTH;
+}
+
+function validateUrl(url) {
+    if (!url || typeof url !== 'string') return false;
+    if (url.length > MAX_URL_LENGTH) return false;
+    try {
+        const parsed = new URL(url);
+        return ['http:', 'https:'].includes(parsed.protocol);
+    } catch {
+        return false;
+    }
+}
 
 // Auth middleware
 function requireAuth(req, res, next) {
@@ -96,19 +127,19 @@ router.get('/chats', (req, res) => {
 });
 
 router.get('/chats/:id/messages', (req, res) => {
-    const limit = parseInt(req.query.limit) || 50;
+    const limit = Math.min(parseInt(req.query.limit) || 50, 500); // Cap at 500
     res.json(db.messages.getByChatId.all(req.params.id, limit));
 });
 
 // ============ MESSAGES ============
 router.get('/messages', (req, res) => {
-    const limit = parseInt(req.query.limit) || 100;
-    const offset = parseInt(req.query.offset) || 0;
+    const limit = Math.min(parseInt(req.query.limit) || 100, 500); // Cap at 500
+    const offset = Math.max(parseInt(req.query.offset) || 0, 0); // Ensure non-negative
     res.json(db.messages.getAll.all(limit, offset));
 });
 
 router.get('/messages/search', (req, res) => {
-    const query = req.query.q || '';
+    const query = (req.query.q || '').substring(0, 200); // Limit query length
     if (!query) return res.json([]);
     res.json(db.messages.search.all('%' + query + '%'));
 });
@@ -118,6 +149,12 @@ router.post('/send', upload.single('media'), async (req, res) => {
         const { chatId, message } = req.body;
         if (!chatId || !message) {
             return res.status(400).json({ error: 'chatId and message required' });
+        }
+        if (!validateChatId(chatId)) {
+            return res.status(400).json({ error: 'Invalid chatId format' });
+        }
+        if (!validateMessage(message)) {
+            return res.status(400).json({ error: 'Message too long or invalid' });
         }
         const options = req.file ? { mediaPath: req.file.path } : {};
         const result = await whatsapp.sendMessage(chatId, message, options);
@@ -186,12 +223,18 @@ router.get('/webhooks', (req, res) => {
 router.post('/webhooks', (req, res) => {
     const { name, url, events, is_active } = req.body;
     if (!url) return res.status(400).json({ error: 'url required' });
+    if (!validateUrl(url)) {
+        return res.status(400).json({ error: 'Invalid URL. Must be http or https.' });
+    }
     const result = db.webhooks.create.run(name || 'Webhook', url, events || 'message', is_active !== false ? 1 : 0);
     res.json({ success: true, id: result.lastInsertRowid });
 });
 
 router.put('/webhooks/:id', (req, res) => {
     const { name, url, events, is_active } = req.body;
+    if (url && !validateUrl(url)) {
+        return res.status(400).json({ error: 'Invalid URL. Must be http or https.' });
+    }
     db.webhooks.update.run(name, url, events, is_active ? 1 : 0, req.params.id);
     res.json({ success: true });
 });
@@ -323,10 +366,27 @@ router.get('/stats', (req, res) => {
 // ============ MEDIA ============
 router.get('/media/:filename', (req, res) => {
     const filename = req.params.filename;
-    if (filename.includes('..') || filename.includes('/')) {
+
+    // Comprehensive path traversal protection
+    if (!filename || filename.includes('..') || filename.includes('/') || filename.includes('\\') ||
+        filename.includes('\0') || filename.includes('%') || filename.includes(':')) {
         return res.status(400).json({ error: 'Invalid filename' });
     }
+
+    // Whitelist allowed characters (alphanumeric, dash, underscore, dot)
+    if (!/^[a-zA-Z0-9_\-\.]+$/.test(filename)) {
+        return res.status(400).json({ error: 'Invalid filename characters' });
+    }
+
     const filePath = path.join(config.MEDIA_DIR, filename);
+
+    // Verify the resolved path is still within MEDIA_DIR
+    const resolvedPath = path.resolve(filePath);
+    const resolvedMediaDir = path.resolve(config.MEDIA_DIR);
+    if (!resolvedPath.startsWith(resolvedMediaDir + path.sep)) {
+        return res.status(400).json({ error: 'Invalid file path' });
+    }
+
     if (!fs.existsSync(filePath)) {
         return res.status(404).json({ error: 'File not found' });
     }
