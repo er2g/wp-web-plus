@@ -187,7 +187,7 @@ function createDatabase(config) {
         (message_id, chat_id, from_number, to_number, from_name, body, type, media_path, media_url, media_mimetype, is_group, is_from_me, timestamp)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `),
-    getByChatId: db.prepare(`SELECT * FROM messages WHERE chat_id = ? ORDER BY timestamp DESC LIMIT ?`),
+    getByChatId: db.prepare(`SELECT * FROM messages WHERE chat_id = ? ORDER BY timestamp DESC LIMIT ? OFFSET ?`),
     getAll: db.prepare(`SELECT * FROM messages ORDER BY timestamp DESC LIMIT ? OFFSET ?`),
     search: db.prepare(`SELECT * FROM messages WHERE body LIKE ? ORDER BY timestamp DESC LIMIT 100`),
     getStats: db.prepare(`
@@ -210,7 +210,8 @@ function createDatabase(config) {
             unread_count = excluded.unread_count, updated_at = datetime('now')
     `),
     getAll: db.prepare(`SELECT * FROM chats ORDER BY last_message_at DESC`),
-    getById: db.prepare(`SELECT * FROM chats WHERE chat_id = ?`)
+    getById: db.prepare(`SELECT * FROM chats WHERE chat_id = ?`),
+    search: db.prepare(`SELECT * FROM chats WHERE name LIKE ? ORDER BY last_message_at DESC LIMIT ? OFFSET ?`)
     };
 
     const autoReplies = {

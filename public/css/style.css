@@ -1155,6 +1155,44 @@ body {
     animation: spin 1s linear infinite;
 }
 
+.list-status {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.list-status.active {
+    display: flex;
+}
+
+.list-status .spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid currentColor;
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+.virtualized-list {
+    position: relative;
+}
+
+.virtualized-list .virtual-spacer {
+    width: 1px;
+    opacity: 0;
+}
+
+.virtualized-list .virtual-items {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+}
+
 @keyframes spin {
     to { transform: rotate(360deg); }
 }

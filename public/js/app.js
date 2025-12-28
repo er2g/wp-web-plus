@@ -6,7 +6,6 @@
 let socket;
 let currentChat = null;
 let chats = [];
-let allMessages = [];
 let monacoEditor = null;
 let editingScriptId = null;
 let accounts = [];
@@ -23,6 +22,26 @@ let uiPreferences = {
     wallpaper: localStorage.getItem('uiWallpaper') || 'default'
 };
 let selectedAttachment = null;
+const MESSAGE_PAGE_SIZE = 50;
+const CHAT_MESSAGE_PAGE_SIZE = 50;
+const CHAT_SEARCH_PAGE_SIZE = 50;
+const VIRTUAL_MESSAGE_ITEM_HEIGHT = 78;
+const VIRTUAL_MESSAGE_OVERSCAN = 6;
+
+let messagesPagination = {
+    items: [],
+    offset: 0,
+    hasMore: true,
+    loading: false
+};
+let chatMessagesPagination = {
+    chatId: null,
+    items: [],
+    offset: 0,
+    hasMore: true,
+    loading: false
+};
+let chatSearchDebounce = null;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -30,6 +49,8 @@ document.addEventListener('DOMContentLoaded', () => {
     loadCustomizations();
     initMonaco();
     setupAttachmentPicker();
+    setupMessagesListScroll();
+    setupChatMessagesScroll();
     initializeApp();
 
     // Close dropdowns when clicking outside
@@ -217,7 +238,19 @@ async function createAccount() {
 function resetAppState() {
     currentChat = null;
     chats = [];
-    allMessages = [];
+    messagesPagination = {
+        items: [],
+        offset: 0,
+        hasMore: true,
+        loading: false
+    };
+    chatMessagesPagination = {
+        chatId: null,
+        items: [],
+        offset: 0,
+        hasMore: true,
+        loading: false
+    };
     document.getElementById('chatList').innerHTML = '';
     document.getElementById('messagesList').innerHTML = '';
     document.getElementById('logsList').innerHTML = '';
@@ -348,9 +381,17 @@ function switchSidebarTab(tab) {
     document.getElementById('logsList').style.display = tab === 'logs' ? 'block' : 'none';
 
     // Load data
-    if (tab === 'chats') loadChats();
-    else if (tab === 'messages') renderMessagesList();
-    else if (tab === 'logs') loadLogs();
+    if (tab === 'chats') {
+        loadChats();
+    } else if (tab === 'messages') {
+        if (!messagesPagination.items.length) {
+            loadMessagesPage({ reset: true });
+        } else {
+            renderMessagesList();
+        }
+    } else if (tab === 'logs') {
+        loadLogs();
+    }
 }
 
 function showTab(tabName) {
@@ -460,20 +501,42 @@ async function loadChats() {
 }
 
 async function loadAllMessages() {
-    try {
-        allMessages = await api('api/messages?limit=200');
-        renderMessagesList();
-    } catch (err) {
-        console.error('Messages load error:', err);
-    }
+    await loadMessagesPage({ reset: true });
 }
 
-async function loadChatMessages(chatId) {
+async function loadChatMessages(chatId, options = {}) {
+    const shouldReset = options.reset !== false || chatMessagesPagination.chatId !== chatId;
+    if (shouldReset) {
+        chatMessagesPagination = {
+            chatId,
+            items: [],
+            offset: 0,
+            hasMore: true,
+            loading: false
+        };
+    }
+
+    if (chatMessagesPagination.loading || !chatMessagesPagination.hasMore) return;
+    chatMessagesPagination.loading = true;
+    setListStatus('chatMessagesStatus', shouldReset ? 'Mesajlar yukleniyor...' : 'Daha fazla mesaj yukleniyor...', true);
+
     try {
-        const messages = await api('api/chats/' + encodeURIComponent(chatId) + '/messages?limit=100');
-        renderChatMessages(messages);
+        const messages = await api('api/chats/' + encodeURIComponent(chatId) +
+            '/messages?limit=' + CHAT_MESSAGE_PAGE_SIZE +
+            '&offset=' + chatMessagesPagination.offset);
+        const page = Array.isArray(messages) ? messages : [];
+        chatMessagesPagination.items = chatMessagesPagination.items.concat(page);
+        chatMessagesPagination.offset += page.length;
+        chatMessagesPagination.hasMore = page.length === CHAT_MESSAGE_PAGE_SIZE;
+        renderChatMessages(chatMessagesPagination.items, {
+            preserveScroll: !shouldReset,
+            scrollToBottom: shouldReset
+        });
     } catch (err) {
         console.error('Chat messages load error:', err);
+    } finally {
+        chatMessagesPagination.loading = false;
+        setListStatus('chatMessagesStatus', '', false);
     }
 }
 
@@ -494,6 +557,80 @@ async function loadSettings() {
     } catch (err) {
         console.error('Settings load error:', err);
     }
+}
+
+function setListStatus(id, message, showSpinner) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (!message) {
+        el.classList.remove('active');
+        el.innerHTML = '';
+        return;
+    }
+    const spinnerHtml = showSpinner ? '<span class="spinner"></span>' : '';
+    el.innerHTML = spinnerHtml + '<span>' + escapeHtml(message) + '</span>';
+    el.classList.add('active');
+}
+
+async function loadMessagesPage(options = {}) {
+    const shouldReset = options.reset === true;
+    if (shouldReset) {
+        messagesPagination = {
+            items: [],
+            offset: 0,
+            hasMore: true,
+            loading: false
+        };
+        const container = document.getElementById('messagesList');
+        if (container) container.scrollTop = 0;
+    }
+
+    if (messagesPagination.loading || !messagesPagination.hasMore) return;
+    messagesPagination.loading = true;
+    setListStatus('messagesListStatus', shouldReset ? 'Mesajlar yukleniyor...' : 'Daha fazla mesaj yukleniyor...', true);
+
+    try {
+        const messages = await api('api/messages?limit=' + MESSAGE_PAGE_SIZE + '&offset=' + messagesPagination.offset);
+        const page = Array.isArray(messages) ? messages : [];
+        messagesPagination.items = messagesPagination.items.concat(page);
+        messagesPagination.offset += page.length;
+        messagesPagination.hasMore = page.length === MESSAGE_PAGE_SIZE;
+        renderMessagesList();
+    } catch (err) {
+        console.error('Messages load error:', err);
+    } finally {
+        messagesPagination.loading = false;
+        setListStatus('messagesListStatus', '', false);
+    }
+}
+
+function setupMessagesListScroll() {
+    const container = document.getElementById('messagesList');
+    if (!container || container.dataset.scrollBound) return;
+    container.dataset.scrollBound = 'true';
+    container.addEventListener('scroll', () => {
+        renderMessagesList();
+        if (container.scrollTop + container.clientHeight >= container.scrollHeight - 120) {
+            loadMessagesPage();
+        }
+    });
+    window.addEventListener('resize', () => {
+        if (container.style.display !== 'none') {
+            renderMessagesList();
+        }
+    });
+}
+
+function setupChatMessagesScroll() {
+    const container = document.getElementById('messagesContainer');
+    if (!container || container.dataset.scrollBound) return;
+    container.dataset.scrollBound = 'true';
+    container.addEventListener('scroll', () => {
+        if (!currentChat) return;
+        if (container.scrollTop <= 120) {
+            loadChatMessages(currentChat, { reset: false });
+        }
+    });
 }
 
 function updateSettingsUI() {
@@ -558,29 +695,47 @@ function renderMessagesList() {
     const container = document.getElementById('messagesList');
     if (!container) return;
 
-    if (allMessages.length === 0) {
+    if (messagesPagination.items.length === 0) {
+        container.classList.remove('virtualized-list');
         container.innerHTML = '<div class="chat-item"><div class="chat-info"><div class="chat-name" style="color: var(--text-secondary)">Henuz mesaj yok</div></div></div>';
         return;
     }
 
-    container.innerHTML = allMessages.slice(0, 50).map(m => {
-        const isMine = m.is_from_me === 1 || m.is_from_me === true;
-        const direction = isMine ? '<i class="bi bi-arrow-up-right" style="color: var(--accent)"></i>' : '<i class="bi bi-arrow-down-left" style="color: #34b7f1"></i>';
-        const displayName = getDisplayNameFromMessage(m);
+    if (!container.classList.contains('virtualized-list')) {
+        container.classList.add('virtualized-list');
+        container.innerHTML = '<div class="virtual-spacer"></div><div class="virtual-items"></div>';
+    }
 
-        return '<div class="chat-item" onclick="openChatForMessage(\'' + (m.chat_id || '') + '\')">' +
-            '<div class="avatar"><i class="bi bi-chat-text-fill"></i></div>' +
-            '<div class="chat-info">' +
-                '<div class="top-row">' +
-                    '<div class="chat-name">' + direction + ' ' + escapeHtml(formatSenderName(displayName)) + '</div>' +
-                    '<span class="chat-time">' + formatTime(m.timestamp) + '</span>' +
-                '</div>' +
-                '<div class="chat-preview">' +
-                    '<span class="preview-text">' + escapeHtml((m.body || '[Medya]').substring(0, 50)) + '</span>' +
-                '</div>' +
+    const spacer = container.querySelector('.virtual-spacer');
+    const itemsWrapper = container.querySelector('.virtual-items');
+    const total = messagesPagination.items.length;
+    const scrollTop = container.scrollTop;
+    const viewportHeight = container.clientHeight;
+    const startIndex = Math.max(Math.floor(scrollTop / VIRTUAL_MESSAGE_ITEM_HEIGHT) - VIRTUAL_MESSAGE_OVERSCAN, 0);
+    const endIndex = Math.min(Math.ceil((scrollTop + viewportHeight) / VIRTUAL_MESSAGE_ITEM_HEIGHT) + VIRTUAL_MESSAGE_OVERSCAN, total);
+
+    spacer.style.height = (total * VIRTUAL_MESSAGE_ITEM_HEIGHT) + 'px';
+    itemsWrapper.style.transform = 'translateY(' + (startIndex * VIRTUAL_MESSAGE_ITEM_HEIGHT) + 'px)';
+    itemsWrapper.innerHTML = messagesPagination.items.slice(startIndex, endIndex).map(renderMessageListItem).join('');
+}
+
+function renderMessageListItem(message) {
+    const isMine = message.is_from_me === 1 || message.is_from_me === true;
+    const direction = isMine ? '<i class="bi bi-arrow-up-right" style="color: var(--accent)"></i>' : '<i class="bi bi-arrow-down-left" style="color: #34b7f1"></i>';
+    const displayName = getDisplayNameFromMessage(message);
+
+    return '<div class="chat-item" onclick="openChatForMessage(\'' + (message.chat_id || '') + '\')">' +
+        '<div class="avatar"><i class="bi bi-chat-text-fill"></i></div>' +
+        '<div class="chat-info">' +
+            '<div class="top-row">' +
+                '<div class="chat-name">' + direction + ' ' + escapeHtml(formatSenderName(displayName)) + '</div>' +
+                '<span class="chat-time">' + formatTime(message.timestamp) + '</span>' +
             '</div>' +
-        '</div>';
-    }).join('');
+            '<div class="chat-preview">' +
+                '<span class="preview-text">' + escapeHtml((message.body || '[Medya]').substring(0, 50)) + '</span>' +
+            '</div>' +
+        '</div>' +
+    '</div>';
 }
 
 function renderLogsList(logs) {
@@ -611,9 +766,12 @@ function renderLogsList(logs) {
     }).join('');
 }
 
-function renderChatMessages(messages) {
+function renderChatMessages(messages, options = {}) {
     const container = document.getElementById('messagesContainer');
     if (!container) return;
+
+    const previousScrollHeight = container.scrollHeight;
+    const previousScrollTop = container.scrollTop;
 
     // Sort messages chronologically
     const sorted = [...messages].sort((a, b) => a.timestamp - b.timestamp);
@@ -665,10 +823,17 @@ function renderChatMessages(messages) {
             '</div></div>';
     }).join('');
 
-    // Scroll to bottom
-    setTimeout(() => {
-        container.scrollTop = container.scrollHeight;
-    }, 100);
+    if (options.preserveScroll) {
+        const newScrollHeight = container.scrollHeight;
+        container.scrollTop = newScrollHeight - previousScrollHeight + previousScrollTop;
+        return;
+    }
+
+    if (options.scrollToBottom !== false) {
+        setTimeout(() => {
+            container.scrollTop = container.scrollHeight;
+        }, 100);
+    }
 }
 
 // Chat Selection
@@ -722,9 +887,27 @@ function openChatForMessage(chatId) {
 
 // Chat Search
 function filterChats() {
-    const query = document.getElementById('searchInput').value.toLowerCase();
-    const filtered = chats.filter(c => c.name.toLowerCase().includes(query));
-    renderChatList(filtered);
+    const query = document.getElementById('searchInput').value.trim();
+    if (chatSearchDebounce) {
+        clearTimeout(chatSearchDebounce);
+    }
+    chatSearchDebounce = setTimeout(() => {
+        performChatSearch(query);
+    }, 300);
+}
+
+async function performChatSearch(query) {
+    if (!query) {
+        renderChatList(chats);
+        return;
+    }
+
+    try {
+        const results = await api('api/chats/search?q=' + encodeURIComponent(query) + '&limit=' + CHAT_SEARCH_PAGE_SIZE);
+        renderChatList(results);
+    } catch (err) {
+        console.error('Chat search error:', err);
+    }
 }
 
 // Send Message
@@ -795,11 +978,35 @@ function handleNewMessage(msg) {
         showToast('Yeni mesaj: ' + formatSenderName(displayName), 'info');
     }
 
-    if (currentChat) {
-        loadChatMessages(currentChat);
+    const incomingChatId = msg.chatId || msg.chat_id;
+    if (currentChat && incomingChatId && currentChat === incomingChatId) {
+        const normalized = {
+            chat_id: incomingChatId,
+            is_from_me: msg.isFromMe ?? msg.is_from_me ?? 0,
+            timestamp: msg.timestamp || Date.now(),
+            body: msg.body || msg.message || '',
+            from_name: msg.fromName || msg.from_name,
+            from_number: msg.fromNumber || msg.from_number,
+            type: msg.type,
+            media_url: msg.mediaUrl || msg.media_url,
+            media_mimetype: msg.mediaMimeType || msg.media_mimetype
+        };
+        chatMessagesPagination.items.push(normalized);
+        renderChatMessages(chatMessagesPagination.items, { scrollToBottom: true });
     }
 
     loadChats();
+    if (messagesPagination.items.length) {
+        messagesPagination.items.unshift({
+            chat_id: incomingChatId || '',
+            is_from_me: msg.isFromMe ?? msg.is_from_me ?? 0,
+            timestamp: msg.timestamp || Date.now(),
+            body: msg.body || msg.message || '',
+            from_name: msg.fromName || msg.from_name,
+            from_number: msg.fromNumber || msg.from_number
+        });
+        renderMessagesList();
+    }
 }
 
 function appendNewMessage(msg) {
