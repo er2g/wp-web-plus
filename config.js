@@ -3,13 +3,23 @@
  */
 const path = require('path');
 
+// Load environment variables from .env file
+try {
+    require('dotenv').config();
+} catch (e) {
+    // dotenv not installed, using defaults
+}
+
 module.exports = {
     // Server
     PORT: process.env.PORT || 3000,
-    
-    // Authentication
-    SITE_PASSWORD: 'ertug123',
-    SESSION_SECRET: 'whatsapp-secret-key-2024-ertug',
+
+    // Authentication - Use environment variables for secrets
+    SITE_PASSWORD: process.env.SITE_PASSWORD || 'changeme',
+    SESSION_SECRET: process.env.SESSION_SECRET || 'change-this-secret-in-production',
+
+    // CORS Origins
+    CORS_ORIGINS: process.env.CORS_ORIGINS || 'http://localhost:3000',
     
     // Paths
     DATA_DIR: path.join(__dirname, 'data'),

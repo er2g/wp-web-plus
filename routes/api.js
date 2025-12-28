@@ -19,9 +19,78 @@ if (!fs.existsSync(config.MEDIA_DIR)) {
 
 const storage = multer.diskStorage({
     destination: config.MEDIA_DIR,
-    filename: (req, file, cb) => cb(null, Date.now() + '-' + file.originalname)
+    filename: (req, file, cb) => {
+        // Sanitize filename to prevent path traversal
+        const safeName = file.originalname.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+        cb(null, Date.now() + '-' + safeName);
+    }
 });
-const upload = multer({ storage, limits: { fileSize: 16 * 1024 * 1024 } });
+// Constants
+const LIMITS = {
+    FILE_SIZE_BYTES: 16 * 1024 * 1024,  // 16 MB
+    MESSAGE_LENGTH: 10000,
+    TRIGGER_LENGTH: 500,
+    URL_LENGTH: 2048,
+    QUERY_LENGTH: 200,
+    CATEGORY_LENGTH: 50,
+    PAGINATION: {
+        MESSAGES: 500,
+        LOGS: 500,
+        SCRIPT_LOGS: 200
+    }
+};
+
+const upload = multer({ storage, limits: { fileSize: LIMITS.FILE_SIZE_BYTES } });
+
+function validateChatId(chatId) {
+    if (!chatId || typeof chatId !== 'string') return false;
+    // WhatsApp chat IDs are typically phone@c.us or groupId@g.us
+    return /^[\w\-@.]+$/.test(chatId) && chatId.length <= 100;
+}
+
+function validateMessage(message) {
+    if (!message || typeof message !== 'string') return false;
+    return message.length <= LIMITS.MESSAGE_LENGTH;
+}
+
+function validateUrl(url) {
+    if (!url || typeof url !== 'string') return false;
+    if (url.length > LIMITS.URL_LENGTH) return false;
+    try {
+        const parsed = new URL(url);
+
+        // Only allow http/https
+        if (!['http:', 'https:'].includes(parsed.protocol)) {
+            return false;
+        }
+
+        // SSRF Protection: Block localhost and internal IPs
+        const hostname = parsed.hostname.toLowerCase();
+
+        // Block localhost variations
+        if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
+            return false;
+        }
+
+        // Block private IP ranges (10.x.x.x, 172.16-31.x.x, 192.168.x.x)
+        const ipv4Match = hostname.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+        if (ipv4Match) {
+            const [, a, b] = ipv4Match.map(Number);
+            if (a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || a === 0) {
+                return false;
+            }
+        }
+
+        // Block metadata endpoints (AWS, GCP, Azure)
+        if (hostname === '169.254.169.254' || hostname.endsWith('.internal')) {
+            return false;
+        }
+
+        return true;
+    } catch {
+        return false;
+    }
+}
 
 // Auth middleware
 function requireAuth(req, res, next) {
@@ -96,19 +165,19 @@ router.get('/chats', (req, res) => {
 });
 
 router.get('/chats/:id/messages', (req, res) => {
-    const limit = parseInt(req.query.limit) || 50;
+    const limit = Math.min(parseInt(req.query.limit) || 50, LIMITS.PAGINATION.MESSAGES);
     res.json(db.messages.getByChatId.all(req.params.id, limit));
 });
 
 // ============ MESSAGES ============
 router.get('/messages', (req, res) => {
-    const limit = parseInt(req.query.limit) || 100;
-    const offset = parseInt(req.query.offset) || 0;
+    const limit = Math.min(parseInt(req.query.limit) || 100, LIMITS.PAGINATION.MESSAGES);
+    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
     res.json(db.messages.getAll.all(limit, offset));
 });
 
 router.get('/messages/search', (req, res) => {
-    const query = req.query.q || '';
+    const query = (req.query.q || '').substring(0, LIMITS.QUERY_LENGTH);
     if (!query) return res.json([]);
     res.json(db.messages.search.all('%' + query + '%'));
 });
@@ -118,6 +187,12 @@ router.post('/send', upload.single('media'), async (req, res) => {
         const { chatId, message } = req.body;
         if (!chatId || !message) {
             return res.status(400).json({ error: 'chatId and message required' });
+        }
+        if (!validateChatId(chatId)) {
+            return res.status(400).json({ error: 'Invalid chatId format' });
+        }
+        if (!validateMessage(message)) {
+            return res.status(400).json({ error: 'Message too long or invalid' });
         }
         const options = req.file ? { mediaPath: req.file.path } : {};
         const result = await whatsapp.sendMessage(chatId, message, options);
@@ -136,6 +211,13 @@ router.post('/auto-replies', (req, res) => {
     const { trigger_word, response, match_type, is_active } = req.body;
     if (!trigger_word || !response) {
         return res.status(400).json({ error: 'trigger_word and response required' });
+    }
+    // Input length validation
+    if (trigger_word.length > LIMITS.TRIGGER_LENGTH) {
+        return res.status(400).json({ error: 'Trigger word too long (max ' + LIMITS.TRIGGER_LENGTH + ' chars)' });
+    }
+    if (response.length > LIMITS.MESSAGE_LENGTH) {
+        return res.status(400).json({ error: 'Response too long (max ' + LIMITS.MESSAGE_LENGTH + ' chars)' });
     }
     const result = db.autoReplies.create.run(trigger_word, response, match_type || 'contains', is_active !== false ? 1 : 0);
     res.json({ success: true, id: result.lastInsertRowid });
@@ -169,6 +251,13 @@ router.post('/scheduled', (req, res) => {
     if (!chat_id || !message || !scheduled_at) {
         return res.status(400).json({ error: 'chat_id, message and scheduled_at required' });
     }
+    // Input validation
+    if (!validateChatId(chat_id)) {
+        return res.status(400).json({ error: 'Invalid chat_id format' });
+    }
+    if (!validateMessage(message)) {
+        return res.status(400).json({ error: 'Message too long or invalid' });
+    }
     const result = db.scheduled.create.run(chat_id, chat_name || '', message, scheduled_at, is_recurring ? 1 : 0, cron_expression || null);
     res.json({ success: true, id: result.lastInsertRowid });
 });
@@ -186,12 +275,18 @@ router.get('/webhooks', (req, res) => {
 router.post('/webhooks', (req, res) => {
     const { name, url, events, is_active } = req.body;
     if (!url) return res.status(400).json({ error: 'url required' });
+    if (!validateUrl(url)) {
+        return res.status(400).json({ error: 'Invalid URL. Must be http or https.' });
+    }
     const result = db.webhooks.create.run(name || 'Webhook', url, events || 'message', is_active !== false ? 1 : 0);
     res.json({ success: true, id: result.lastInsertRowid });
 });
 
 router.put('/webhooks/:id', (req, res) => {
     const { name, url, events, is_active } = req.body;
+    if (url && !validateUrl(url)) {
+        return res.status(400).json({ error: 'Invalid URL. Must be http or https.' });
+    }
     db.webhooks.update.run(name, url, events, is_active ? 1 : 0, req.params.id);
     res.json({ success: true });
 });
@@ -274,14 +369,14 @@ router.post('/scripts/test', async (req, res) => {
 });
 
 router.get('/scripts/:id/logs', (req, res) => {
-    const limit = parseInt(req.query.limit) || 50;
+    const limit = Math.min(parseInt(req.query.limit) || 50, LIMITS.PAGINATION.SCRIPT_LOGS);
     res.json(db.scriptLogs.getByScript.all(req.params.id, limit));
 });
 
 // ============ LOGS ============
 router.get('/logs', (req, res) => {
-    const limit = parseInt(req.query.limit) || 100;
-    const category = req.query.category;
+    const limit = Math.min(parseInt(req.query.limit) || 100, LIMITS.PAGINATION.LOGS);
+    const category = (req.query.category || '').substring(0, LIMITS.CATEGORY_LENGTH);
     if (category) {
         res.json(db.logs.getByCategory.all(category, limit));
     } else {
@@ -323,10 +418,27 @@ router.get('/stats', (req, res) => {
 // ============ MEDIA ============
 router.get('/media/:filename', (req, res) => {
     const filename = req.params.filename;
-    if (filename.includes('..') || filename.includes('/')) {
+
+    // Comprehensive path traversal protection
+    if (!filename || filename.includes('..') || filename.includes('/') || filename.includes('\\') ||
+        filename.includes('\0') || filename.includes('%') || filename.includes(':')) {
         return res.status(400).json({ error: 'Invalid filename' });
     }
+
+    // Whitelist allowed characters (alphanumeric, dash, underscore, dot)
+    if (!/^[a-zA-Z0-9_\-\.]+$/.test(filename)) {
+        return res.status(400).json({ error: 'Invalid filename characters' });
+    }
+
     const filePath = path.join(config.MEDIA_DIR, filename);
+
+    // Verify the resolved path is still within MEDIA_DIR
+    const resolvedPath = path.resolve(filePath);
+    const resolvedMediaDir = path.resolve(config.MEDIA_DIR);
+    if (!resolvedPath.startsWith(resolvedMediaDir + path.sep)) {
+        return res.status(400).json({ error: 'Invalid file path' });
+    }
+
     if (!fs.existsSync(filePath)) {
         return res.status(404).json({ error: 'File not found' });
     }

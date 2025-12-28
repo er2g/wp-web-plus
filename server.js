@@ -20,26 +20,43 @@ const apiRoutes = require('./routes/api');
 const app = express();
 const server = http.createServer(app);
 
+// Parse CORS origins from config
+const corsOrigins = config.CORS_ORIGINS === '*' ? '*' : config.CORS_ORIGINS.split(',').map(o => o.trim());
+
 // Socket.IO with path support for reverse proxy
 const io = new Server(server, {
     path: '/socket.io/',
-    cors: { origin: '*' }
+    cors: {
+        origin: corsOrigins,
+        credentials: true
+    }
 });
 
 // Middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
+// Security Headers
+app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    next();
+});
+
 // Session with cookie path for reverse proxy
+const isProduction = process.env.NODE_ENV === 'production';
 const sessionMiddleware = session({
     secret: config.SESSION_SECRET,
     name: "whatsapp.sid",
     resave: false,
     saveUninitialized: false,
     cookie: {
-        secure: false,
+        secure: isProduction, // Use secure cookies in production
         httpOnly: true,
-        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+        sameSite: 'lax', // CSRF protection
+        maxAge: 24 * 60 * 60 * 1000, // 24 hours (reduced from 7 days)
         path: '/'
     }
 });
@@ -117,7 +134,7 @@ server.listen(config.PORT, () => {
     console.log('WhatsApp Web Panel v2');
     console.log('='.repeat(50));
     console.log('Server: http://localhost:' + config.PORT);
-    console.log('Password: ' + config.SITE_PASSWORD);
+    console.log('Password: [PROTECTED]');
     console.log('='.repeat(50));
 
     scheduler.start();
