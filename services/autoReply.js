@@ -1,6 +1,7 @@
 /**
  * WhatsApp Web Panel - Auto Reply Service
  */
+const { logger } = require('./logger');
 class AutoReplyService {
     constructor(db, whatsapp) {
         this.db = db;
@@ -38,7 +39,10 @@ class AutoReplyService {
                         const regex = new RegExp(rule.trigger_word, 'i');
                         matched = regex.test(msgData.body);
                     } catch (e) {
-                        console.error('Invalid regex:', rule.trigger_word);
+                        logger.warn('Invalid regex', {
+                            category: 'auto-reply',
+                            trigger: rule.trigger_word
+                        });
                     }
                     break;
                 case 'contains':

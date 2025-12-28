@@ -3,6 +3,7 @@
  * Executes user scripts in a sandboxed environment
  */
 const vm = require('vm');
+const { logger } = require('./logger');
 
 class ScriptRunner {
     constructor(db, whatsapp) {
@@ -120,7 +121,7 @@ class ScriptRunner {
         try {
             this.db.scriptLogs.add.run(scriptId, level, message, null);
         } catch (e) {
-            console.error('Script log error:', e);
+            logger.error('Script log error', { category: 'script-runner', error: e.message });
         }
     }
 
@@ -214,7 +215,7 @@ class ScriptRunner {
                 await this.runScript(script, msgData);
 
             } catch (error) {
-                console.error('Script filter error:', error);
+                logger.error('Script filter error', { category: 'script-runner', error: error.message });
             }
         }
     }

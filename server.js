@@ -3,6 +3,14 @@
  */
 const express = require('express');
 const session = require('express-session');
+const http = require('http');
+const { Server } = require('socket.io');
+const path = require('path');
+const { randomUUID, randomBytes } = require('crypto');
+
+const config = require('./config');
+const express = require('express');
+const session = require('express-session');
 const rateLimit = require('express-rate-limit');
 const csrf = require('csurf');
 const http = require('http');
@@ -11,6 +19,7 @@ const path = require('path');
 
 const config = require('./config');
 const accountManager = require('./services/accountManager');
+const { logger, requestContext } = require('./services/logger');
 
 const authRoutes = require('./routes/auth');
 const apiRoutes = require('./routes/api');
@@ -46,6 +55,19 @@ const io = new Server(server, {
 // Middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+const generateRequestId = () => (typeof randomUUID === 'function' ? randomUUID() : randomBytes(16).toString('hex'));
+app.use((req, res, next) => {
+    const headerRequestId = req.headers['x-request-id'];
+    const requestId = headerRequestId || generateRequestId();
+    res.setHeader('x-request-id', requestId);
+
+    requestContext.run({ requestId }, () => {
+        req.requestId = requestId;
+        req.log = logger.child({ requestId });
+        next();
+    });
+});
 
 // Security Headers
 app.use((req, res, next) => {
@@ -146,11 +168,11 @@ io.on('connection', (socket) => {
     session.accountId = accountId;
 
     socket.join(accountId);
-    console.log('Client connected:', socket.id, 'account:', accountId);
+    logger.info('Client connected', { socketId: socket.id, accountId });
     socket.emit('status', context.whatsapp.getStatus());
 
     socket.on('disconnect', () => {
-        console.log('Client disconnected:', socket.id);
+        logger.info('Client disconnected', { socketId: socket.id, accountId });
     });
 });
 
@@ -164,27 +186,41 @@ app.use((err, req, res, next) => {
 // Initialize services
 accountManager.setSocketIO(io);
 
+// Global error handler
+app.use((err, req, res, next) => {
+    logger.error('Unhandled error', {
+        requestId: req.requestId,
+        error: err.message,
+        stack: err.stack
+    });
+
+    res.status(err.status || 500).json({
+        error: 'Internal Server Error',
+        requestId: req.requestId
+    });
+});
+
 // Start server
 server.listen(config.PORT, () => {
-    console.log('='.repeat(50));
-    console.log('WhatsApp Web Panel v2');
-    console.log('='.repeat(50));
-    console.log('Server: http://localhost:' + config.PORT);
-    console.log('Password: [PROTECTED]');
-    console.log('='.repeat(50));
+    logger.info('='.repeat(50));
+    logger.info('WhatsApp Web Panel v2');
+    logger.info('='.repeat(50));
+    logger.info('Server: http://localhost:' + config.PORT);
+    logger.info('Password: [PROTECTED]');
+    logger.info('='.repeat(50));
 
     const defaultContext = accountManager.getAccountContext(accountManager.getDefaultAccountId());
 
     setTimeout(() => {
         defaultContext.whatsapp.initialize().catch(err => {
-            console.error('WhatsApp init error:', err.message);
+            logger.error('WhatsApp init error', { error: err.message });
         });
     }, 2000);
 });
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
-    console.log('\nShutting down...');
+    logger.info('Shutting down...');
     await accountManager.shutdown();
     process.exit(0);
 });

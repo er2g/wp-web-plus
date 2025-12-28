@@ -3,6 +3,7 @@
  */
 const Database = require('better-sqlite3');
 const fs = require('fs');
+const { logger } = require('./services/logger');
 
 function createDatabase(config) {
     // Ensure data directory exists
@@ -203,65 +204,65 @@ function createDatabase(config) {
         db.transaction(() => {
             migration.apply();
             insertMigration.run(migration.version);
-            console.log(`Database migration applied: ${migration.name}`);
+            logger.info(`Database migration applied: ${migration.name}`, { category: 'database' });
         })();
     });
 
     try {
         db.exec("ALTER TABLE scheduled_messages ADD COLUMN retry_count INTEGER DEFAULT 0");
-        console.log('Database migration: Added retry_count column');
+        logger.info('Database migration: Added retry_count column', { category: 'database' });
     } catch (e) {
         // Column already exists
     }
 
     try {
         db.exec("ALTER TABLE scheduled_messages ADD COLUMN next_attempt_at DATETIME");
-        console.log('Database migration: Added next_attempt_at column');
+        logger.info('Database migration: Added next_attempt_at column', { category: 'database' });
     } catch (e) {
         // Column already exists
     }
 
     try {
         db.exec("ALTER TABLE scheduled_messages ADD COLUMN last_error TEXT");
-        console.log('Database migration: Added last_error column');
+        logger.info('Database migration: Added last_error column', { category: 'database' });
     } catch (e) {
         // Column already exists
     }
 
     try {
         db.exec("ALTER TABLE webhooks ADD COLUMN last_error TEXT");
-        console.log('Database migration: Added webhooks.last_error column');
+        logger.info('Database migration: Added webhooks.last_error column', { category: 'database' });
     } catch (e) {
         // Column already exists
     }
 
     try {
         db.exec("ALTER TABLE webhooks ADD COLUMN last_status INTEGER");
-        console.log('Database migration: Added webhooks.last_status column');
+        logger.info('Database migration: Added webhooks.last_status column', { category: 'database' });
     } catch (e) {
         // Column already exists
     }
 
     try {
         db.exec("ALTER TABLE webhooks ADD COLUMN last_duration_ms INTEGER");
-        console.log('Database migration: Added webhooks.last_duration_ms column');
+        logger.info('Database migration: Added webhooks.last_duration_ms column', { category: 'database' });
     } catch (e) {
         // Column already exists
     }
 
-    console.log('Database initialized:', config.DB_PATH);
+    logger.info('Database initialized', { category: 'database', dbPath: config.DB_PATH });
 
     // Prepared statements
     const messages = {
-    save: db.prepare(`
+        save: db.prepare(`
         INSERT OR REPLACE INTO messages
         (message_id, chat_id, from_number, to_number, from_name, body, type, media_path, media_url, media_mimetype, is_group, is_from_me, timestamp)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `),
-    getByChatId: db.prepare(`SELECT * FROM messages WHERE chat_id = ? ORDER BY timestamp DESC LIMIT ? OFFSET ?`),
-    getAll: db.prepare(`SELECT * FROM messages ORDER BY timestamp DESC LIMIT ? OFFSET ?`),
-    search: db.prepare(`SELECT * FROM messages WHERE body LIKE ? ORDER BY timestamp DESC LIMIT 100`),
-    getStats: db.prepare(`
+        getByChatId: db.prepare(`SELECT * FROM messages WHERE chat_id = ? ORDER BY timestamp DESC LIMIT ? OFFSET ?`),
+        getAll: db.prepare(`SELECT * FROM messages ORDER BY timestamp DESC LIMIT ? OFFSET ?`),
+        search: db.prepare(`SELECT * FROM messages WHERE body LIKE ? ORDER BY timestamp DESC LIMIT 100`),
+        getStats: db.prepare(`
         SELECT
             COUNT(*) as total,
             SUM(CASE WHEN is_from_me = 1 THEN 1 ELSE 0 END) as sent,
@@ -272,7 +273,7 @@ function createDatabase(config) {
     };
 
     const chats = {
-    upsert: db.prepare(`
+        upsert: db.prepare(`
         INSERT INTO chats (chat_id, name, is_group, profile_pic, last_message, last_message_at, unread_count, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
         ON CONFLICT(chat_id) DO UPDATE SET
@@ -280,34 +281,34 @@ function createDatabase(config) {
             last_message = excluded.last_message, last_message_at = excluded.last_message_at,
             unread_count = excluded.unread_count, updated_at = datetime('now')
     `),
-    getAll: db.prepare(`SELECT * FROM chats ORDER BY last_message_at DESC`),
-    getById: db.prepare(`SELECT * FROM chats WHERE chat_id = ?`),
-    search: db.prepare(`SELECT * FROM chats WHERE name LIKE ? ORDER BY last_message_at DESC LIMIT ? OFFSET ?`)
+        getAll: db.prepare(`SELECT * FROM chats ORDER BY last_message_at DESC`),
+        getById: db.prepare(`SELECT * FROM chats WHERE chat_id = ?`),
+        search: db.prepare(`SELECT * FROM chats WHERE name LIKE ? ORDER BY last_message_at DESC LIMIT ? OFFSET ?`)
     };
 
     const autoReplies = {
-    getAll: db.prepare('SELECT * FROM auto_replies ORDER BY created_at DESC'),
-    getActive: db.prepare('SELECT * FROM auto_replies WHERE is_active = 1'),
-    getById: db.prepare('SELECT * FROM auto_replies WHERE id = ?'),
-    create: db.prepare(`INSERT INTO auto_replies (trigger_word, response, match_type, is_active) VALUES (?, ?, ?, ?)`),
-    update: db.prepare(`UPDATE auto_replies SET trigger_word = ?, response = ?, match_type = ?, is_active = ? WHERE id = ?`),
-    delete: db.prepare('DELETE FROM auto_replies WHERE id = ?'),
-    incrementCount: db.prepare('UPDATE auto_replies SET reply_count = reply_count + 1 WHERE id = ?'),
-    toggle: db.prepare('UPDATE auto_replies SET is_active = ? WHERE id = ?')
+        getAll: db.prepare('SELECT * FROM auto_replies ORDER BY created_at DESC'),
+        getActive: db.prepare('SELECT * FROM auto_replies WHERE is_active = 1'),
+        getById: db.prepare('SELECT * FROM auto_replies WHERE id = ?'),
+        create: db.prepare(`INSERT INTO auto_replies (trigger_word, response, match_type, is_active) VALUES (?, ?, ?, ?)`),
+        update: db.prepare(`UPDATE auto_replies SET trigger_word = ?, response = ?, match_type = ?, is_active = ? WHERE id = ?`),
+        delete: db.prepare('DELETE FROM auto_replies WHERE id = ?'),
+        incrementCount: db.prepare('UPDATE auto_replies SET reply_count = reply_count + 1 WHERE id = ?'),
+        toggle: db.prepare('UPDATE auto_replies SET is_active = ? WHERE id = ?')
     };
 
     const scheduled = {
-    getAll: db.prepare('SELECT * FROM scheduled_messages ORDER BY scheduled_at ASC'),
-    getPending: db.prepare(`
+        getAll: db.prepare('SELECT * FROM scheduled_messages ORDER BY scheduled_at ASC'),
+        getPending: db.prepare(`
         SELECT * FROM scheduled_messages
         WHERE is_sent = 0
           AND datetime(scheduled_at) <= datetime('now')
           AND (next_attempt_at IS NULL OR datetime(next_attempt_at) <= datetime('now'))
           AND retry_count < ?
     `),
-    getById: db.prepare('SELECT * FROM scheduled_messages WHERE id = ?'),
-    create: db.prepare(`INSERT INTO scheduled_messages (chat_id, chat_name, message, scheduled_at, is_recurring, cron_expression) VALUES (?, ?, ?, ?, ?, ?)`),
-    markSent: db.prepare(`
+        getById: db.prepare('SELECT * FROM scheduled_messages WHERE id = ?'),
+        create: db.prepare(`INSERT INTO scheduled_messages (chat_id, chat_name, message, scheduled_at, is_recurring, cron_expression) VALUES (?, ?, ?, ?, ?, ?)`),
+        markSent: db.prepare(`
         UPDATE scheduled_messages
         SET is_sent = 1,
             sent_at = datetime('now'),
@@ -316,24 +317,24 @@ function createDatabase(config) {
             last_error = NULL
         WHERE id = ?
     `),
-    recordFailure: db.prepare(`
+        recordFailure: db.prepare(`
         UPDATE scheduled_messages
         SET retry_count = ?,
             next_attempt_at = ?,
             last_error = ?
         WHERE id = ?
     `),
-    delete: db.prepare('DELETE FROM scheduled_messages WHERE id = ?')
+        delete: db.prepare('DELETE FROM scheduled_messages WHERE id = ?')
     };
 
     const webhooks = {
-    getAll: db.prepare('SELECT * FROM webhooks ORDER BY created_at DESC'),
-    getActive: db.prepare('SELECT * FROM webhooks WHERE is_active = 1'),
-    getById: db.prepare('SELECT * FROM webhooks WHERE id = ?'),
-    create: db.prepare(`INSERT INTO webhooks (name, url, events, is_active) VALUES (?, ?, ?, ?)`),
-    update: db.prepare(`UPDATE webhooks SET name = ?, url = ?, events = ?, is_active = ? WHERE id = ?`),
-    delete: db.prepare('DELETE FROM webhooks WHERE id = ?'),
-    recordSuccess: db.prepare(`
+        getAll: db.prepare('SELECT * FROM webhooks ORDER BY created_at DESC'),
+        getActive: db.prepare('SELECT * FROM webhooks WHERE is_active = 1'),
+        getById: db.prepare('SELECT * FROM webhooks WHERE id = ?'),
+        create: db.prepare(`INSERT INTO webhooks (name, url, events, is_active) VALUES (?, ?, ?, ?)`),
+        update: db.prepare(`UPDATE webhooks SET name = ?, url = ?, events = ?, is_active = ? WHERE id = ?`),
+        delete: db.prepare('DELETE FROM webhooks WHERE id = ?'),
+        recordSuccess: db.prepare(`
         UPDATE webhooks
         SET success_count = success_count + 1,
             last_triggered_at = datetime('now'),
@@ -342,7 +343,7 @@ function createDatabase(config) {
             last_duration_ms = ?
         WHERE id = ?
     `),
-    recordFail: db.prepare(`
+        recordFail: db.prepare(`
         UPDATE webhooks
         SET fail_count = fail_count + 1,
             last_triggered_at = datetime('now'),
@@ -354,48 +355,48 @@ function createDatabase(config) {
     };
 
     const webhookDeliveries = {
-    create: db.prepare(`
+        create: db.prepare(`
         INSERT INTO webhook_deliveries
         (webhook_id, event, status, duration, attempts, error, payload)
         VALUES (?, ?, ?, ?, ?, ?, ?)
     `),
-    getByWebhookId: db.prepare(`
+        getByWebhookId: db.prepare(`
         SELECT * FROM webhook_deliveries
         WHERE webhook_id = ?
         ORDER BY created_at DESC
         LIMIT ? OFFSET ?
     `),
-    getById: db.prepare('SELECT * FROM webhook_deliveries WHERE id = ?')
+        getById: db.prepare('SELECT * FROM webhook_deliveries WHERE id = ?')
     };
 
     const scripts = {
-    getAll: db.prepare('SELECT * FROM scripts ORDER BY created_at DESC'),
-    getActive: db.prepare('SELECT * FROM scripts WHERE is_active = 1'),
-    getById: db.prepare('SELECT * FROM scripts WHERE id = ?'),
-    getByTrigger: db.prepare('SELECT * FROM scripts WHERE is_active = 1 AND trigger_type = ?'),
-    create: db.prepare(`INSERT INTO scripts (name, description, code, trigger_type, trigger_filter, is_active) VALUES (?, ?, ?, ?, ?, ?)`),
-    update: db.prepare(`UPDATE scripts SET name = ?, description = ?, code = ?, trigger_type = ?, trigger_filter = ?, is_active = ?, updated_at = datetime('now') WHERE id = ?`),
-    delete: db.prepare('DELETE FROM scripts WHERE id = ?'),
-    toggle: db.prepare('UPDATE scripts SET is_active = ? WHERE id = ?'),
-    recordRun: db.prepare(`UPDATE scripts SET run_count = run_count + 1, last_run_at = datetime('now'), last_error = NULL WHERE id = ?`),
-    recordError: db.prepare(`UPDATE scripts SET last_error = ?, last_run_at = datetime('now') WHERE id = ?`)
+        getAll: db.prepare('SELECT * FROM scripts ORDER BY created_at DESC'),
+        getActive: db.prepare('SELECT * FROM scripts WHERE is_active = 1'),
+        getById: db.prepare('SELECT * FROM scripts WHERE id = ?'),
+        getByTrigger: db.prepare('SELECT * FROM scripts WHERE is_active = 1 AND trigger_type = ?'),
+        create: db.prepare(`INSERT INTO scripts (name, description, code, trigger_type, trigger_filter, is_active) VALUES (?, ?, ?, ?, ?, ?)`),
+        update: db.prepare(`UPDATE scripts SET name = ?, description = ?, code = ?, trigger_type = ?, trigger_filter = ?, is_active = ?, updated_at = datetime('now') WHERE id = ?`),
+        delete: db.prepare('DELETE FROM scripts WHERE id = ?'),
+        toggle: db.prepare('UPDATE scripts SET is_active = ? WHERE id = ?'),
+        recordRun: db.prepare(`UPDATE scripts SET run_count = run_count + 1, last_run_at = datetime('now'), last_error = NULL WHERE id = ?`),
+        recordError: db.prepare(`UPDATE scripts SET last_error = ?, last_run_at = datetime('now') WHERE id = ?`)
     };
 
     const scriptLogs = {
-    add: db.prepare(`INSERT INTO script_logs (script_id, level, message, data) VALUES (?, ?, ?, ?)`),
-    getByScript: db.prepare(`SELECT * FROM script_logs WHERE script_id = ? ORDER BY created_at DESC LIMIT ?`),
-    cleanup: db.prepare(`DELETE FROM script_logs WHERE created_at < datetime('now', ?)`)
+        add: db.prepare(`INSERT INTO script_logs (script_id, level, message, data) VALUES (?, ?, ?, ?)`),
+        getByScript: db.prepare(`SELECT * FROM script_logs WHERE script_id = ? ORDER BY created_at DESC LIMIT ?`),
+        cleanup: db.prepare(`DELETE FROM script_logs WHERE created_at < datetime('now', ?)`)
     };
 
     const logs = {
-    add: db.prepare(`INSERT INTO logs (level, category, message, data) VALUES (?, ?, ?, ?)`),
-    getRecent: db.prepare(`SELECT * FROM logs ORDER BY created_at DESC LIMIT ?`),
-    getByCategory: db.prepare(`SELECT * FROM logs WHERE category = ? ORDER BY created_at DESC LIMIT ?`),
-    cleanup: db.prepare(`DELETE FROM logs WHERE created_at < datetime('now', ?)`)
+        add: db.prepare(`INSERT INTO logs (level, category, message, data) VALUES (?, ?, ?, ?)`),
+        getRecent: db.prepare(`SELECT * FROM logs ORDER BY created_at DESC LIMIT ?`),
+        getByCategory: db.prepare(`SELECT * FROM logs WHERE category = ? ORDER BY created_at DESC LIMIT ?`),
+        cleanup: db.prepare(`DELETE FROM logs WHERE created_at < datetime('now', ?)`)
     };
 
     const maintenance = {
-    cleanupMessages: db.prepare(`DELETE FROM messages WHERE timestamp < ?`)
+        cleanupMessages: db.prepare(`DELETE FROM messages WHERE timestamp < ?`)
     };
 
     return { db, messages, chats, autoReplies, scheduled, webhooks, webhookDeliveries, scripts, scriptLogs, logs, maintenance };
