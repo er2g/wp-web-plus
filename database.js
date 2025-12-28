@@ -167,6 +167,38 @@ function createDatabase(config) {
         FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS contacts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id TEXT UNIQUE,
+        name TEXT,
+        phone TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS tags (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE NOT NULL,
+        color TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS contact_tags (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id TEXT NOT NULL,
+        tag_id INTEGER NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(chat_id, tag_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS notes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id);
     CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
     CREATE INDEX IF NOT EXISTS idx_messages_chat_timestamp ON messages(chat_id, timestamp);
@@ -181,6 +213,11 @@ function createDatabase(config) {
     CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_created ON webhook_deliveries(created_at);
     CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
     CREATE INDEX IF NOT EXISTS idx_user_roles_role ON user_roles(role_id);
+    CREATE INDEX IF NOT EXISTS idx_contacts_chat ON contacts(chat_id);
+    CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);
+    CREATE INDEX IF NOT EXISTS idx_contact_tags_chat ON contact_tags(chat_id);
+    CREATE INDEX IF NOT EXISTS idx_contact_tags_tag ON contact_tags(tag_id);
+    CREATE INDEX IF NOT EXISTS idx_notes_chat ON notes(chat_id);
 `);
 
     const columnExists = (tableName, columnName) => {
@@ -467,6 +504,54 @@ function createDatabase(config) {
         countByRole: db.prepare('SELECT COUNT(*) as count FROM user_roles WHERE role_id = ?')
     };
 
+    const contacts = {
+        upsert: db.prepare(`
+        INSERT INTO contacts (chat_id, name, phone, updated_at)
+        VALUES (?, ?, ?, datetime('now'))
+        ON CONFLICT(chat_id) DO UPDATE SET
+            name = excluded.name,
+            phone = excluded.phone,
+            updated_at = datetime('now')
+    `),
+        getByChatId: db.prepare(`SELECT * FROM contacts WHERE chat_id = ?`)
+    };
+
+    const tags = {
+        getAll: db.prepare(`SELECT * FROM tags ORDER BY name ASC`),
+        getById: db.prepare(`SELECT * FROM tags WHERE id = ?`),
+        getByName: db.prepare(`SELECT * FROM tags WHERE name = ?`),
+        create: db.prepare(`INSERT INTO tags (name, color) VALUES (?, ?)`),
+        update: db.prepare(`UPDATE tags SET name = ?, color = ? WHERE id = ?`),
+        delete: db.prepare(`DELETE FROM tags WHERE id = ?`)
+    };
+
+    const contactTags = {
+        add: db.prepare(`INSERT OR IGNORE INTO contact_tags (chat_id, tag_id) VALUES (?, ?)`),
+        remove: db.prepare(`DELETE FROM contact_tags WHERE chat_id = ? AND tag_id = ?`),
+        getByChatId: db.prepare(`
+        SELECT tags.id, tags.name, tags.color
+        FROM contact_tags
+        JOIN tags ON tags.id = contact_tags.tag_id
+        WHERE contact_tags.chat_id = ?
+        ORDER BY tags.name ASC
+    `),
+        getChatIdsByTagId: db.prepare(`SELECT DISTINCT chat_id FROM contact_tags WHERE tag_id = ?`),
+        getChatIdsByTagName: db.prepare(`
+        SELECT DISTINCT contact_tags.chat_id
+        FROM contact_tags
+        JOIN tags ON tags.id = contact_tags.tag_id
+        WHERE tags.name = ?
+    `)
+    };
+
+    const notes = {
+        getByChatId: db.prepare(`SELECT * FROM notes WHERE chat_id = ? ORDER BY created_at DESC`),
+        create: db.prepare(`INSERT INTO notes (chat_id, content) VALUES (?, ?)`),
+        update: db.prepare(`UPDATE notes SET content = ?, updated_at = datetime('now') WHERE id = ? AND chat_id = ?`),
+        delete: db.prepare(`DELETE FROM notes WHERE id = ? AND chat_id = ?`),
+        searchChatIds: db.prepare(`SELECT DISTINCT chat_id FROM notes WHERE content LIKE ?`)
+    };
+
     const maintenance = {
         cleanupMessages: db.prepare(`DELETE FROM messages WHERE timestamp < ?`)
     };
@@ -696,6 +781,10 @@ function createDatabase(config) {
         roles,
         users,
         userRoles,
+        contacts,
+        tags,
+        contactTags,
+        notes,
         maintenance,
         reports
     };

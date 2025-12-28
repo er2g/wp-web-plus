@@ -13,6 +13,9 @@ let roles = [];
 let users = [];
 let activeAccountId = localStorage.getItem('activeAccountId');
 let webhooksCache = [];
+let availableTags = [];
+let currentChatTags = [];
+let currentChatNotes = [];
 let settings = {
     downloadMedia: true,
     syncOnConnect: true,
@@ -489,6 +492,7 @@ async function loadInitialData() {
         loadSettings();
         loadChats();
         loadAllMessages();
+        loadTags();
         if (status.whatsapp && status.whatsapp.syncProgress && status.whatsapp.syncProgress.syncing) {
             updateSyncProgress(status.whatsapp.syncProgress);
         }
@@ -528,13 +532,19 @@ async function loadChatMessages(chatId, options = {}) {
     setListStatus('chatMessagesStatus', shouldReset ? 'Mesajlar yukleniyor...' : 'Daha fazla mesaj yukleniyor...', true);
 
     try {
-        const messages = await api('api/chats/' + encodeURIComponent(chatId) +
+        const response = await api('api/chats/' + encodeURIComponent(chatId) +
             '/messages?limit=' + CHAT_MESSAGE_PAGE_SIZE +
             '&offset=' + chatMessagesPagination.offset);
-        const page = Array.isArray(messages) ? messages : [];
+        const payload = Array.isArray(response) ? { messages: response } : response;
+        const page = Array.isArray(payload.messages) ? payload.messages : [];
         chatMessagesPagination.items = chatMessagesPagination.items.concat(page);
         chatMessagesPagination.offset += page.length;
         chatMessagesPagination.hasMore = page.length === CHAT_MESSAGE_PAGE_SIZE;
+        if (shouldReset) {
+            currentChatTags = Array.isArray(payload.tags) ? payload.tags : [];
+            currentChatNotes = Array.isArray(payload.notes) ? payload.notes : [];
+            renderChatMeta();
+        }
         renderChatMessages(chatMessagesPagination.items, {
             preserveScroll: !shouldReset,
             scrollToBottom: shouldReset
@@ -545,6 +555,76 @@ async function loadChatMessages(chatId, options = {}) {
         chatMessagesPagination.loading = false;
         setListStatus('chatMessagesStatus', '', false);
     }
+}
+
+async function loadTags() {
+    try {
+        const tags = await api('api/tags');
+        availableTags = Array.isArray(tags) ? tags : [];
+        renderTagFilterOptions();
+        renderTagDatalist();
+    } catch (err) {
+        console.error('Tags load error:', err);
+    }
+}
+
+function renderTagFilterOptions() {
+    const select = document.getElementById('tagFilter');
+    if (!select) return;
+    const current = select.value;
+    select.innerHTML = '<option value="">Tum Etiketler</option>' +
+        availableTags.map(tag => '<option value="' + tag.id + '">' + escapeHtml(tag.name) + '</option>').join('');
+    if (current) {
+        select.value = current;
+    }
+}
+
+function renderTagDatalist() {
+    const datalist = document.getElementById('tagNameOptions');
+    if (!datalist) return;
+    datalist.innerHTML = availableTags.map(tag => '<option value="' + escapeHtml(tag.name) + '"></option>').join('');
+}
+
+function renderChatMeta() {
+    renderChatTags();
+    renderChatNotes();
+}
+
+function renderChatTags() {
+    const container = document.getElementById('chatTagsList');
+    if (!container) return;
+    if (!currentChatTags.length) {
+        container.innerHTML = '<span class="text-muted">Etiket yok</span>';
+        return;
+    }
+    container.innerHTML = currentChatTags.map(tag => {
+        const bg = tag.color || 'var(--accent)';
+        return '<span class="tag-chip" style="background-color: ' + escapeHtml(bg) + ';">' +
+            '<span>' + escapeHtml(tag.name) + '</span>' +
+            '<button type="button" onclick="removeTagFromChat(' + tag.id + ')"><i class="bi bi-x"></i></button>' +
+            '</span>';
+    }).join('');
+}
+
+function renderChatNotes() {
+    const container = document.getElementById('chatNotesList');
+    if (!container) return;
+    if (!currentChatNotes.length) {
+        container.innerHTML = '<span class="text-muted">Not yok</span>';
+        return;
+    }
+    container.innerHTML = currentChatNotes.map(note => {
+        return '<div class="note-item">' +
+            '<div class="note-text">' + escapeHtml(note.content || '') + '</div>' +
+            '<div class="note-meta">' +
+                '<span>' + escapeHtml(formatTime(note.created_at || Date.now())) + '</span>' +
+                '<span>' +
+                    '<button class="icon-btn" onclick="editNote(' + note.id + ')"><i class="bi bi-pencil"></i></button>' +
+                    '<button class="icon-btn" onclick="deleteNote(' + note.id + ')"><i class="bi bi-trash"></i></button>' +
+                '</span>' +
+            '</div>' +
+        '</div>';
+    }).join('');
 }
 
 async function loadLogs() {
@@ -597,8 +677,9 @@ async function loadMessagesPage(options = {}) {
     setListStatus('messagesListStatus', shouldReset ? 'Mesajlar yukleniyor...' : 'Daha fazla mesaj yukleniyor...', true);
 
     try {
-        const messages = await api('api/messages?limit=' + MESSAGE_PAGE_SIZE + '&offset=' + messagesPagination.offset);
-        const page = Array.isArray(messages) ? messages : [];
+        const response = await api('api/messages?limit=' + MESSAGE_PAGE_SIZE + '&offset=' + messagesPagination.offset);
+        const payload = Array.isArray(response) ? { messages: response } : response;
+        const page = Array.isArray(payload.messages) ? payload.messages : [];
         messagesPagination.items = messagesPagination.items.concat(page);
         messagesPagination.offset += page.length;
         messagesPagination.hasMore = page.length === MESSAGE_PAGE_SIZE;
@@ -846,6 +927,9 @@ function renderChatMessages(messages, options = {}) {
 // Chat Selection
 function selectChat(chatId, name) {
     currentChat = chatId;
+    currentChatTags = [];
+    currentChatNotes = [];
+    renderChatMeta();
 
     const chatArea = document.getElementById('chatArea');
     const emptyChatView = document.getElementById('emptyChatView');
@@ -895,22 +979,29 @@ function openChatForMessage(chatId) {
 // Chat Search
 function filterChats() {
     const query = document.getElementById('searchInput').value.trim();
+    const tagFilter = document.getElementById('tagFilter')?.value || '';
+    const noteQuery = document.getElementById('noteSearchInput')?.value.trim() || '';
     if (chatSearchDebounce) {
         clearTimeout(chatSearchDebounce);
     }
     chatSearchDebounce = setTimeout(() => {
-        performChatSearch(query);
+        performChatSearch(query, tagFilter, noteQuery);
     }, 300);
 }
 
-async function performChatSearch(query) {
-    if (!query) {
+async function performChatSearch(query, tagFilter, noteQuery) {
+    if (!query && !tagFilter && !noteQuery) {
         renderChatList(chats);
         return;
     }
 
     try {
-        const results = await api('api/chats/search?q=' + encodeURIComponent(query) + '&limit=' + CHAT_SEARCH_PAGE_SIZE);
+        const params = new URLSearchParams();
+        if (query) params.set('q', query);
+        if (tagFilter) params.set('tag', tagFilter);
+        if (noteQuery) params.set('note', noteQuery);
+        params.set('limit', CHAT_SEARCH_PAGE_SIZE);
+        const results = await api('api/chats/search?' + params.toString());
         renderChatList(results);
     } catch (err) {
         console.error('Chat search error:', err);
@@ -974,6 +1065,106 @@ function appendTempMessage(text, attachmentName) {
 
     container.insertAdjacentHTML('beforeend', messageHtml);
     container.scrollTop = container.scrollHeight;
+}
+
+async function addTagToChat() {
+    if (!currentChat) return;
+    const nameInput = document.getElementById('tagNameInput');
+    const colorInput = document.getElementById('tagColorInput');
+    if (!nameInput) return;
+    const name = nameInput.value.trim();
+    if (!name) return;
+
+    try {
+        let tag = availableTags.find(item => item.name.toLowerCase() === name.toLowerCase());
+        if (!tag) {
+            const response = await api('api/tags', 'POST', { name, color: colorInput?.value || null });
+            const tagId = response.id || response.tag?.id;
+            await loadTags();
+            tag = availableTags.find(item => item.id === tagId) || { id: tagId, name, color: colorInput?.value || null };
+        }
+        await api('api/chats/' + encodeURIComponent(currentChat) + '/tags', 'POST', { tag_id: tag.id });
+        nameInput.value = '';
+        await refreshChatTags();
+    } catch (err) {
+        showToast('Etiket eklenemedi: ' + err.message, 'error');
+    }
+}
+
+async function removeTagFromChat(tagId) {
+    if (!currentChat) return;
+    try {
+        await api('api/chats/' + encodeURIComponent(currentChat) + '/tags/' + tagId, 'DELETE');
+        await refreshChatTags();
+    } catch (err) {
+        showToast('Etiket kaldirilamadi: ' + err.message, 'error');
+    }
+}
+
+async function refreshChatTags() {
+    if (!currentChat) return;
+    try {
+        const tags = await api('api/chats/' + encodeURIComponent(currentChat) + '/tags');
+        currentChatTags = Array.isArray(tags) ? tags : [];
+        renderChatTags();
+        renderTagFilterOptions();
+    } catch (err) {
+        console.error('Chat tags load error:', err);
+    }
+}
+
+async function addNoteToChat() {
+    if (!currentChat) return;
+    const input = document.getElementById('noteInput');
+    if (!input) return;
+    const content = input.value.trim();
+    if (!content) return;
+
+    try {
+        await api('api/chats/' + encodeURIComponent(currentChat) + '/notes', 'POST', { content });
+        input.value = '';
+        await refreshChatNotes();
+    } catch (err) {
+        showToast('Not eklenemedi: ' + err.message, 'error');
+    }
+}
+
+async function editNote(noteId) {
+    if (!currentChat) return;
+    const note = currentChatNotes.find(item => item.id === noteId);
+    if (!note) return;
+    const updated = prompt('Notu duzenleyin:', note.content || '');
+    if (updated === null) return;
+    const content = updated.trim();
+    if (!content) return;
+
+    try {
+        await api('api/chats/' + encodeURIComponent(currentChat) + '/notes/' + noteId, 'PUT', { content });
+        await refreshChatNotes();
+    } catch (err) {
+        showToast('Not guncellenemedi: ' + err.message, 'error');
+    }
+}
+
+async function deleteNote(noteId) {
+    if (!currentChat) return;
+    try {
+        await api('api/chats/' + encodeURIComponent(currentChat) + '/notes/' + noteId, 'DELETE');
+        await refreshChatNotes();
+    } catch (err) {
+        showToast('Not silinemedi: ' + err.message, 'error');
+    }
+}
+
+async function refreshChatNotes() {
+    if (!currentChat) return;
+    try {
+        const notes = await api('api/chats/' + encodeURIComponent(currentChat) + '/notes');
+        currentChatNotes = Array.isArray(notes) ? notes : [];
+        renderChatNotes();
+    } catch (err) {
+        console.error('Chat notes load error:', err);
+    }
 }
 
 // Handle new incoming message
