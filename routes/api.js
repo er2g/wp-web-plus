@@ -207,9 +207,18 @@ router.get('/chats', (req, res) => {
     res.json(req.account.db.chats.getAll.all());
 });
 
+router.get('/chats/search', (req, res) => {
+    const query = (req.query.q || '').substring(0, LIMITS.QUERY_LENGTH).trim();
+    const limit = Math.min(parseInt(req.query.limit) || 50, LIMITS.PAGINATION.MESSAGES);
+    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+    if (!query) return res.json([]);
+    res.json(req.account.db.chats.search.all('%' + query + '%', limit, offset));
+});
+
 router.get('/chats/:id/messages', (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 50, LIMITS.PAGINATION.MESSAGES);
-    res.json(req.account.db.messages.getByChatId.all(req.params.id, limit));
+    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+    res.json(req.account.db.messages.getByChatId.all(req.params.id, limit, offset));
 });
 
 // ============ MESSAGES ============
