@@ -1297,6 +1297,31 @@ body {
     color: white;
 }
 
+.btn-sm {
+    padding: 6px 12px;
+    font-size: 12px;
+}
+
+.deliveries-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.deliveries-table th,
+.deliveries-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border-color);
+    text-align: left;
+    vertical-align: top;
+}
+
+.deliveries-table th {
+    color: var(--text-secondary);
+    font-weight: 600;
+    background-color: var(--bg-secondary);
+}
+
 /* Form Elements */
 .form-group {
     margin-bottom: 20px;

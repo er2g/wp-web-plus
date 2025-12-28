@@ -10,6 +10,7 @@ let monacoEditor = null;
 let editingScriptId = null;
 let accounts = [];
 let activeAccountId = localStorage.getItem('activeAccountId');
+let webhooksCache = [];
 let settings = {
     downloadMedia: true,
     syncOnConnect: true,
@@ -1454,6 +1455,8 @@ async function loadWebhooksData() {
         const container = document.getElementById('webhooksListModal');
         if (!container) return;
 
+        webhooksCache = webhooks;
+
         if (webhooks.length === 0) {
             container.innerHTML = '<p style="color: var(--text-secondary)">Henuz webhook yok</p>';
             return;
@@ -1466,11 +1469,93 @@ async function loadWebhooksData() {
                 '<div class="subtitle">' + escapeHtml(w.url) + ' - ' + w.events + '</div>' +
             '</div>' +
             '<span style="padding: 4px 8px; border-radius: 4px; font-size: 12px; background: ' + (w.is_active ? 'var(--accent)' : 'var(--text-light)') + '; color: white;">' + (w.is_active ? 'Aktif' : 'Pasif') + '</span>' +
+            '<button class="icon-btn" onclick="showWebhookDetails(' + w.id + ')" title="Teslim Gecmisi"><i class="bi bi-clock-history"></i></button>' +
             '<button class="icon-btn" onclick="deleteWebhook(' + w.id + ')" title="Sil"><i class="bi bi-trash" style="color: #f15c6d;"></i></button>' +
             '</div>'
         ).join('');
     } catch (err) {
         console.error('Webhooks load error:', err);
+    }
+}
+
+function showWebhookDetails(webhookId) {
+    const webhook = webhooksCache.find(item => item.id === webhookId);
+    const modal = document.createElement('div');
+    modal.className = 'modal-overlay show';
+    modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+
+    modal.innerHTML = '<div class="modal" style="max-width: 900px;">' +
+        '<div class="modal-header"><h3>' + escapeHtml(webhook?.name || 'Webhook') + '</h3><i class="bi bi-x-lg close-btn" onclick="this.closest(\'.modal-overlay\').remove()"></i></div>' +
+        '<div class="modal-body">' +
+            '<div style="margin-bottom: 16px;">' +
+                '<div><strong>URL:</strong> ' + escapeHtml(webhook?.url || '-') + '</div>' +
+                '<div><strong>Olaylar:</strong> ' + escapeHtml(webhook?.events || '-') + '</div>' +
+            '</div>' +
+            '<div id="webhookDeliveriesContainer">' +
+                '<p style="color: var(--text-secondary)">Teslim gecmisi yukleniyor...</p>' +
+            '</div>' +
+        '</div>' +
+        '</div>';
+
+    document.body.appendChild(modal);
+    loadWebhookDeliveries(webhookId);
+}
+
+async function loadWebhookDeliveries(webhookId) {
+    const container = document.getElementById('webhookDeliveriesContainer');
+    if (!container) return;
+
+    try {
+        const deliveries = await api('api/webhooks/' + webhookId + '/deliveries?limit=50');
+        if (!deliveries.length) {
+            container.innerHTML = '<p style="color: var(--text-secondary)">Teslim kaydi bulunamadi.</p>';
+            return;
+        }
+
+        const rows = deliveries.map(delivery => {
+            const statusText = delivery.status ? delivery.status : '-';
+            const durationText = delivery.duration ? delivery.duration + ' ms' : '-';
+            const errorText = delivery.error ? escapeHtml(delivery.error) : '-';
+            return '<tr>' +
+                '<td>' + formatDateTime(delivery.created_at) + '</td>' +
+                '<td>' + escapeHtml(delivery.event) + '</td>' +
+                '<td>' + statusText + '</td>' +
+                '<td>' + durationText + '</td>' +
+                '<td>' + delivery.attempts + '</td>' +
+                '<td>' + errorText + '</td>' +
+                '<td><button class="btn btn-secondary btn-sm" onclick="replayWebhookDelivery(' + delivery.id + ',' + webhookId + ')">Yeniden Dene</button></td>' +
+            '</tr>';
+        }).join('');
+
+        container.innerHTML = '<div style="overflow-x: auto;">' +
+            '<table class="deliveries-table">' +
+                '<thead>' +
+                    '<tr>' +
+                        '<th>Tarih</th>' +
+                        '<th>Olay</th>' +
+                        '<th>Durum</th>' +
+                        '<th>Sure</th>' +
+                        '<th>Deneme</th>' +
+                        '<th>Hata</th>' +
+                        '<th>Aksiyon</th>' +
+                    '</tr>' +
+                '</thead>' +
+                '<tbody>' + rows + '</tbody>' +
+            '</table>' +
+        '</div>';
+    } catch (err) {
+        container.innerHTML = '<p style="color: var(--text-secondary)">Teslim gecmisi yuklenemedi.</p>';
+    }
+}
+
+async function replayWebhookDelivery(deliveryId, webhookId) {
+    if (!confirm('Bu teslimati yeniden denemek istiyor musunuz?')) return;
+    try {
+        await api('api/webhooks/deliveries/' + deliveryId + '/replay', 'POST');
+        showToast('Teslimat yeniden denendi', 'success');
+        loadWebhookDeliveries(webhookId);
+    } catch (err) {
+        showToast('Tekrar deneme hatasi: ' + err.message, 'error');
     }
 }
 

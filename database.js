@@ -94,6 +94,18 @@ function createDatabase(config) {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS webhook_deliveries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        webhook_id INTEGER NOT NULL,
+        event TEXT NOT NULL,
+        status INTEGER,
+        duration INTEGER,
+        attempts INTEGER DEFAULT 1,
+        error TEXT,
+        payload TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS scripts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
@@ -137,6 +149,8 @@ function createDatabase(config) {
     CREATE INDEX IF NOT EXISTS idx_scripts_active ON scripts(is_active);
     CREATE INDEX IF NOT EXISTS idx_script_logs_script ON script_logs(script_id);
     CREATE INDEX IF NOT EXISTS idx_script_logs_created ON script_logs(created_at);
+    CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_webhook ON webhook_deliveries(webhook_id);
+    CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_created ON webhook_deliveries(created_at);
 `);
 
     const columnExists = (tableName, columnName) => {
@@ -339,6 +353,21 @@ function createDatabase(config) {
     `)
     };
 
+    const webhookDeliveries = {
+    create: db.prepare(`
+        INSERT INTO webhook_deliveries
+        (webhook_id, event, status, duration, attempts, error, payload)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    `),
+    getByWebhookId: db.prepare(`
+        SELECT * FROM webhook_deliveries
+        WHERE webhook_id = ?
+        ORDER BY created_at DESC
+        LIMIT ? OFFSET ?
+    `),
+    getById: db.prepare('SELECT * FROM webhook_deliveries WHERE id = ?')
+    };
+
     const scripts = {
     getAll: db.prepare('SELECT * FROM scripts ORDER BY created_at DESC'),
     getActive: db.prepare('SELECT * FROM scripts WHERE is_active = 1'),
@@ -369,7 +398,7 @@ function createDatabase(config) {
     cleanupMessages: db.prepare(`DELETE FROM messages WHERE timestamp < ?`)
     };
 
-    return { db, messages, chats, autoReplies, scheduled, webhooks, scripts, scriptLogs, logs, maintenance };
+    return { db, messages, chats, autoReplies, scheduled, webhooks, webhookDeliveries, scripts, scriptLogs, logs, maintenance };
 }
 
 module.exports = { createDatabase };
