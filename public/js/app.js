@@ -268,11 +268,22 @@ function initMonaco() {
 }
 
 // API Helper
+function getCsrfToken() {
+    const match = document.cookie.match(/(?:^|; )XSRF-TOKEN=([^;]+)/);
+    return match ? decodeURIComponent(match[1]) : null;
+}
+
 async function api(url, method, body) {
     method = method || 'GET';
     const headers = { 'Content-Type': 'application/json' };
     if (activeAccountId) {
         headers['X-Account-Id'] = activeAccountId;
+    }
+    if (!['GET', 'HEAD'].includes(method.toUpperCase())) {
+        const csrfToken = getCsrfToken();
+        if (csrfToken) {
+            headers['X-CSRF-Token'] = csrfToken;
+        }
     }
     const options = {
         method: method,
@@ -966,6 +977,10 @@ async function sendMessageWithAttachment(message, file) {
     if (activeAccountId) {
         headers['X-Account-Id'] = activeAccountId;
     }
+    const csrfToken = getCsrfToken();
+    if (csrfToken) {
+        headers['X-CSRF-Token'] = csrfToken;
+    }
 
     const response = await fetch('api/send', {
         method: 'POST',
@@ -1469,7 +1484,12 @@ async function deleteScript(id) {
 
 // Logout
 async function logout() {
-    await fetch('auth/logout', { method: 'POST' });
+    const headers = {};
+    const csrfToken = getCsrfToken();
+    if (csrfToken) {
+        headers['X-CSRF-Token'] = csrfToken;
+    }
+    await fetch('auth/logout', { method: 'POST', headers });
     window.location.href = './';
 }
 
