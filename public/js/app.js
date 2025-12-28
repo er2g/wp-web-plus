@@ -399,6 +399,10 @@ function showTab(tabName) {
     showModal(tabName);
 }
 
+function openReports() {
+    window.location.href = '/reports.html';
+}
+
 // Connection Status
 function updateConnectionStatus(status) {
     const container = document.getElementById('connectionStatus');

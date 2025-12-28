@@ -369,7 +369,183 @@ function createDatabase(config) {
     cleanupMessages: db.prepare(`DELETE FROM messages WHERE timestamp < ?`)
     };
 
-    return { db, messages, chats, autoReplies, scheduled, webhooks, scripts, scriptLogs, logs, maintenance };
+    const reports = {
+    getOverview: db.prepare(`
+        SELECT
+            COUNT(*) as total,
+            SUM(CASE WHEN is_from_me = 1 THEN 1 ELSE 0 END) as sent,
+            SUM(CASE WHEN is_from_me = 0 THEN 1 ELSE 0 END) as received,
+            COUNT(DISTINCT chat_id) as active_chats
+        FROM messages
+        WHERE timestamp BETWEEN ? AND ?
+    `),
+    getTopChats: db.prepare(`
+        SELECT
+            m.chat_id,
+            COALESCE(c.name, m.chat_id) as name,
+            COUNT(*) as message_count,
+            SUM(CASE WHEN m.is_from_me = 1 THEN 1 ELSE 0 END) as sent,
+            SUM(CASE WHEN m.is_from_me = 0 THEN 1 ELSE 0 END) as received
+        FROM messages m
+        LEFT JOIN chats c ON c.chat_id = m.chat_id
+        WHERE m.timestamp BETWEEN ? AND ?
+        GROUP BY m.chat_id
+        ORDER BY message_count DESC
+        LIMIT ?
+    `),
+    getDailyTrend: db.prepare(`
+        SELECT
+            date(datetime(timestamp/1000, 'unixepoch')) as bucket,
+            COUNT(*) as total,
+            SUM(CASE WHEN is_from_me = 1 THEN 1 ELSE 0 END) as sent,
+            SUM(CASE WHEN is_from_me = 0 THEN 1 ELSE 0 END) as received
+        FROM messages
+        WHERE timestamp BETWEEN ? AND ?
+        GROUP BY bucket
+        ORDER BY bucket ASC
+    `),
+    getWeeklyTrend: db.prepare(`
+        SELECT
+            strftime('%Y-%W', datetime(timestamp/1000, 'unixepoch')) as bucket,
+            MIN(date(datetime(timestamp/1000, 'unixepoch'))) as week_start,
+            COUNT(*) as total,
+            SUM(CASE WHEN is_from_me = 1 THEN 1 ELSE 0 END) as sent,
+            SUM(CASE WHEN is_from_me = 0 THEN 1 ELSE 0 END) as received
+        FROM messages
+        WHERE timestamp BETWEEN ? AND ?
+        GROUP BY bucket
+        ORDER BY bucket ASC
+    `),
+    getResponseTimeSummary: db.prepare(`
+        WITH user_messages AS (
+            SELECT chat_id, timestamp
+            FROM messages
+            WHERE is_from_me = 0
+              AND timestamp BETWEEN ? AND ?
+        ),
+        pairs AS (
+            SELECT
+                u.chat_id,
+                u.timestamp as user_ts,
+                (
+                    SELECT MIN(r.timestamp)
+                    FROM messages r
+                    WHERE r.chat_id = u.chat_id
+                      AND r.is_from_me = 1
+                      AND r.timestamp > u.timestamp
+                ) as response_ts
+            FROM user_messages u
+        ),
+        response_times AS (
+            SELECT chat_id, (response_ts - user_ts) as response_time_ms
+            FROM pairs
+            WHERE response_ts IS NOT NULL
+        )
+        SELECT
+            COUNT(*) as responses,
+            AVG(response_time_ms) as avg_ms,
+            MIN(response_time_ms) as min_ms,
+            MAX(response_time_ms) as max_ms
+        FROM response_times
+    `),
+    getResponseTimeByChat: db.prepare(`
+        WITH user_messages AS (
+            SELECT chat_id, timestamp
+            FROM messages
+            WHERE is_from_me = 0
+              AND timestamp BETWEEN ? AND ?
+        ),
+        pairs AS (
+            SELECT
+                u.chat_id,
+                u.timestamp as user_ts,
+                (
+                    SELECT MIN(r.timestamp)
+                    FROM messages r
+                    WHERE r.chat_id = u.chat_id
+                      AND r.is_from_me = 1
+                      AND r.timestamp > u.timestamp
+                ) as response_ts
+            FROM user_messages u
+        ),
+        response_times AS (
+            SELECT chat_id, (response_ts - user_ts) as response_time_ms
+            FROM pairs
+            WHERE response_ts IS NOT NULL
+        )
+        SELECT
+            r.chat_id,
+            COALESCE(c.name, r.chat_id) as name,
+            COUNT(*) as responses,
+            AVG(response_time_ms) as avg_ms
+        FROM response_times r
+        LEFT JOIN chats c ON c.chat_id = r.chat_id
+        GROUP BY r.chat_id
+        ORDER BY avg_ms ASC
+        LIMIT ?
+    `),
+    getResponseTimeTrendDaily: db.prepare(`
+        WITH user_messages AS (
+            SELECT chat_id, timestamp
+            FROM messages
+            WHERE is_from_me = 0
+              AND timestamp BETWEEN ? AND ?
+        ),
+        pairs AS (
+            SELECT
+                u.chat_id,
+                u.timestamp as user_ts,
+                (
+                    SELECT MIN(r.timestamp)
+                    FROM messages r
+                    WHERE r.chat_id = u.chat_id
+                      AND r.is_from_me = 1
+                      AND r.timestamp > u.timestamp
+                ) as response_ts
+            FROM user_messages u
+        )
+        SELECT
+            date(datetime(user_ts/1000, 'unixepoch')) as bucket,
+            COUNT(*) as responses,
+            AVG(response_ts - user_ts) as avg_ms
+        FROM pairs
+        WHERE response_ts IS NOT NULL
+        GROUP BY bucket
+        ORDER BY bucket ASC
+    `),
+    getResponseTimeTrendWeekly: db.prepare(`
+        WITH user_messages AS (
+            SELECT chat_id, timestamp
+            FROM messages
+            WHERE is_from_me = 0
+              AND timestamp BETWEEN ? AND ?
+        ),
+        pairs AS (
+            SELECT
+                u.chat_id,
+                u.timestamp as user_ts,
+                (
+                    SELECT MIN(r.timestamp)
+                    FROM messages r
+                    WHERE r.chat_id = u.chat_id
+                      AND r.is_from_me = 1
+                      AND r.timestamp > u.timestamp
+                ) as response_ts
+            FROM user_messages u
+        )
+        SELECT
+            strftime('%Y-%W', datetime(user_ts/1000, 'unixepoch')) as bucket,
+            MIN(date(datetime(user_ts/1000, 'unixepoch'))) as week_start,
+            COUNT(*) as responses,
+            AVG(response_ts - user_ts) as avg_ms
+        FROM pairs
+        WHERE response_ts IS NOT NULL
+        GROUP BY bucket
+        ORDER BY bucket ASC
+    `)
+    };
+
+    return { db, messages, chats, autoReplies, scheduled, webhooks, scripts, scriptLogs, logs, maintenance, reports };
 }
 
 module.exports = { createDatabase };

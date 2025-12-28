@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp Premium Plus - Raporlar</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="css/style.css" rel="stylesheet">
+    <link href="css/reports.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body class="reports-body">
+    <header class="reports-header">
+        <div>
+            <p class="reports-kicker">WhatsApp Premium Plus</p>
+            <h1>Raporlar & Dashboard</h1>
+            <p class="reports-subtitle">Mesaj hacmi, sohbet aktivitesi ve yanit surelerine hizli bakis.</p>
+        </div>
+        <div class="reports-actions">
+            <a class="btn btn-secondary" href="/">Geri Don</a>
+        </div>
+    </header>
+
+    <section class="reports-filters">
+        <div class="filter-item">
+            <label for="startDate">Baslangic</label>
+            <input type="date" id="startDate">
+        </div>
+        <div class="filter-item">
+            <label for="endDate">Bitis</label>
+            <input type="date" id="endDate">
+        </div>
+        <div class="filter-item">
+            <label for="intervalSelect">Aralik</label>
+            <select id="intervalSelect">
+                <option value="daily">Gunluk</option>
+                <option value="weekly">Haftalik</option>
+            </select>
+        </div>
+        <button class="btn btn-primary" id="refreshReports">
+            <i class="bi bi-arrow-repeat"></i> Guncelle
+        </button>
+    </section>
+
+    <section class="stats-grid" id="overviewStats">
+        <div class="stat-card">
+            <div class="icon green"><i class="bi bi-chat-fill"></i></div>
+            <div class="info">
+                <div class="value" id="overviewTotal">-</div>
+                <div class="label">Toplam Mesaj</div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="icon blue"><i class="bi bi-arrow-up-right"></i></div>
+            <div class="info">
+                <div class="value" id="overviewSent">-</div>
+                <div class="label">Gonderilen</div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="icon orange"><i class="bi bi-arrow-down-left"></i></div>
+            <div class="info">
+                <div class="value" id="overviewReceived">-</div>
+                <div class="label">Alinan</div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="icon purple"><i class="bi bi-people-fill"></i></div>
+            <div class="info">
+                <div class="value" id="overviewActive">-</div>
+                <div class="label">Aktif Sohbet</div>
+            </div>
+        </div>
+    </section>
+
+    <section class="charts-grid">
+        <div class="card">
+            <div class="card-header">
+                <h3>Mesaj Trendleri</h3>
+                <span class="card-note" id="trendRange"></span>
+            </div>
+            <canvas id="messagesChart" height="140"></canvas>
+        </div>
+        <div class="card">
+            <div class="card-header">
+                <h3>Yanit Suresi Trendi</h3>
+                <span class="card-note" id="responseRange"></span>
+            </div>
+            <canvas id="responseChart" height="140"></canvas>
+        </div>
+    </section>
+
+    <section class="tables-grid">
+        <div class="card">
+            <div class="card-header">
+                <h3>En Aktif Sohbetler</h3>
+                <span class="card-note">Secili tarih araliginda</span>
+            </div>
+            <div class="table" id="topChatsTable"></div>
+        </div>
+        <div class="card">
+            <div class="card-header">
+                <h3>Yanit Suresi (Sohbet)</h3>
+                <span class="card-note" id="responseSummary"></span>
+            </div>
+            <div class="table" id="responseTable"></div>
+        </div>
+    </section>
+
+    <script src="js/reports.js"></script>
+</body>
+</html>
