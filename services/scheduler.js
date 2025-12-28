@@ -2,12 +2,12 @@
  * WhatsApp Web Panel - Scheduler Service
  */
 const cron = require('node-cron');
-const db = require('../database');
-const config = require('../config');
 
 class SchedulerService {
-    constructor() {
-        this.whatsapp = null;
+    constructor(db, whatsapp, config) {
+        this.db = db;
+        this.whatsapp = whatsapp;
+        this.config = config;
         this.checkInterval = null;
         this.cronJobs = new Map();
     }
@@ -20,13 +20,13 @@ class SchedulerService {
         // Check for pending messages every minute
         this.checkInterval = setInterval(() => {
             this.checkPendingMessages();
-        }, config.SCHEDULER_CHECK_INTERVAL);
+        }, this.config.SCHEDULER_CHECK_INTERVAL);
 
         // Initial check
         this.checkPendingMessages();
 
         console.log('Scheduler service started');
-        db.logs.add.run('info', 'scheduler', 'Scheduler service started', null);
+        this.db.logs.add.run('info', 'scheduler', 'Scheduler service started', null);
     }
 
     stop() {
@@ -50,21 +50,21 @@ class SchedulerService {
         }
 
         try {
-            const pending = db.scheduled.getPending.all();
+            const pending = this.db.scheduled.getPending.all();
 
             for (const msg of pending) {
                 try {
                     await this.whatsapp.sendMessage(msg.chat_id, msg.message);
-                    db.scheduled.markSent.run(msg.id);
+                    this.db.scheduled.markSent.run(msg.id);
 
-                    db.logs.add.run('info', 'scheduler',
+                    this.db.logs.add.run('info', 'scheduler',
                         'Scheduled message sent',
                         JSON.stringify({ id: msg.id, chatId: msg.chat_id })
                     );
 
                     console.log('Scheduled message sent:', msg.id);
                 } catch (error) {
-                    db.logs.add.run('error', 'scheduler',
+                    this.db.logs.add.run('error', 'scheduler',
                         'Failed to send scheduled message',
                         JSON.stringify({ id: msg.id, error: error.message })
                     );
@@ -91,12 +91,12 @@ class SchedulerService {
             if (this.whatsapp && this.whatsapp.isReady()) {
                 try {
                     await this.whatsapp.sendMessage(chatId, message);
-                    db.logs.add.run('info', 'scheduler',
+                    this.db.logs.add.run('info', 'scheduler',
                         'Recurring message sent',
                         JSON.stringify({ id, chatId, cron: cronExpression })
                     );
                 } catch (error) {
-                    db.logs.add.run('error', 'scheduler',
+                    this.db.logs.add.run('error', 'scheduler',
                         'Failed to send recurring message',
                         JSON.stringify({ id, error: error.message })
                     );
@@ -116,4 +116,8 @@ class SchedulerService {
     }
 }
 
-module.exports = new SchedulerService();
+function createSchedulerService(db, whatsapp, config) {
+    return new SchedulerService(db, whatsapp, config);
+}
+
+module.exports = { createSchedulerService };

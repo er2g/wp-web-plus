@@ -9,6 +9,8 @@ let chats = [];
 let allMessages = [];
 let monacoEditor = null;
 let editingScriptId = null;
+let accounts = [];
+let activeAccountId = localStorage.getItem('activeAccountId');
 let settings = {
     downloadMedia: true,
     syncOnConnect: true,
@@ -16,13 +18,19 @@ let settings = {
     notifications: true,
     sounds: true
 };
+let uiPreferences = {
+    accentColor: localStorage.getItem('uiAccent') || '',
+    wallpaper: localStorage.getItem('uiWallpaper') || 'default'
+};
+let selectedAttachment = null;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     loadTheme();
-    initSocket();
+    loadCustomizations();
     initMonaco();
-    loadInitialData();
+    setupAttachmentPicker();
+    initializeApp();
 
     // Close dropdowns when clicking outside
     document.addEventListener('click', (e) => {
@@ -59,10 +67,175 @@ function updateThemeUI(theme) {
     }
 }
 
+async function initializeApp() {
+    try {
+        await loadAccounts();
+        initSocket();
+        loadInitialData();
+    } catch (error) {
+        console.error('App init error:', error);
+        showToast('Hesaplar yuklenemedi: ' + error.message, 'error');
+    }
+}
+
+// Customization Management
+function loadCustomizations() {
+    if (!uiPreferences.accentColor) {
+        const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+        uiPreferences.accentColor = accent || '#00a884';
+    }
+    if (uiPreferences.accentColor) {
+        applyAccentColor(uiPreferences.accentColor);
+    }
+    applyWallpaper(uiPreferences.wallpaper);
+    updateCustomizationUI();
+}
+
+function updateCustomizationUI() {
+    const accentInput = document.getElementById('accentColorPicker');
+    if (accentInput && uiPreferences.accentColor) {
+        accentInput.value = uiPreferences.accentColor;
+    }
+    const wallpaperSelect = document.getElementById('wallpaperSelect');
+    if (wallpaperSelect) {
+        wallpaperSelect.value = uiPreferences.wallpaper;
+    }
+}
+
+function updateAccentColor(color) {
+    uiPreferences.accentColor = color;
+    localStorage.setItem('uiAccent', color);
+    applyAccentColor(color);
+}
+
+function updateWallpaperChoice(value) {
+    uiPreferences.wallpaper = value;
+    localStorage.setItem('uiWallpaper', value);
+    applyWallpaper(value);
+}
+
+function applyAccentColor(color) {
+    if (!color) return;
+    const root = document.documentElement;
+    root.style.setProperty('--accent', color);
+    root.style.setProperty('--accent-hover', adjustColor(color, -20));
+    root.style.setProperty('--accent-light', adjustColor(color, 50));
+}
+
+function applyWallpaper(value) {
+    const root = document.documentElement;
+    const wallpaperKey = value || 'default';
+    root.style.setProperty('--chat-wallpaper', `var(--wallpaper-${wallpaperKey})`);
+}
+
+function adjustColor(hex, amount) {
+    const value = hex.replace('#', '');
+    if (value.length !== 6) return hex;
+    const num = parseInt(value, 16);
+    const r = Math.min(255, Math.max(0, (num >> 16) + amount));
+    const g = Math.min(255, Math.max(0, ((num >> 8) & 0x00ff) + amount));
+    const b = Math.min(255, Math.max(0, (num & 0x0000ff) + amount));
+    return `#${(r << 16 | g << 8 | b).toString(16).padStart(6, '0')}`;
+}
+
+// Accounts Management
+async function loadAccounts() {
+    const data = await api('api/accounts');
+    accounts = data.accounts || [];
+    const currentAccountId = data.currentAccountId;
+
+    if (!activeAccountId || !accounts.find(account => account.id === activeAccountId)) {
+        activeAccountId = currentAccountId || accounts[0]?.id || null;
+        if (activeAccountId) {
+            localStorage.setItem('activeAccountId', activeAccountId);
+        }
+    }
+
+    if (activeAccountId && activeAccountId !== currentAccountId) {
+        await api('api/accounts/select', 'POST', { accountId: activeAccountId });
+    }
+
+    renderAccountMenu();
+    updateAccountHeader();
+}
+
+function renderAccountMenu() {
+    const menu = document.getElementById('accountMenuList');
+    if (!menu) return;
+    menu.innerHTML = '';
+
+    accounts.forEach(account => {
+        const item = document.createElement('div');
+        item.className = 'dropdown-item account-item' + (account.id === activeAccountId ? ' active' : '');
+        item.onclick = () => selectAccount(account.id);
+        item.innerHTML = `
+            <span class="account-label">${escapeHtml(account.name)}</span>
+            <span class="account-status ${escapeHtml(account.status || 'disconnected')}">${escapeHtml(account.status || 'disconnected')}</span>
+        `;
+        menu.appendChild(item);
+    });
+}
+
+function updateAccountHeader() {
+    const current = accounts.find(account => account.id === activeAccountId);
+    const accountName = document.getElementById('accountName');
+    if (accountName) {
+        accountName.textContent = current ? current.name : 'Hesap Secin';
+    }
+}
+
+async function selectAccount(accountId) {
+    if (!accountId || accountId === activeAccountId) return;
+    try {
+        await api('api/accounts/select', 'POST', { accountId });
+        activeAccountId = accountId;
+        localStorage.setItem('activeAccountId', accountId);
+        updateAccountHeader();
+        renderAccountMenu();
+        resetAppState();
+        resetSocket();
+        loadInitialData();
+        showToast('Hesap degistirildi', 'success');
+    } catch (error) {
+        showToast('Hesap degistirilemedi: ' + error.message, 'error');
+    }
+}
+
+async function createAccount() {
+    const name = prompt('Yeni hesap adi girin:');
+    if (!name) return;
+    try {
+        const result = await api('api/accounts', 'POST', { name: name.trim() });
+        accounts.push(result.account);
+        renderAccountMenu();
+        showToast('Hesap olusturuldu', 'success');
+    } catch (error) {
+        showToast('Hesap olusturulamadi: ' + error.message, 'error');
+    }
+}
+
+function resetAppState() {
+    currentChat = null;
+    chats = [];
+    allMessages = [];
+    document.getElementById('chatList').innerHTML = '';
+    document.getElementById('messagesList').innerHTML = '';
+    document.getElementById('logsList').innerHTML = '';
+    closeChat();
+}
+
+function resetSocket() {
+    if (socket) {
+        socket.disconnect();
+        socket = null;
+    }
+    initSocket();
+}
+
 // Socket.IO
 function initSocket() {
     const basePath = window.location.pathname.endsWith('/') ? window.location.pathname : window.location.pathname + '/';
-    socket = io({ path: basePath + 'socket.io/' });
+    socket = io({ path: basePath + 'socket.io/', auth: { accountId: activeAccountId } });
 
     socket.on('connect', () => console.log('Socket connected'));
     socket.on('disconnect', () => console.log('Socket disconnected'));
@@ -97,9 +270,13 @@ function initMonaco() {
 // API Helper
 async function api(url, method, body) {
     method = method || 'GET';
+    const headers = { 'Content-Type': 'application/json' };
+    if (activeAccountId) {
+        headers['X-Account-Id'] = activeAccountId;
+    }
     const options = {
         method: method,
-        headers: { 'Content-Type': 'application/json' },
+        headers: headers,
         credentials: 'include'
     };
     if (body) options.body = JSON.stringify(body);
@@ -209,6 +386,14 @@ function updateConnectionStatus(status) {
             spinner.style.display = 'none';
             text.textContent = status.info ? 'Bagli - ' + status.info.pushname : 'Bagli';
             break;
+    }
+
+    if (activeAccountId) {
+        const account = accounts.find(a => a.id === activeAccountId);
+        if (account) {
+            account.status = status.status;
+            renderAccountMenu();
+        }
     }
 }
 
@@ -370,12 +555,13 @@ function renderMessagesList() {
     container.innerHTML = allMessages.slice(0, 50).map(m => {
         const isMine = m.is_from_me === 1 || m.is_from_me === true;
         const direction = isMine ? '<i class="bi bi-arrow-up-right" style="color: var(--accent)"></i>' : '<i class="bi bi-arrow-down-left" style="color: #34b7f1"></i>';
+        const displayName = getDisplayNameFromMessage(m);
 
         return '<div class="chat-item" onclick="openChatForMessage(\'' + (m.chat_id || '') + '\')">' +
             '<div class="avatar"><i class="bi bi-chat-text-fill"></i></div>' +
             '<div class="chat-info">' +
                 '<div class="top-row">' +
-                    '<div class="chat-name">' + direction + ' ' + escapeHtml(formatSenderName(m.from_name)) + '</div>' +
+                    '<div class="chat-name">' + direction + ' ' + escapeHtml(formatSenderName(displayName)) + '</div>' +
                     '<span class="chat-time">' + formatTime(m.timestamp) + '</span>' +
                 '</div>' +
                 '<div class="chat-preview">' +
@@ -449,10 +635,13 @@ function renderChatMessages(messages) {
         let textHtml = '';
         if (m.body && (m.type === 'chat' || (mediaUrl && m.body && m.type !== 'document'))) {
             textHtml = '<div class="message-text">' + escapeHtml(m.body) + '</div>';
+        } else if (!mediaHtml) {
+            textHtml = '<div class="message-text muted">[Bos mesaj]</div>';
         }
 
-        const senderHtml = (!isMine && m.from_name) ?
-            '<div class="sender-name">' + escapeHtml(formatSenderName(m.from_name)) + '</div>' : '';
+        const displayName = getDisplayNameFromMessage(m);
+        const senderHtml = (!isMine && displayName) ?
+            '<div class="sender-name">' + escapeHtml(formatSenderName(displayName)) + '</div>' : '';
 
         const checkIcon = isMine ? '<i class="bi bi-check2-all check-icon read"></i>' : '';
 
@@ -532,16 +721,21 @@ async function sendMessage() {
     const input = document.getElementById('messageInput');
     const message = input.value.trim();
 
-    if (!currentChat || !message) return;
+    if (!currentChat || (!message && !selectedAttachment)) return;
 
     input.value = '';
     autoResizeInput(input);
 
     // Add temporary message
-    appendTempMessage(message);
+    appendTempMessage(message, selectedAttachment ? selectedAttachment.name : null);
 
     try {
-        await api('api/send', 'POST', { chatId: currentChat, message });
+        if (selectedAttachment) {
+            await sendMessageWithAttachment(message, selectedAttachment);
+            clearAttachment();
+        } else {
+            await api('api/send', 'POST', { chatId: currentChat, message });
+        }
         // Socket event will refresh
     } catch (err) {
         showToast('Gonderme hatasi: ' + err.message, 'error');
@@ -561,13 +755,19 @@ function autoResizeInput(el) {
     el.style.height = Math.min(el.scrollHeight, 100) + 'px';
 }
 
-function appendTempMessage(text) {
+function appendTempMessage(text, attachmentName) {
     const container = document.getElementById('messagesContainer');
     if (!container) return;
 
+    const attachmentHtml = attachmentName
+        ? '<div class="message-text">[Dosya] ' + escapeHtml(attachmentName) + '</div>'
+        : '';
+    const bodyHtml = text ? '<div class="message-text">' + escapeHtml(text) + '</div>' : '';
+
     const messageHtml = '<div class="message-row sent">' +
         '<div class="message-bubble sent">' +
-        '<div class="message-text">' + escapeHtml(text) + '</div>' +
+        attachmentHtml +
+        bodyHtml +
         '<div class="message-footer"><span class="message-time">' + formatTime(Date.now()) + '</span><i class="bi bi-check2 check-icon"></i></div>' +
         '</div></div>';
 
@@ -580,7 +780,8 @@ function handleNewMessage(msg) {
     console.log('New message received:', msg, 'currentChat:', currentChat, 'msg.chatId:', msg.chatId);
 
     if (settings.notifications) {
-        showToast('Yeni mesaj: ' + formatSenderName(msg.fromName), 'info');
+        const displayName = getDisplayNameFromMessage(msg);
+        showToast('Yeni mesaj: ' + formatSenderName(displayName), 'info');
     }
 
     if (currentChat) {
@@ -615,10 +816,13 @@ function appendNewMessage(msg) {
     let textHtml = '';
     if (msg.body && (msg.type === 'chat' || msg.type === undefined)) {
         textHtml = '<div class="message-text">' + escapeHtml(msg.body) + '</div>';
+    } else if (!mediaHtml) {
+        textHtml = '<div class="message-text muted">[Bos mesaj]</div>';
     }
 
-    const senderHtml = (!isMine && msg.fromName) ?
-        '<div class="sender-name">' + escapeHtml(formatSenderName(msg.fromName)) + '</div>' : '';
+    const displayName = getDisplayNameFromMessage(msg);
+    const senderHtml = (!isMine && displayName) ?
+        '<div class="sender-name">' + escapeHtml(formatSenderName(displayName)) + '</div>' : '';
 
     const checkIcon = isMine ? '<i class="bi bi-check2-all check-icon read"></i>' : '';
     const time = msg.timestamp ? formatTime(msg.timestamp) : formatTime(Date.now());
@@ -704,7 +908,74 @@ function toggleEmojiPicker() {
 }
 
 function toggleAttachMenu() {
-    showToast('Dosya ekleme yakinda gelecek', 'info');
+    const input = document.getElementById('mediaInput');
+    if (input) {
+        input.click();
+    }
+}
+
+function setupAttachmentPicker() {
+    const input = document.getElementById('mediaInput');
+    if (!input) return;
+    input.addEventListener('change', handleMediaSelect);
+}
+
+function handleMediaSelect(event) {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+    selectedAttachment = file;
+    renderAttachmentPreview();
+}
+
+function renderAttachmentPreview() {
+    const preview = document.getElementById('attachmentPreview');
+    if (!preview) return;
+    if (!selectedAttachment) {
+        preview.style.display = 'none';
+        preview.innerHTML = '';
+        return;
+    }
+    preview.style.display = 'flex';
+    preview.innerHTML = `
+        <div class="attachment-chip">
+            <i class="bi bi-paperclip"></i>
+            <span>${escapeHtml(selectedAttachment.name)}</span>
+            <button class="icon-btn" onclick="clearAttachment()" title="Kaldir">
+                <i class="bi bi-x"></i>
+            </button>
+        </div>
+    `;
+}
+
+function clearAttachment() {
+    selectedAttachment = null;
+    const input = document.getElementById('mediaInput');
+    if (input) {
+        input.value = '';
+    }
+    renderAttachmentPreview();
+}
+
+async function sendMessageWithAttachment(message, file) {
+    const formData = new FormData();
+    formData.append('chatId', currentChat);
+    formData.append('message', message || '');
+    formData.append('media', file);
+
+    const headers = {};
+    if (activeAccountId) {
+        headers['X-Account-Id'] = activeAccountId;
+    }
+
+    const response = await fetch('api/send', {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: formData
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'API Error');
+    return data;
 }
 
 // Media Lightbox
@@ -1228,10 +1499,18 @@ function sanitizeUrl(url) {
 
 function formatSenderName(name) {
     if (!name) return '';
-    if (/^\d{10,15}$/.test(name)) {
-        return '+' + name.substring(0, 2) + ' xxx ' + name.slice(-4);
+    if (name.includes('@')) {
+        return name.split('@')[0];
+    }
+    if (/^\d{7,16}$/.test(name)) {
+        return '+' + name;
     }
     return name;
+}
+
+function getDisplayNameFromMessage(message) {
+    if (!message) return '';
+    return message.from_name || message.fromName || message.from_number || message.fromNumber || message.from || '';
 }
 
 function formatTime(ts) {

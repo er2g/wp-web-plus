@@ -2,19 +2,19 @@
  * WhatsApp Web Panel - Database Module v2
  */
 const Database = require('better-sqlite3');
-const config = require('./config');
 const fs = require('fs');
 
-// Ensure data directory exists
-if (!fs.existsSync(config.DATA_DIR)) {
-    fs.mkdirSync(config.DATA_DIR, { recursive: true });
-}
+function createDatabase(config) {
+    // Ensure data directory exists
+    if (!fs.existsSync(config.DATA_DIR)) {
+        fs.mkdirSync(config.DATA_DIR, { recursive: true });
+    }
 
-const db = new Database(config.DB_PATH);
-db.pragma('journal_mode = WAL');
+    const db = new Database(config.DB_PATH);
+    db.pragma('journal_mode = WAL');
 
-// Initialize database schema
-db.exec(`
+    // Initialize database schema
+    db.exec(`
     CREATE TABLE IF NOT EXISTS messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         message_id TEXT UNIQUE,
@@ -121,19 +121,19 @@ db.exec(`
     CREATE INDEX IF NOT EXISTS idx_scripts_active ON scripts(is_active);
     CREATE INDEX IF NOT EXISTS idx_script_logs_script ON script_logs(script_id);
 `);
-// Add media_url column if not exists (for existing databases)
-// Note: ALTER TABLE will fail if column exists - this is expected
-try {
-    db.exec("ALTER TABLE messages ADD COLUMN media_url TEXT");
-    console.log('Database migration: Added media_url column');
-} catch (e) {
-    // Column already exists - this is expected, not an error
-}
+    // Add media_url column if not exists (for existing databases)
+    // Note: ALTER TABLE will fail if column exists - this is expected
+    try {
+        db.exec("ALTER TABLE messages ADD COLUMN media_url TEXT");
+        console.log('Database migration: Added media_url column');
+    } catch (e) {
+        // Column already exists - this is expected, not an error
+    }
 
-console.log('Database initialized');
+    console.log('Database initialized:', config.DB_PATH);
 
-// Prepared statements
-const messages = {
+    // Prepared statements
+    const messages = {
     save: db.prepare(`
         INSERT OR REPLACE INTO messages
         (message_id, chat_id, from_number, to_number, from_name, body, type, media_path, media_url, media_mimetype, is_group, is_from_me, timestamp)
@@ -150,9 +150,9 @@ const messages = {
             SUM(CASE WHEN date(datetime(timestamp/1000, 'unixepoch')) = date('now') THEN 1 ELSE 0 END) as today
         FROM messages
     `)
-};
+    };
 
-const chats = {
+    const chats = {
     upsert: db.prepare(`
         INSERT INTO chats (chat_id, name, is_group, profile_pic, last_message, last_message_at, unread_count, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
@@ -163,9 +163,9 @@ const chats = {
     `),
     getAll: db.prepare(`SELECT * FROM chats ORDER BY last_message_at DESC`),
     getById: db.prepare(`SELECT * FROM chats WHERE chat_id = ?`)
-};
+    };
 
-const autoReplies = {
+    const autoReplies = {
     getAll: db.prepare('SELECT * FROM auto_replies ORDER BY created_at DESC'),
     getActive: db.prepare('SELECT * FROM auto_replies WHERE is_active = 1'),
     getById: db.prepare('SELECT * FROM auto_replies WHERE id = ?'),
@@ -174,18 +174,18 @@ const autoReplies = {
     delete: db.prepare('DELETE FROM auto_replies WHERE id = ?'),
     incrementCount: db.prepare('UPDATE auto_replies SET reply_count = reply_count + 1 WHERE id = ?'),
     toggle: db.prepare('UPDATE auto_replies SET is_active = ? WHERE id = ?')
-};
+    };
 
-const scheduled = {
+    const scheduled = {
     getAll: db.prepare('SELECT * FROM scheduled_messages ORDER BY scheduled_at ASC'),
     getPending: db.prepare(`SELECT * FROM scheduled_messages WHERE is_sent = 0 AND datetime(scheduled_at) <= datetime('now')`),
     getById: db.prepare('SELECT * FROM scheduled_messages WHERE id = ?'),
     create: db.prepare(`INSERT INTO scheduled_messages (chat_id, chat_name, message, scheduled_at, is_recurring, cron_expression) VALUES (?, ?, ?, ?, ?, ?)`),
     markSent: db.prepare(`UPDATE scheduled_messages SET is_sent = 1, sent_at = datetime('now') WHERE id = ?`),
     delete: db.prepare('DELETE FROM scheduled_messages WHERE id = ?')
-};
+    };
 
-const webhooks = {
+    const webhooks = {
     getAll: db.prepare('SELECT * FROM webhooks ORDER BY created_at DESC'),
     getActive: db.prepare('SELECT * FROM webhooks WHERE is_active = 1'),
     getById: db.prepare('SELECT * FROM webhooks WHERE id = ?'),
@@ -194,9 +194,9 @@ const webhooks = {
     delete: db.prepare('DELETE FROM webhooks WHERE id = ?'),
     recordSuccess: db.prepare(`UPDATE webhooks SET success_count = success_count + 1, last_triggered_at = datetime('now') WHERE id = ?`),
     recordFail: db.prepare(`UPDATE webhooks SET fail_count = fail_count + 1, last_triggered_at = datetime('now') WHERE id = ?`)
-};
+    };
 
-const scripts = {
+    const scripts = {
     getAll: db.prepare('SELECT * FROM scripts ORDER BY created_at DESC'),
     getActive: db.prepare('SELECT * FROM scripts WHERE is_active = 1'),
     getById: db.prepare('SELECT * FROM scripts WHERE id = ?'),
@@ -207,19 +207,22 @@ const scripts = {
     toggle: db.prepare('UPDATE scripts SET is_active = ? WHERE id = ?'),
     recordRun: db.prepare(`UPDATE scripts SET run_count = run_count + 1, last_run_at = datetime('now'), last_error = NULL WHERE id = ?`),
     recordError: db.prepare(`UPDATE scripts SET last_error = ?, last_run_at = datetime('now') WHERE id = ?`)
-};
+    };
 
-const scriptLogs = {
+    const scriptLogs = {
     add: db.prepare(`INSERT INTO script_logs (script_id, level, message, data) VALUES (?, ?, ?, ?)`),
     getByScript: db.prepare(`SELECT * FROM script_logs WHERE script_id = ? ORDER BY created_at DESC LIMIT ?`),
     cleanup: db.prepare(`DELETE FROM script_logs WHERE created_at < datetime('now', '-3 days')`)
-};
+    };
 
-const logs = {
+    const logs = {
     add: db.prepare(`INSERT INTO logs (level, category, message, data) VALUES (?, ?, ?, ?)`),
     getRecent: db.prepare(`SELECT * FROM logs ORDER BY created_at DESC LIMIT ?`),
     getByCategory: db.prepare(`SELECT * FROM logs WHERE category = ? ORDER BY created_at DESC LIMIT ?`),
     cleanup: db.prepare(`DELETE FROM logs WHERE created_at < datetime('now', '-7 days')`)
-};
+    };
 
-module.exports = { db, messages, chats, autoReplies, scheduled, webhooks, scripts, scriptLogs, logs };
+    return { db, messages, chats, autoReplies, scheduled, webhooks, scripts, scriptLogs, logs };
+}
+
+module.exports = { createDatabase };

@@ -4,8 +4,6 @@
  */
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
-const config = require('./config');
-const db = require('./database');
 const fs = require('fs');
 const path = require('path');
 
@@ -21,21 +19,17 @@ const CONSTANTS = {
     PROGRESS_THROTTLE_MS: 500
 };
 
-let driveService = null;
-function getDrive() {
-    if (!driveService) {
-        try { driveService = require('./drive'); } catch (e) {}
-    }
-    return driveService;
-}
-
 class WhatsAppClient {
-    constructor() {
+    constructor(config, db, drive) {
+        this.config = config;
+        this.db = db;
+        this.drive = drive;
         this.client = null;
         this.qrCode = null;
         this.status = 'disconnected';
         this.info = null;
         this.io = null;
+        this.socketRoom = null;
         this.syncProgress = { syncing: false, current: 0, total: 0, chat: '' };
         this.settings = {
             downloadMedia: true,
@@ -52,7 +46,14 @@ class WhatsAppClient {
         if (contact) {
             return contact.pushname || contact.name || contact.number || this.extractPhoneFromId(msg.from);
         }
-        return this.extractPhoneFromId(msg.from);
+        return this.extractPhoneFromId(msg.author || msg.from);
+    }
+
+    getSenderNumber(contact, msg) {
+        if (contact && contact.number) {
+            return contact.number;
+        }
+        return this.extractPhoneFromId(msg.author || msg.from);
     }
 
     extractPhoneFromId(id) {
@@ -60,9 +61,19 @@ class WhatsAppClient {
         return id.split('@')[0] || 'Unknown';
     }
 
-    setSocketIO(io) { this.io = io; }
+    setSocketIO(io, room) {
+        this.io = io;
+        this.socketRoom = room || null;
+    }
 
-    emit(event, data) { if (this.io) this.io.emit(event, data); }
+    emit(event, data) {
+        if (!this.io) return;
+        if (this.socketRoom) {
+            this.io.to(this.socketRoom).emit(event, data);
+            return;
+        }
+        this.io.emit(event, data);
+    }
 
     emitProgress() {
         const now = Date.now();
@@ -74,7 +85,7 @@ class WhatsAppClient {
 
     log(level, category, message, data = null) {
         try {
-            db.logs.add.run(level, category, message, data ? JSON.stringify(data) : null);
+            this.db.logs.add.run(level, category, message, data ? JSON.stringify(data) : null);
         } catch (e) {}
         console.log('[' + level.toUpperCase() + '] [' + category + '] ' + message);
     }
@@ -82,8 +93,8 @@ class WhatsAppClient {
     async initialize() {
         if (this.client) await this.destroy();
         this.client = new Client({
-            authStrategy: new LocalAuth({ dataPath: config.SESSION_DIR }),
-            puppeteer: { headless: true, args: config.PUPPETEER_ARGS }
+            authStrategy: new LocalAuth({ dataPath: this.config.SESSION_DIR }),
+            puppeteer: { headless: true, args: this.config.PUPPETEER_ARGS }
         });
         this.setupEventHandlers();
         this.log('info', 'whatsapp', 'Initializing WhatsApp client...');
@@ -104,8 +115,7 @@ class WhatsAppClient {
             this.emit('ready', { pushname: this.info.pushname, wid: this.info.wid.user });
             this.log('info', 'whatsapp', 'Connected as ' + this.info.pushname);
 
-            const drive = getDrive();
-            if (drive) drive.initialize().catch(() => {});
+            if (this.drive) this.drive.initialize().catch(() => {});
 
             if (this.settings.syncOnConnect) {
                 setTimeout(() => this.fullSync(), CONSTANTS.SYNC_DELAY_MS);
@@ -160,14 +170,13 @@ class WhatsAppClient {
         try {
             const ext = (media.mimetype.split('/')[1] || 'bin').split(';')[0];
             const filename = timestamp + '_' + msgId.replace(/[^a-zA-Z0-9]/g, '_') + '.' + ext;
-            const localPath = path.join(config.MEDIA_DIR, filename);
+            const localPath = path.join(this.config.MEDIA_DIR, filename);
             fs.writeFileSync(localPath, Buffer.from(media.data, 'base64'));
 
-            const drive = getDrive();
-            if (this.settings.uploadToDrive && drive) {
+            if (this.settings.uploadToDrive && this.drive) {
                 try {
-                    if (await drive.initialize()) {
-                        const result = await drive.uploadFile(localPath, media.mimetype);
+                    if (await this.drive.initialize()) {
+                        const result = await this.drive.uploadFile(localPath, media.mimetype);
                         if (result) {
                             fs.unlinkSync(localPath);
                             return { mediaPath: null, mediaUrl: result.downloadLink };
@@ -198,92 +207,123 @@ class WhatsAppClient {
         try {
             const chat = await msg.getChat();
             const contact = await this.getContactCached(msg);
-            let mediaPath = null, mediaUrl = null;
 
-            if (this.settings.downloadMedia && msg.hasMedia) {
+            const msgData = {
+                messageId: msg.id._serialized,
+                chatId: chat.id._serialized,
+                from: msg.from,
+                to: msg.to,
+                fromName: fromMe ? (this.info ? this.info.pushname : 'Me') : this.getSenderName(contact, msg),
+                fromNumber: fromMe ? (this.info?.wid?.user || this.extractPhoneFromId(msg.from)) : this.getSenderNumber(contact, msg),
+                body: msg.body,
+                type: msg.type,
+                timestamp: msg.timestamp * 1000,
+                isGroup: chat.isGroup,
+                isFromMe: fromMe
+            };
+
+            if (msg.hasMedia && this.settings.downloadMedia) {
                 const media = await this.downloadMediaWithRetry(msg);
                 if (media) {
-                    const saved = await this.saveMedia(media, msg.id._serialized, Date.now());
-                    mediaPath = saved.mediaPath;
-                    mediaUrl = saved.mediaUrl;
+                    const mediaResult = await this.saveMedia(media, msg.id._serialized, msg.timestamp * 1000);
+                    msgData.mediaPath = mediaResult.mediaPath;
+                    msgData.mediaUrl = mediaResult.mediaUrl;
+                    msgData.mediaMimetype = media.mimetype;
                 }
             }
 
-            const fromName = this.getSenderName(contact, msg);
-
-            db.messages.save.run(
-                msg.id._serialized, chat.id._serialized, msg.from, msg.to,
-                fromName, msg.body || '', msg.type, mediaPath, mediaUrl,
-                null, chat.isGroup ? 1 : 0, fromMe ? 1 : 0, msg.timestamp * 1000
+            this.db.messages.save.run(
+                msgData.messageId,
+                msgData.chatId,
+                msgData.fromNumber,
+                msgData.to,
+                msgData.fromName,
+                msgData.body,
+                msgData.type,
+                msgData.mediaPath,
+                msgData.mediaUrl,
+                msgData.mediaMimetype,
+                msgData.isGroup ? 1 : 0,
+                msgData.isFromMe ? 1 : 0,
+                msgData.timestamp
             );
 
-            db.chats.upsert.run(
+            this.db.chats.upsert.run(
                 chat.id._serialized,
-                chat.name || (contact ? contact.pushname : null) || chat.id.user,
-                chat.isGroup ? 1 : 0, null, (msg.body || '').substring(0, 100),
-                msg.timestamp * 1000, 0
+                chat.name || this.extractPhoneFromId(chat.id.user),
+                chat.isGroup ? 1 : 0,
+                null,
+                msgData.body.substring(0, 100),
+                msgData.timestamp,
+                chat.unreadCount || 0
             );
-
-            const msgData = {
-                id: msg.id._serialized, chatId: chat.id._serialized,
-                from: msg.from, to: msg.to, fromName, body: msg.body || '',
-                type: msg.type, mediaUrl, isGroup: chat.isGroup,
-                isFromMe: fromMe, timestamp: msg.timestamp * 1000
-            };
 
             this.emit('message', msgData);
-            return { msg, chat, contact, msgData };
+            return { msgData, chat, msg, contact };
         } catch (e) {
+            this.log('error', 'message', 'Failed to process message: ' + e.message);
             return null;
         }
     }
 
     async syncChat(chat) {
         try {
-            const contact = !chat.isGroup ? await chat.getContact().catch(() => null) : null;
-            const chatName = chat.name || (contact ? contact.pushname : null) || chat.id.user;
-
-            db.chats.upsert.run(
-                chat.id._serialized, chatName, chat.isGroup ? 1 : 0,
-                null, '', Date.now(), chat.unreadCount || 0
-            );
-
+            const chatName = chat.name || chat.id.user;
             const messages = await chat.fetchMessages({ limit: this.settings.maxMessagesPerChat });
 
             for (const msg of messages) {
-                try {
-                    let mediaPath = null, mediaUrl = null;
+                const contact = await this.getContactCached(msg);
 
-                    if (this.settings.downloadMediaOnSync && msg.hasMedia) {
-                        const media = await this.downloadMediaWithRetry(msg, CONSTANTS.SYNC_MAX_RETRIES, CONSTANTS.SYNC_DOWNLOAD_TIMEOUT_MS);
-                        if (media) {
-                            const saved = await this.saveMedia(media, msg.id._serialized, msg.timestamp);
-                            mediaPath = saved.mediaPath;
-                            mediaUrl = saved.mediaUrl;
-                        }
+            const msgData = {
+                messageId: msg.id._serialized,
+                chatId: chat.id._serialized,
+                from: msg.from,
+                to: msg.to,
+                fromName: msg.fromMe ? (this.info ? this.info.pushname : 'Me') : this.getSenderName(contact, msg),
+                fromNumber: msg.fromMe ? (this.info?.wid?.user || this.extractPhoneFromId(msg.from)) : this.getSenderNumber(contact, msg),
+                body: msg.body,
+                type: msg.type,
+                timestamp: msg.timestamp * 1000,
+                isGroup: chat.isGroup,
+                isFromMe: msg.fromMe
+                };
+
+                if (msg.hasMedia && (this.settings.downloadMediaOnSync || this.settings.downloadMedia)) {
+                    const media = await this.downloadMediaWithRetry(msg, CONSTANTS.SYNC_MAX_RETRIES, CONSTANTS.SYNC_DOWNLOAD_TIMEOUT_MS);
+                    if (media) {
+                        const mediaResult = await this.saveMedia(media, msg.id._serialized, msg.timestamp * 1000);
+                        msgData.mediaPath = mediaResult.mediaPath;
+                        msgData.mediaUrl = mediaResult.mediaUrl;
+                        msgData.mediaMimetype = media.mimetype;
                     }
+                }
 
-                    let senderName;
-                    const senderId = msg.from || msg.author;
-                    if (this.contactCache.has(senderId)) {
-                        senderName = this.getSenderName(this.contactCache.get(senderId), msg);
-                    } else {
-                        senderName = this.extractPhoneFromId(msg.from);
-                    }
-
-                    db.messages.save.run(
-                        msg.id._serialized, chat.id._serialized, msg.from || '', msg.to || '',
-                        senderName, msg.body || '', msg.type || 'chat', mediaPath, mediaUrl,
-                        null, chat.isGroup ? 1 : 0, msg.fromMe ? 1 : 0, msg.timestamp * 1000
-                    );
-                } catch (e) {}
+                this.db.messages.save.run(
+                    msgData.messageId,
+                    msgData.chatId,
+                    msgData.fromNumber,
+                    msgData.to,
+                    msgData.fromName,
+                    msgData.body,
+                    msgData.type,
+                    msgData.mediaPath,
+                    msgData.mediaUrl,
+                    msgData.mediaMimetype,
+                    msgData.isGroup ? 1 : 0,
+                    msgData.isFromMe ? 1 : 0,
+                    msgData.timestamp
+                );
             }
 
             if (messages.length > 0) {
                 const lastMsg = messages[messages.length - 1];
-                db.chats.upsert.run(
-                    chat.id._serialized, chatName, chat.isGroup ? 1 : 0, null,
-                    (lastMsg.body || '').substring(0, 100), lastMsg.timestamp * 1000,
+                this.db.chats.upsert.run(
+                    chat.id._serialized,
+                    chatName,
+                    chat.isGroup ? 1 : 0,
+                    null,
+                    (lastMsg.body || '').substring(0, 100),
+                    lastMsg.timestamp * 1000,
                     chat.unreadCount || 0
                 );
             }
@@ -373,9 +413,11 @@ class WhatsAppClient {
 
     getStatus() {
         return {
-            status: this.status, qrCode: this.qrCode,
+            status: this.status,
+            qrCode: this.qrCode,
             info: this.info ? { pushname: this.info.pushname, wid: this.info.wid.user, platform: this.info.platform } : null,
-            syncProgress: this.syncProgress, settings: this.settings
+            syncProgress: this.syncProgress,
+            settings: this.settings
         };
     }
 
@@ -399,4 +441,8 @@ class WhatsAppClient {
     }
 }
 
-module.exports = new WhatsAppClient();
+function createWhatsAppClient(config, db, drive) {
+    return new WhatsAppClient(config, db, drive);
+}
+
+module.exports = { createWhatsAppClient };
