@@ -50,7 +50,9 @@ class SchedulerService {
         }
 
         try {
-            const pending = this.db.scheduled.getPending.all();
+            const maxRetries = this.config.SCHEDULER_MAX_RETRIES || 5;
+            const baseDelayMs = this.config.SCHEDULER_RETRY_BASE_MS || 60000;
+            const pending = this.db.scheduled.getPending.all(maxRetries);
 
             for (const msg of pending) {
                 try {
@@ -64,9 +66,25 @@ class SchedulerService {
 
                     console.log('Scheduled message sent:', msg.id);
                 } catch (error) {
+                    const nextRetryCount = (msg.retry_count || 0) + 1;
+                    const delayMs = baseDelayMs * Math.pow(2, Math.max(nextRetryCount - 1, 0));
+                    const nextAttemptAt = new Date(Date.now() + delayMs).toISOString();
+
+                    this.db.scheduled.recordFailure.run(
+                        nextRetryCount,
+                        nextAttemptAt,
+                        error.message,
+                        msg.id
+                    );
+
                     this.db.logs.add.run('error', 'scheduler',
                         'Failed to send scheduled message',
-                        JSON.stringify({ id: msg.id, error: error.message })
+                        JSON.stringify({
+                            id: msg.id,
+                            error: error.message,
+                            retryCount: nextRetryCount,
+                            nextAttemptAt
+                        })
                     );
                     console.error('Failed to send scheduled message:', msg.id, error.message);
                 }

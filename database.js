@@ -71,6 +71,9 @@ function createDatabase(config) {
         scheduled_at DATETIME NOT NULL,
         is_sent INTEGER DEFAULT 0,
         sent_at DATETIME,
+        retry_count INTEGER DEFAULT 0,
+        next_attempt_at DATETIME,
+        last_error TEXT,
         is_recurring INTEGER DEFAULT 0,
         cron_expression TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -85,6 +88,9 @@ function createDatabase(config) {
         last_triggered_at DATETIME,
         success_count INTEGER DEFAULT 0,
         fail_count INTEGER DEFAULT 0,
+        last_error TEXT,
+        last_status INTEGER,
+        last_duration_ms INTEGER,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -187,6 +193,48 @@ function createDatabase(config) {
         })();
     });
 
+    try {
+        db.exec("ALTER TABLE scheduled_messages ADD COLUMN retry_count INTEGER DEFAULT 0");
+        console.log('Database migration: Added retry_count column');
+    } catch (e) {
+        // Column already exists
+    }
+
+    try {
+        db.exec("ALTER TABLE scheduled_messages ADD COLUMN next_attempt_at DATETIME");
+        console.log('Database migration: Added next_attempt_at column');
+    } catch (e) {
+        // Column already exists
+    }
+
+    try {
+        db.exec("ALTER TABLE scheduled_messages ADD COLUMN last_error TEXT");
+        console.log('Database migration: Added last_error column');
+    } catch (e) {
+        // Column already exists
+    }
+
+    try {
+        db.exec("ALTER TABLE webhooks ADD COLUMN last_error TEXT");
+        console.log('Database migration: Added webhooks.last_error column');
+    } catch (e) {
+        // Column already exists
+    }
+
+    try {
+        db.exec("ALTER TABLE webhooks ADD COLUMN last_status INTEGER");
+        console.log('Database migration: Added webhooks.last_status column');
+    } catch (e) {
+        // Column already exists
+    }
+
+    try {
+        db.exec("ALTER TABLE webhooks ADD COLUMN last_duration_ms INTEGER");
+        console.log('Database migration: Added webhooks.last_duration_ms column');
+    } catch (e) {
+        // Column already exists
+    }
+
     console.log('Database initialized:', config.DB_PATH);
 
     // Prepared statements
@@ -196,7 +244,7 @@ function createDatabase(config) {
         (message_id, chat_id, from_number, to_number, from_name, body, type, media_path, media_url, media_mimetype, is_group, is_from_me, timestamp)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `),
-    getByChatId: db.prepare(`SELECT * FROM messages WHERE chat_id = ? ORDER BY timestamp DESC LIMIT ?`),
+    getByChatId: db.prepare(`SELECT * FROM messages WHERE chat_id = ? ORDER BY timestamp DESC LIMIT ? OFFSET ?`),
     getAll: db.prepare(`SELECT * FROM messages ORDER BY timestamp DESC LIMIT ? OFFSET ?`),
     search: db.prepare(`SELECT * FROM messages WHERE body LIKE ? ORDER BY timestamp DESC LIMIT 100`),
     getStats: db.prepare(`
@@ -219,7 +267,8 @@ function createDatabase(config) {
             unread_count = excluded.unread_count, updated_at = datetime('now')
     `),
     getAll: db.prepare(`SELECT * FROM chats ORDER BY last_message_at DESC`),
-    getById: db.prepare(`SELECT * FROM chats WHERE chat_id = ?`)
+    getById: db.prepare(`SELECT * FROM chats WHERE chat_id = ?`),
+    search: db.prepare(`SELECT * FROM chats WHERE name LIKE ? ORDER BY last_message_at DESC LIMIT ? OFFSET ?`)
     };
 
     const autoReplies = {
@@ -235,10 +284,31 @@ function createDatabase(config) {
 
     const scheduled = {
     getAll: db.prepare('SELECT * FROM scheduled_messages ORDER BY scheduled_at ASC'),
-    getPending: db.prepare(`SELECT * FROM scheduled_messages WHERE is_sent = 0 AND datetime(scheduled_at) <= datetime('now')`),
+    getPending: db.prepare(`
+        SELECT * FROM scheduled_messages
+        WHERE is_sent = 0
+          AND datetime(scheduled_at) <= datetime('now')
+          AND (next_attempt_at IS NULL OR datetime(next_attempt_at) <= datetime('now'))
+          AND retry_count < ?
+    `),
     getById: db.prepare('SELECT * FROM scheduled_messages WHERE id = ?'),
     create: db.prepare(`INSERT INTO scheduled_messages (chat_id, chat_name, message, scheduled_at, is_recurring, cron_expression) VALUES (?, ?, ?, ?, ?, ?)`),
-    markSent: db.prepare(`UPDATE scheduled_messages SET is_sent = 1, sent_at = datetime('now') WHERE id = ?`),
+    markSent: db.prepare(`
+        UPDATE scheduled_messages
+        SET is_sent = 1,
+            sent_at = datetime('now'),
+            retry_count = 0,
+            next_attempt_at = NULL,
+            last_error = NULL
+        WHERE id = ?
+    `),
+    recordFailure: db.prepare(`
+        UPDATE scheduled_messages
+        SET retry_count = ?,
+            next_attempt_at = ?,
+            last_error = ?
+        WHERE id = ?
+    `),
     delete: db.prepare('DELETE FROM scheduled_messages WHERE id = ?')
     };
 
@@ -249,8 +319,24 @@ function createDatabase(config) {
     create: db.prepare(`INSERT INTO webhooks (name, url, events, is_active) VALUES (?, ?, ?, ?)`),
     update: db.prepare(`UPDATE webhooks SET name = ?, url = ?, events = ?, is_active = ? WHERE id = ?`),
     delete: db.prepare('DELETE FROM webhooks WHERE id = ?'),
-    recordSuccess: db.prepare(`UPDATE webhooks SET success_count = success_count + 1, last_triggered_at = datetime('now') WHERE id = ?`),
-    recordFail: db.prepare(`UPDATE webhooks SET fail_count = fail_count + 1, last_triggered_at = datetime('now') WHERE id = ?`)
+    recordSuccess: db.prepare(`
+        UPDATE webhooks
+        SET success_count = success_count + 1,
+            last_triggered_at = datetime('now'),
+            last_error = NULL,
+            last_status = ?,
+            last_duration_ms = ?
+        WHERE id = ?
+    `),
+    recordFail: db.prepare(`
+        UPDATE webhooks
+        SET fail_count = fail_count + 1,
+            last_triggered_at = datetime('now'),
+            last_error = ?,
+            last_status = ?,
+            last_duration_ms = ?
+        WHERE id = ?
+    `)
     };
 
     const scripts = {
