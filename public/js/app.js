@@ -9,6 +9,8 @@ let chats = [];
 let monacoEditor = null;
 let editingScriptId = null;
 let accounts = [];
+let roles = [];
+let users = [];
 let activeAccountId = localStorage.getItem('activeAccountId');
 let settings = {
     downloadMedia: true,
@@ -1245,6 +1247,11 @@ function showModal(feature) {
             content = getWebhooksContent();
             loadWebhooksData();
             break;
+        case 'users':
+            title = 'Kullanicilar & Roller';
+            content = getUsersContent();
+            loadUsersData();
+            break;
         case 'drive':
             title = 'Google Drive';
             content = getDriveContent();
@@ -1471,6 +1478,159 @@ async function loadWebhooksData() {
         ).join('');
     } catch (err) {
         console.error('Webhooks load error:', err);
+    }
+}
+
+// Users & Roles Content
+function getUsersContent() {
+    return '<div class="form-card">' +
+        '<h4>Rol Ekle</h4>' +
+        '<form id="roleFormModal" onsubmit="submitRole(event)">' +
+            '<div class="form-group"><label class="form-label">Rol Adi</label><input type="text" class="form-input" id="roleNameModal" placeholder="admin" required></div>' +
+            '<div class="form-group"><label class="form-label">Aciklama</label><input type="text" class="form-input" id="roleDescModal" placeholder="Yetki aciklamasi"></div>' +
+            '<button type="submit" class="btn btn-primary">Rol Ekle</button>' +
+        '</form>' +
+        '<div id="rolesListModal" class="list-grid"></div>' +
+    '</div>' +
+    '<div class="form-card">' +
+        '<h4>Kullanici Ekle</h4>' +
+        '<form id="userFormModal" onsubmit="submitUser(event)">' +
+            '<div class="form-group"><label class="form-label">Kullanici Adi</label><input type="text" class="form-input" id="userNameModal" placeholder="kullanici" required></div>' +
+            '<div class="form-group"><label class="form-label">Gorunen Isim</label><input type="text" class="form-input" id="userDisplayModal" placeholder="Ad Soyad"></div>' +
+            '<div class="form-group"><label class="form-label">Sifre</label><input type="password" class="form-input" id="userPasswordModal" required></div>' +
+            '<div class="form-group"><label class="form-label">Rol</label><select class="form-input" id="userRoleModal"></select></div>' +
+            '<button type="submit" class="btn btn-primary">Kullanici Ekle</button>' +
+        '</form>' +
+        '<div id="usersListModal" class="list-grid"></div>' +
+    '</div>';
+}
+
+async function loadUsersData() {
+    try {
+        roles = await api('api/roles');
+        users = await api('api/users');
+        renderRolesList();
+        renderUsersList();
+        populateRoleSelect();
+    } catch (err) {
+        console.error('Users load error:', err);
+        showToast('Yetki bilgileri yuklenemedi: ' + err.message, 'error');
+    }
+}
+
+function populateRoleSelect() {
+    const select = document.getElementById('userRoleModal');
+    if (!select) return;
+    select.innerHTML = roles.map(role => (
+        '<option value="' + role.id + '">' + escapeHtml(role.name) + '</option>'
+    )).join('');
+}
+
+function renderRolesList() {
+    const container = document.getElementById('rolesListModal');
+    if (!container) return;
+    if (!roles.length) {
+        container.innerHTML = '<p style="color: var(--text-secondary)">Rol bulunamadi</p>';
+        return;
+    }
+    container.innerHTML = roles.map(role =>
+        '<div class="settings-item">' +
+            '<div class="info" style="flex:1;">' +
+                '<div class="title">' + escapeHtml(role.name) + '</div>' +
+                '<div class="subtitle">' + escapeHtml(role.description || '') + '</div>' +
+            '</div>' +
+            '<button class="icon-btn" onclick="deleteRole(' + role.id + ')" title="Sil">' +
+                '<i class="bi bi-trash" style="color: #f15c6d;"></i>' +
+            '</button>' +
+        '</div>'
+    ).join('');
+}
+
+function renderUsersList() {
+    const container = document.getElementById('usersListModal');
+    if (!container) return;
+    if (!users.length) {
+        container.innerHTML = '<p style="color: var(--text-secondary)">Kullanici bulunamadi</p>';
+        return;
+    }
+    container.innerHTML = users.map(user => {
+        const roleOptions = roles.map(role =>
+            '<option value="' + role.id + '"' + (role.name === user.role ? ' selected' : '') + '>' + escapeHtml(role.name) + '</option>'
+        ).join('');
+        return '<div class="settings-item">' +
+            '<div class="info" style="flex:1;">' +
+                '<div class="title">' + escapeHtml(user.display_name || user.username) + '</div>' +
+                '<div class="subtitle">@' + escapeHtml(user.username) + '</div>' +
+            '</div>' +
+            '<select class="form-input role-select" onchange="assignUserRole(' + user.id + ', this.value)">' +
+                roleOptions +
+            '</select>' +
+            '<button class="icon-btn" onclick="deleteUser(' + user.id + ')" title="Sil">' +
+                '<i class="bi bi-trash" style="color: #f15c6d;"></i>' +
+            '</button>' +
+        '</div>';
+    }).join('');
+}
+
+async function submitRole(event) {
+    event.preventDefault();
+    const name = document.getElementById('roleNameModal').value;
+    const description = document.getElementById('roleDescModal').value;
+    try {
+        await api('api/roles', 'POST', { name, description });
+        document.getElementById('roleFormModal').reset();
+        await loadUsersData();
+        showToast('Rol eklendi', 'success');
+    } catch (err) {
+        showToast('Hata: ' + err.message, 'error');
+    }
+}
+
+async function deleteRole(roleId) {
+    if (!confirm('Rol silinsin mi?')) return;
+    try {
+        await api('api/roles/' + roleId, 'DELETE');
+        await loadUsersData();
+        showToast('Rol silindi', 'success');
+    } catch (err) {
+        showToast('Hata: ' + err.message, 'error');
+    }
+}
+
+async function submitUser(event) {
+    event.preventDefault();
+    const username = document.getElementById('userNameModal').value;
+    const display_name = document.getElementById('userDisplayModal').value;
+    const password = document.getElementById('userPasswordModal').value;
+    const roleId = document.getElementById('userRoleModal').value;
+    try {
+        await api('api/users', 'POST', { username, display_name, password, roleId });
+        document.getElementById('userFormModal').reset();
+        await loadUsersData();
+        showToast('Kullanici eklendi', 'success');
+    } catch (err) {
+        showToast('Hata: ' + err.message, 'error');
+    }
+}
+
+async function assignUserRole(userId, roleId) {
+    try {
+        await api('api/users/' + userId + '/role', 'PUT', { roleId });
+        await loadUsersData();
+        showToast('Rol guncellendi', 'success');
+    } catch (err) {
+        showToast('Hata: ' + err.message, 'error');
+    }
+}
+
+async function deleteUser(userId) {
+    if (!confirm('Kullanici silinsin mi?')) return;
+    try {
+        await api('api/users/' + userId, 'DELETE');
+        await loadUsersData();
+        showToast('Kullanici silindi', 'success');
+    } catch (err) {
+        showToast('Hata: ' + err.message, 'error');
     }
 }
 

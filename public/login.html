@@ -45,6 +45,9 @@
         </div>
         <h2 class="mb-4">WhatsApp Panel</h2>
         <form id="loginForm">
+            <div class="mb-3">
+                <input type="text" class="form-control form-control-lg" id="username" placeholder="Kullanici adi" required>
+            </div>
             <div class="mb-4">
                 <input type="password" class="form-control form-control-lg" id="password" placeholder="Sifre" required>
             </div>
@@ -58,6 +61,7 @@
     <script>
         document.getElementById('loginForm').addEventListener('submit', async (e) => {
             e.preventDefault();
+            const username = document.getElementById('username').value;
             const password = document.getElementById('password').value;
             const errorDiv = document.getElementById('error');
 
@@ -65,7 +69,7 @@
                 const response = await fetch('auth/login', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ password })
+                    body: JSON.stringify({ username, password })
                 });
 
                 const data = await response.json();

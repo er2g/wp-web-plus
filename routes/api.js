@@ -8,6 +8,8 @@ const accountManager = require('../services/accountManager');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const config = require('../config');
+const { hashPassword, passwordMeetsPolicy } = require('../services/passwords');
 
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
@@ -102,6 +104,16 @@ function requireAuth(req, res, next) {
     }
 }
 
+function requireRole(roles = []) {
+    return (req, res, next) => {
+        const role = req.session?.role;
+        if (!role || !roles.includes(role)) {
+            return res.status(403).json({ error: 'Insufficient permissions' });
+        }
+        return next();
+    };
+}
+
 router.use(requireAuth);
 router.use(accountManager.attachAccount.bind(accountManager));
 
@@ -121,7 +133,7 @@ router.get('/accounts', (req, res) => {
     });
 });
 
-router.post('/accounts', (req, res) => {
+router.post('/accounts', requireRole(['admin']), (req, res) => {
     const name = (req.body?.name || '').trim();
     if (!name) {
         return res.status(400).json({ error: 'Account name required' });
@@ -131,7 +143,7 @@ router.post('/accounts', (req, res) => {
     res.json({ success: true, account });
 });
 
-router.post('/accounts/select', (req, res) => {
+router.post('/accounts/select', requireRole(['admin']), (req, res) => {
     const accountId = req.body?.accountId;
     if (!accountId) {
         return res.status(400).json({ error: 'Account id required' });
@@ -260,7 +272,7 @@ router.get('/auto-replies', (req, res) => {
     res.json(req.account.db.autoReplies.getAll.all());
 });
 
-router.post('/auto-replies', (req, res) => {
+router.post('/auto-replies', requireRole(['admin', 'manager']), (req, res) => {
     const { trigger_word, response, match_type, is_active } = req.body;
     if (!trigger_word || !response) {
         return res.status(400).json({ error: 'trigger_word and response required' });
@@ -276,18 +288,18 @@ router.post('/auto-replies', (req, res) => {
     res.json({ success: true, id: result.lastInsertRowid });
 });
 
-router.put('/auto-replies/:id', (req, res) => {
+router.put('/auto-replies/:id', requireRole(['admin', 'manager']), (req, res) => {
     const { trigger_word, response, match_type, is_active } = req.body;
     req.account.db.autoReplies.update.run(trigger_word, response, match_type || 'contains', is_active ? 1 : 0, req.params.id);
     res.json({ success: true });
 });
 
-router.delete('/auto-replies/:id', (req, res) => {
+router.delete('/auto-replies/:id', requireRole(['admin', 'manager']), (req, res) => {
     req.account.db.autoReplies.delete.run(req.params.id);
     res.json({ success: true });
 });
 
-router.post('/auto-replies/:id/toggle', (req, res) => {
+router.post('/auto-replies/:id/toggle', requireRole(['admin', 'manager']), (req, res) => {
     const reply = req.account.db.autoReplies.getById.get(req.params.id);
     if (!reply) return res.status(404).json({ error: 'Not found' });
     req.account.db.autoReplies.toggle.run(reply.is_active ? 0 : 1, req.params.id);
@@ -553,6 +565,104 @@ router.post('/drive/upload', upload.single('file'), async (req, res) => {
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
+});
+
+// ============ USERS & ROLES ============
+router.get('/roles', requireRole(['admin']), (req, res) => {
+    res.json(req.account.db.roles.getAll.all());
+});
+
+router.post('/roles', requireRole(['admin']), (req, res) => {
+    const name = (req.body?.name || '').trim().toLowerCase();
+    const description = (req.body?.description || '').trim().slice(0, 120);
+    if (!name) {
+        return res.status(400).json({ error: 'Role name required' });
+    }
+    if (!/^[a-z0-9_-]{3,30}$/.test(name)) {
+        return res.status(400).json({ error: 'Invalid role name' });
+    }
+    if (req.account.db.roles.getByName.get(name)) {
+        return res.status(409).json({ error: 'Role already exists' });
+    }
+    const result = req.account.db.roles.create.run(name, description || null);
+    res.json({ success: true, id: result.lastInsertRowid });
+});
+
+router.delete('/roles/:id', requireRole(['admin']), (req, res) => {
+    const roleId = parseInt(req.params.id, 10);
+    if (Number.isNaN(roleId)) {
+        return res.status(400).json({ error: 'Invalid role id' });
+    }
+    const assignedCount = req.account.db.userRoles.countByRole.get(roleId).count;
+    if (assignedCount > 0) {
+        return res.status(400).json({ error: 'Role is assigned to users' });
+    }
+    req.account.db.roles.delete.run(roleId);
+    res.json({ success: true });
+});
+
+router.get('/users', requireRole(['admin']), (req, res) => {
+    res.json(req.account.db.users.getAll.all());
+});
+
+router.post('/users', requireRole(['admin']), (req, res) => {
+    const username = (req.body?.username || '').trim().toLowerCase();
+    const displayName = (req.body?.display_name || '').trim().slice(0, 80);
+    const password = req.body?.password || '';
+    const roleId = parseInt(req.body?.roleId, 10);
+
+    if (!username || !password || Number.isNaN(roleId)) {
+        return res.status(400).json({ error: 'username, password and roleId required' });
+    }
+    if (!/^[a-z0-9._-]{3,50}$/.test(username)) {
+        return res.status(400).json({ error: 'Invalid username' });
+    }
+    if (!passwordMeetsPolicy(password, config.PASSWORD_POLICY)) {
+        return res.status(400).json({ error: 'Password does not meet policy' });
+    }
+    if (req.account.db.users.getByUsername.get(username)) {
+        return res.status(409).json({ error: 'Username already exists' });
+    }
+    const role = req.account.db.roles.getById.get(roleId);
+    if (!role) {
+        return res.status(404).json({ error: 'Role not found' });
+    }
+
+    const { hash, salt } = hashPassword(password);
+    const result = req.account.db.users.create.run(username, displayName || username, hash, salt, 1);
+    req.account.db.userRoles.assign.run(result.lastInsertRowid, roleId);
+    res.json({ success: true, id: result.lastInsertRowid });
+});
+
+router.put('/users/:id/role', requireRole(['admin']), (req, res) => {
+    const userId = parseInt(req.params.id, 10);
+    const roleId = parseInt(req.body?.roleId, 10);
+    if (Number.isNaN(userId) || Number.isNaN(roleId)) {
+        return res.status(400).json({ error: 'Invalid id' });
+    }
+    const role = req.account.db.roles.getById.get(roleId);
+    if (!role) {
+        return res.status(404).json({ error: 'Role not found' });
+    }
+    const user = req.account.db.users.getById.get(userId);
+    if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+    }
+    req.account.db.userRoles.clear.run(userId);
+    req.account.db.userRoles.assign.run(userId, roleId);
+    res.json({ success: true });
+});
+
+router.delete('/users/:id', requireRole(['admin']), (req, res) => {
+    const userId = parseInt(req.params.id, 10);
+    if (Number.isNaN(userId)) {
+        return res.status(400).json({ error: 'Invalid user id' });
+    }
+    if (req.session?.userId === userId) {
+        return res.status(400).json({ error: 'Cannot delete active user' });
+    }
+    req.account.db.users.delete.run(userId);
+    res.json({ success: true });
 });
 
 module.exports = router;

@@ -1575,13 +1575,36 @@ body {
         max-width: 85%;
     }
 
-    .settings-panel {
-        width: 100%;
-        right: -100%;
-    }
+.settings-panel {
+    width: 100%;
+    right: -100%;
+}
 
-    .features-panel {
-        width: 100%;
-        left: -100%;
-    }
+.features-panel {
+    width: 100%;
+    left: -100%;
+}
+}
+
+.form-card {
+    background: var(--bg-secondary);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 16px;
+}
+
+.form-card h4 {
+    margin-bottom: 12px;
+}
+
+.list-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 16px;
+}
+
+.role-select {
+    min-width: 120px;
+    margin-right: 8px;
 }

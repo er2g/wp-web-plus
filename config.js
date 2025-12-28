@@ -17,6 +17,9 @@ module.exports = {
     // Authentication - Use environment variables for secrets
     SITE_PASSWORD: process.env.SITE_PASSWORD || 'changeme',
     SESSION_SECRET: process.env.SESSION_SECRET || 'change-this-secret-in-production',
+    ADMIN_BOOTSTRAP_USERNAME: process.env.ADMIN_BOOTSTRAP_USERNAME || 'admin',
+    ADMIN_BOOTSTRAP_PASSWORD: process.env.ADMIN_BOOTSTRAP_PASSWORD || process.env.SITE_PASSWORD || 'changeme',
+    ADMIN_BOOTSTRAP_NAME: process.env.ADMIN_BOOTSTRAP_NAME || 'Admin',
 
     // CORS Origins (required)
     CORS_ORIGINS: process.env.CORS_ORIGINS,
