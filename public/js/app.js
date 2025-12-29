@@ -23,7 +23,8 @@ let settings = {
     syncOnConnect: true,
     uploadToDrive: false,
     notifications: true,
-    sounds: true
+    sounds: true,
+    ghostMode: false
 };
 let uiPreferences = {
     accentColor: localStorage.getItem('uiAccent') || '',
@@ -182,6 +183,11 @@ async function loadAccounts() {
 
     if (activeAccountId && activeAccountId !== currentAccountId) {
         await api('api/accounts/select', 'POST', { accountId: activeAccountId });
+    }
+
+    // Mark as read if Ghost Mode is off
+    if (currentChat && !settings.ghostMode) {
+        api('api/chats/' + encodeURIComponent(currentChat) + '/mark-read', 'POST').catch(() => {});
     }
 
     renderAccountMenu();
@@ -729,7 +735,8 @@ function updateSettingsUI() {
         'toggleSyncOnConnect': settings.syncOnConnect,
         'toggleUploadToDrive': settings.uploadToDrive,
         'toggleNotifications': settings.notifications,
-        'toggleSounds': settings.sounds
+        'toggleSounds': settings.sounds,
+        'toggleGhostMode': settings.ghostMode
     };
 
     Object.entries(toggles).forEach(([id, value]) => {
@@ -902,7 +909,7 @@ function renderChatMessages(messages, options = {}) {
         const senderHtml = (!isMine && displayName) ?
             '<div class="sender-name">' + escapeHtml(formatSenderName(displayName)) + '</div>' : '';
 
-        const checkIcon = isMine ? '<i class="bi bi-check2-all check-icon read"></i>' : '';
+        const checkIcon = isMine ? getMessageStatusIcon(m.ack) : '';
 
         return '<div class="message-row ' + (isMine ? 'sent' : 'received') + '">' +
             '<div class="message-bubble ' + (isMine ? 'sent' : 'received') + '">' +
@@ -932,6 +939,10 @@ function selectChat(chatId, name) {
     currentChatTags = [];
     currentChatNotes = [];
     renderChatMeta();
+
+    if (!settings.ghostMode) {
+        api('api/chats/' + encodeURIComponent(chatId) + '/mark-read', 'POST').catch(() => {});
+    }
 
     const chatArea = document.getElementById('chatArea');
     const emptyChatView = document.getElementById('emptyChatView');
@@ -1242,7 +1253,7 @@ function appendNewMessage(msg) {
     const senderHtml = (!isMine && displayName) ?
         '<div class="sender-name">' + escapeHtml(formatSenderName(displayName)) + '</div>' : '';
 
-    const checkIcon = isMine ? '<i class="bi bi-check2-all check-icon read"></i>' : '';
+    const checkIcon = isMine ? getMessageStatusIcon(msg.ack || 0) : '';
     const time = msg.timestamp ? formatTime(msg.timestamp) : formatTime(Date.now());
 
     const messageHtml = '<div class="message-row ' + (isMine ? 'sent' : 'received') + '">' +
@@ -2367,6 +2378,14 @@ async function logout() {
 }
 
 // Helpers
+function getMessageStatusIcon(ack) {
+    // 0: Pending, 1: Sent, 2: Received, 3: Read, 4: Played
+    if (ack === 3 || ack === 4) return '<i class="bi bi-check2-all check-icon read" style="color: #53bdeb;"></i>';
+    if (ack === 2) return '<i class="bi bi-check2-all check-icon" style="color: #999;"></i>';
+    if (ack === 1) return '<i class="bi bi-check2 check-icon" style="color: #999;"></i>';
+    return '<i class="bi bi-clock check-icon" style="color: #999;"></i>';
+}
+
 function escapeHtml(text) {
     if (!text) return '';
     const div = document.createElement('div');

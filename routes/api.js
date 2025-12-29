@@ -262,6 +262,15 @@ router.post('/settings', requireRole(['admin', 'manager']), (req, res) => {
     res.json({ success: true, settings });
 });
 
+router.post('/chats/:id/mark-read', async (req, res) => {
+    try {
+        const result = await req.account.whatsapp.markAsRead(req.params.id);
+        res.json(result);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // ============ CHATS ============
 router.get('/chats', (req, res) => {
     const tagFilter = (req.query.tag || '').trim();

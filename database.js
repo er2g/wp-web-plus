@@ -39,6 +39,7 @@ function createDatabase(config) {
         media_mimetype TEXT,
         is_group INTEGER DEFAULT 0,
         is_from_me INTEGER DEFAULT 0,
+        ack INTEGER DEFAULT 0,
         timestamp INTEGER,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -294,6 +295,15 @@ function createDatabase(config) {
                     db.exec('ALTER TABLE auto_replies ADD COLUMN exclude_tag_id INTEGER');
                 }
             }
+        },
+        {
+            version: 7,
+            name: 'add_ack_to_messages',
+            apply: () => {
+                if (!columnExists('messages', 'ack')) {
+                    db.exec('ALTER TABLE messages ADD COLUMN ack INTEGER DEFAULT 0');
+                }
+            }
         }
     ];
 
@@ -365,9 +375,10 @@ function createDatabase(config) {
     const messages = {
         save: db.prepare(`
         INSERT OR REPLACE INTO messages
-        (message_id, chat_id, from_number, to_number, from_name, body, type, media_path, media_url, media_mimetype, is_group, is_from_me, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (message_id, chat_id, from_number, to_number, from_name, body, type, media_path, media_url, media_mimetype, is_group, is_from_me, ack, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `),
+        updateAck: db.prepare(`UPDATE messages SET ack = ? WHERE message_id = ?`),
         getByChatId: db.prepare(`SELECT * FROM messages WHERE chat_id = ? ORDER BY timestamp DESC LIMIT ? OFFSET ?`),
         getAll: db.prepare(`SELECT * FROM messages ORDER BY timestamp DESC LIMIT ? OFFSET ?`),
         search: db.prepare(`SELECT * FROM messages WHERE body LIKE ? ORDER BY timestamp DESC LIMIT 100`),
