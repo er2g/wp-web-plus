@@ -39,6 +39,7 @@ function createDatabase(config) {
         media_mimetype TEXT,
         is_group INTEGER DEFAULT 0,
         is_from_me INTEGER DEFAULT 0,
+        ack INTEGER DEFAULT 0,
         timestamp INTEGER,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -167,6 +168,7 @@ function createDatabase(config) {
         password_hash TEXT NOT NULL,
         password_salt TEXT NOT NULL,
         is_active INTEGER DEFAULT 1,
+        preferences TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -282,6 +284,36 @@ function createDatabase(config) {
                     db.exec('ALTER TABLE scheduled_messages ADD COLUMN template_id INTEGER');
                 }
             }
+        },
+        {
+            version: 6,
+            name: 'add_tags_to_auto_replies',
+            apply: () => {
+                if (!columnExists('auto_replies', 'required_tag_id')) {
+                    db.exec('ALTER TABLE auto_replies ADD COLUMN required_tag_id INTEGER');
+                }
+                if (!columnExists('auto_replies', 'exclude_tag_id')) {
+                    db.exec('ALTER TABLE auto_replies ADD COLUMN exclude_tag_id INTEGER');
+                }
+            }
+        },
+        {
+            version: 7,
+            name: 'add_ack_to_messages',
+            apply: () => {
+                if (!columnExists('messages', 'ack')) {
+                    db.exec('ALTER TABLE messages ADD COLUMN ack INTEGER DEFAULT 0');
+                }
+            }
+        },
+        {
+            version: 8,
+            name: 'add_preferences_to_users',
+            apply: () => {
+                if (!columnExists('users', 'preferences')) {
+                    db.exec('ALTER TABLE users ADD COLUMN preferences TEXT');
+                }
+            }
         }
     ];
 
@@ -353,9 +385,10 @@ function createDatabase(config) {
     const messages = {
         save: db.prepare(`
         INSERT OR REPLACE INTO messages
-        (message_id, chat_id, from_number, to_number, from_name, body, type, media_path, media_url, media_mimetype, is_group, is_from_me, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (message_id, chat_id, from_number, to_number, from_name, body, type, media_path, media_url, media_mimetype, is_group, is_from_me, ack, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `),
+        updateAck: db.prepare(`UPDATE messages SET ack = ? WHERE message_id = ?`),
         getByChatId: db.prepare(`SELECT * FROM messages WHERE chat_id = ? ORDER BY timestamp DESC LIMIT ? OFFSET ?`),
         getAll: db.prepare(`SELECT * FROM messages ORDER BY timestamp DESC LIMIT ? OFFSET ?`),
         search: db.prepare(`SELECT * FROM messages WHERE body LIKE ? ORDER BY timestamp DESC LIMIT 100`),
@@ -387,8 +420,8 @@ function createDatabase(config) {
         getAll: db.prepare('SELECT * FROM auto_replies ORDER BY created_at DESC'),
         getActive: db.prepare('SELECT * FROM auto_replies WHERE is_active = 1'),
         getById: db.prepare('SELECT * FROM auto_replies WHERE id = ?'),
-        create: db.prepare(`INSERT INTO auto_replies (trigger_word, response, template_id, match_type, is_active) VALUES (?, ?, ?, ?, ?)`),
-        update: db.prepare(`UPDATE auto_replies SET trigger_word = ?, response = ?, template_id = ?, match_type = ?, is_active = ? WHERE id = ?`),
+        create: db.prepare(`INSERT INTO auto_replies (trigger_word, response, template_id, match_type, is_active, required_tag_id, exclude_tag_id) VALUES (?, ?, ?, ?, ?, ?, ?)`),
+        update: db.prepare(`UPDATE auto_replies SET trigger_word = ?, response = ?, template_id = ?, match_type = ?, is_active = ?, required_tag_id = ?, exclude_tag_id = ? WHERE id = ?`),
         delete: db.prepare('DELETE FROM auto_replies WHERE id = ?'),
         incrementCount: db.prepare('UPDATE auto_replies SET reply_count = reply_count + 1 WHERE id = ?'),
         toggle: db.prepare('UPDATE auto_replies SET is_active = ? WHERE id = ?')
@@ -537,7 +570,8 @@ function createDatabase(config) {
         LEFT JOIN roles ON roles.id = user_roles.role_id
         WHERE users.username = ?
     `),
-        create: db.prepare('INSERT INTO users (username, display_name, password_hash, password_salt, is_active) VALUES (?, ?, ?, ?, ?)'),
+        create: db.prepare('INSERT INTO users (username, display_name, password_hash, password_salt, is_active, preferences) VALUES (?, ?, ?, ?, ?, ?)'),
+        updatePreferences: db.prepare('UPDATE users SET preferences = ? WHERE id = ?'),
         delete: db.prepare('DELETE FROM users WHERE id = ?'),
         count: db.prepare('SELECT COUNT(*) as count FROM users')
     };

@@ -23,11 +23,20 @@ let settings = {
     syncOnConnect: true,
     uploadToDrive: false,
     notifications: true,
-    sounds: true
+    sounds: true,
+    ghostMode: false
 };
 let uiPreferences = {
-    accentColor: localStorage.getItem('uiAccent') || '',
-    wallpaper: localStorage.getItem('uiWallpaper') || 'default'
+    accentColor: '',
+    wallpaper: 'default',
+    fontSize: '14.2',
+    compactMode: false,
+    bubbleStyle: 'rounded',
+    backgroundType: 'default',
+    backgroundImage: '',
+    backgroundGradient: '',
+    backgroundColor: '#efeae2',
+    backgroundOpacity: 100
 };
 let selectedAttachment = null;
 const MESSAGE_PAGE_SIZE = 50;
@@ -98,6 +107,8 @@ function updateThemeUI(theme) {
 
 async function initializeApp() {
     try {
+        // Load preferences from server first
+        await fetchUserPreferences();
         await loadAccounts();
         initSocket();
         loadInitialData();
@@ -108,16 +119,77 @@ async function initializeApp() {
 }
 
 // Customization Management
+async function fetchUserPreferences() {
+    try {
+        const response = await fetch('auth/check');
+        const data = await response.json();
+        if (data.preferences) {
+            uiPreferences = { ...uiPreferences, ...data.preferences };
+        } else {
+            // Fallback to localStorage if no server prefs
+            loadLocalPreferences();
+        }
+    } catch (e) {
+        console.error('Failed to fetch preferences', e);
+        loadLocalPreferences();
+    }
+    applyCustomizations();
+}
+
+function loadLocalPreferences() {
+    uiPreferences.accentColor = localStorage.getItem('uiAccent') || uiPreferences.accentColor;
+    uiPreferences.wallpaper = localStorage.getItem('uiWallpaper') || uiPreferences.wallpaper;
+    uiPreferences.fontSize = localStorage.getItem('uiFontSize') || uiPreferences.fontSize;
+    uiPreferences.compactMode = localStorage.getItem('uiCompactMode') === 'true';
+    uiPreferences.bubbleStyle = localStorage.getItem('uiBubbleStyle') || uiPreferences.bubbleStyle;
+
+    // New fields
+    uiPreferences.backgroundType = localStorage.getItem('uiBackgroundType') || uiPreferences.backgroundType;
+    uiPreferences.backgroundImage = localStorage.getItem('uiBackgroundImage') || uiPreferences.backgroundImage;
+    uiPreferences.backgroundGradient = localStorage.getItem('uiBackgroundGradient') || uiPreferences.backgroundGradient;
+    uiPreferences.backgroundColor = localStorage.getItem('uiBackgroundColor') || uiPreferences.backgroundColor;
+    uiPreferences.backgroundOpacity = localStorage.getItem('uiBackgroundOpacity') || uiPreferences.backgroundOpacity;
+}
+
 function loadCustomizations() {
+    // Deprecated, logic moved to fetchUserPreferences
     if (!uiPreferences.accentColor) {
         const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
         uiPreferences.accentColor = accent || '#00a884';
     }
-    if (uiPreferences.accentColor) {
-        applyAccentColor(uiPreferences.accentColor);
-    }
-    applyWallpaper(uiPreferences.wallpaper);
+    applyCustomizations();
+}
+
+function applyCustomizations() {
+    if (uiPreferences.accentColor) applyAccentColor(uiPreferences.accentColor);
+    applyWallpaper(uiPreferences.wallpaper); // Kept for legacy
+    applyFontSize(uiPreferences.fontSize);
+    applyCompactMode(uiPreferences.compactMode);
+    applyBubbleStyle(uiPreferences.bubbleStyle);
+    applyBackgroundSettings();
     updateCustomizationUI();
+}
+
+async function saveUserPreferences() {
+    // Save to local storage for offline/fallback
+    localStorage.setItem('uiAccent', uiPreferences.accentColor);
+    localStorage.setItem('uiWallpaper', uiPreferences.wallpaper);
+    localStorage.setItem('uiFontSize', uiPreferences.fontSize);
+    localStorage.setItem('uiCompactMode', uiPreferences.compactMode);
+    localStorage.setItem('uiBubbleStyle', uiPreferences.bubbleStyle);
+
+    localStorage.setItem('uiBackgroundType', uiPreferences.backgroundType);
+    localStorage.setItem('uiBackgroundImage', uiPreferences.backgroundImage);
+    localStorage.setItem('uiBackgroundGradient', uiPreferences.backgroundGradient);
+    localStorage.setItem('uiBackgroundColor', uiPreferences.backgroundColor);
+    localStorage.setItem('uiBackgroundOpacity', uiPreferences.backgroundOpacity);
+
+    // Sync with server
+    try {
+        await api('api/users/me/preferences', 'PUT', uiPreferences);
+    } catch (e) {
+        console.warn('Failed to sync preferences to server', e);
+    }
 }
 
 function updateCustomizationUI() {
@@ -125,22 +197,51 @@ function updateCustomizationUI() {
     if (accentInput && uiPreferences.accentColor) {
         accentInput.value = uiPreferences.accentColor;
     }
-    const wallpaperSelect = document.getElementById('wallpaperSelect');
+    const wallpaperSelect = document.getElementById('wallpaperSelect'); // Legacy
     if (wallpaperSelect) {
         wallpaperSelect.value = uiPreferences.wallpaper;
     }
+    const fontSizeRange = document.getElementById('fontSizeRange');
+    if (fontSizeRange) {
+        fontSizeRange.value = uiPreferences.fontSize;
+    }
+    const toggleCompactMode = document.getElementById('toggleCompactMode');
+    if (toggleCompactMode) {
+        toggleCompactMode.classList.toggle('active', uiPreferences.compactMode);
+    }
+    const bubbleStyleSelect = document.getElementById('bubbleStyleSelect');
+    if (bubbleStyleSelect) {
+        bubbleStyleSelect.value = uiPreferences.bubbleStyle;
+    }
+
+    // New Background UI
+    const bgTypeSelect = document.getElementById('bgTypeSelect');
+    if (bgTypeSelect) bgTypeSelect.value = uiPreferences.backgroundType;
+
+    const bgImageInput = document.getElementById('bgImageInput');
+    if (bgImageInput) bgImageInput.value = uiPreferences.backgroundImage;
+
+    const bgColorInput = document.getElementById('bgColorInput');
+    if (bgColorInput) bgColorInput.value = uiPreferences.backgroundColor;
+
+    const bgOpacityRange = document.getElementById('bgOpacityRange');
+    if (bgOpacityRange) bgOpacityRange.value = uiPreferences.backgroundOpacity;
+
+    // Show/Hide controls based on type
+    document.getElementById('bgImageControl').style.display = uiPreferences.backgroundType === 'image' ? 'block' : 'none';
+    document.getElementById('bgColorControl').style.display = (uiPreferences.backgroundType === 'solid' || uiPreferences.backgroundType === 'gradient') ? 'block' : 'none';
 }
 
 function updateAccentColor(color) {
     uiPreferences.accentColor = color;
-    localStorage.setItem('uiAccent', color);
     applyAccentColor(color);
+    saveUserPreferences();
 }
 
 function updateWallpaperChoice(value) {
     uiPreferences.wallpaper = value;
-    localStorage.setItem('uiWallpaper', value);
     applyWallpaper(value);
+    saveUserPreferences();
 }
 
 function applyAccentColor(color) {
@@ -155,6 +256,98 @@ function applyWallpaper(value) {
     const root = document.documentElement;
     const wallpaperKey = value || 'default';
     root.style.setProperty('--chat-wallpaper', `var(--wallpaper-${wallpaperKey})`);
+}
+
+function updateFontSize(size) {
+    uiPreferences.fontSize = size;
+    applyFontSize(size);
+    saveUserPreferences();
+}
+
+function applyFontSize(size) {
+    document.documentElement.style.setProperty('--font-size-base', size + 'px');
+}
+
+function toggleCompactMode() {
+    uiPreferences.compactMode = !uiPreferences.compactMode;
+    applyCompactMode(uiPreferences.compactMode);
+    updateCustomizationUI();
+    saveUserPreferences();
+}
+
+function applyCompactMode(isCompact) {
+    document.body.classList.toggle('compact', isCompact);
+}
+
+function updateBubbleStyle(style) {
+    uiPreferences.bubbleStyle = style;
+    applyBubbleStyle(style);
+    saveUserPreferences();
+}
+
+function applyBubbleStyle(style) {
+    const root = document.documentElement;
+    let radius = '7.5px';
+    if (style === 'boxy') radius = '2px';
+    else if (style === 'leaf') radius = '7.5px';
+    else if (style === 'rounded') radius = '18px';
+    root.style.setProperty('--bubble-radius', radius);
+}
+
+function updateBackgroundType(type) {
+    uiPreferences.backgroundType = type;
+    updateCustomizationUI(); // to toggle inputs
+    applyBackgroundSettings();
+    saveUserPreferences();
+}
+
+function updateBackgroundImage(url) {
+    uiPreferences.backgroundImage = url;
+    applyBackgroundSettings();
+    saveUserPreferences();
+}
+
+function updateBackgroundColor(color) {
+    uiPreferences.backgroundColor = color;
+    applyBackgroundSettings();
+    saveUserPreferences();
+}
+
+function updateBackgroundOpacity(opacity) {
+    uiPreferences.backgroundOpacity = opacity;
+    applyBackgroundSettings();
+    saveUserPreferences();
+}
+
+function applyBackgroundSettings() {
+    const root = document.documentElement;
+    const type = uiPreferences.backgroundType;
+    let bgValue = 'var(--wallpaper-default)'; // Default fallback
+
+    if (type === 'image' && uiPreferences.backgroundImage) {
+        bgValue = `url("${uiPreferences.backgroundImage}")`;
+    } else if (type === 'solid') {
+        bgValue = uiPreferences.backgroundColor;
+    } else if (type === 'gradient') {
+        // Simple gradient derived from base color
+        const color = uiPreferences.backgroundColor;
+        const color2 = adjustColor(color, -30);
+        bgValue = `linear-gradient(135deg, ${color} 0%, ${color2} 100%)`;
+    } else if (type === 'default') {
+        bgValue = 'var(--wallpaper-default)';
+    }
+
+    root.style.setProperty('--chat-wallpaper', bgValue);
+
+    // Opacity handling via overlay hack on body or specific container
+    // Since we use background-image on .chat-area, changing opacity on it affects text.
+    // Best way: use a pseudo-element or separate container.
+    // For now, let's assume direct assignment works for type, but opacity might need CSS change.
+    // If we simply set opacity on the element, text fades.
+    // We'll trust the CSS update to handle ::before overlay if possible, or skip opacity for now.
+    // Wait, the plan said "A pseudo-element ::before on .chat-area".
+    // I need to ensure CSS has that. I'll stick to variable setting here.
+    root.style.setProperty('--chat-bg-opacity', uiPreferences.backgroundOpacity / 100);
 }
 
 function adjustColor(hex, amount) {
@@ -182,6 +375,11 @@ async function loadAccounts() {
 
     if (activeAccountId && activeAccountId !== currentAccountId) {
         await api('api/accounts/select', 'POST', { accountId: activeAccountId });
+    }
+
+    // Mark as read if Ghost Mode is off
+    if (currentChat && !settings.ghostMode) {
+        api('api/chats/' + encodeURIComponent(currentChat) + '/mark-read', 'POST').catch(() => {});
     }
 
     renderAccountMenu();
@@ -729,7 +927,8 @@ function updateSettingsUI() {
         'toggleSyncOnConnect': settings.syncOnConnect,
         'toggleUploadToDrive': settings.uploadToDrive,
         'toggleNotifications': settings.notifications,
-        'toggleSounds': settings.sounds
+        'toggleSounds': settings.sounds,
+        'toggleGhostMode': settings.ghostMode
     };
 
     Object.entries(toggles).forEach(([id, value]) => {
@@ -902,7 +1101,7 @@ function renderChatMessages(messages, options = {}) {
         const senderHtml = (!isMine && displayName) ?
             '<div class="sender-name">' + escapeHtml(formatSenderName(displayName)) + '</div>' : '';
 
-        const checkIcon = isMine ? '<i class="bi bi-check2-all check-icon read"></i>' : '';
+        const checkIcon = isMine ? getMessageStatusIcon(m.ack) : '';
 
         return '<div class="message-row ' + (isMine ? 'sent' : 'received') + '">' +
             '<div class="message-bubble ' + (isMine ? 'sent' : 'received') + '">' +
@@ -932,6 +1131,10 @@ function selectChat(chatId, name) {
     currentChatTags = [];
     currentChatNotes = [];
     renderChatMeta();
+
+    if (!settings.ghostMode) {
+        api('api/chats/' + encodeURIComponent(chatId) + '/mark-read', 'POST').catch(() => {});
+    }
 
     const chatArea = document.getElementById('chatArea');
     const emptyChatView = document.getElementById('emptyChatView');
@@ -1242,7 +1445,7 @@ function appendNewMessage(msg) {
     const senderHtml = (!isMine && displayName) ?
         '<div class="sender-name">' + escapeHtml(formatSenderName(displayName)) + '</div>' : '';
 
-    const checkIcon = isMine ? '<i class="bi bi-check2-all check-icon read"></i>' : '';
+    const checkIcon = isMine ? getMessageStatusIcon(msg.ack || 0) : '';
     const time = msg.timestamp ? formatTime(msg.timestamp) : formatTime(Date.now());
 
     const messageHtml = '<div class="message-row ' + (isMine ? 'sent' : 'received') + '">' +
@@ -1492,7 +1695,10 @@ function getDashboardContent() {
 
 // Scripts Content
 function getScriptsContent() {
-    return '<div style="margin-bottom: 16px;"><button class="btn btn-primary" onclick="showScriptEditor()"><i class="bi bi-plus"></i> Yeni Script</button></div>' +
+    return '<div style="margin-bottom: 16px; display: flex; gap: 10px;">' +
+        '<button class="btn btn-primary" onclick="showScriptEditor()"><i class="bi bi-plus"></i> Yeni Script</button>' +
+        '<button class="btn btn-secondary" onclick="openAiAssistant()" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border: none;"><i class="bi bi-stars"></i> AI Asistan</button>' +
+        '</div>' +
         '<div id="scriptsListModal"></div>';
 }
 
@@ -2364,6 +2570,14 @@ async function logout() {
 }
 
 // Helpers
+function getMessageStatusIcon(ack) {
+    // 0: Pending, 1: Sent, 2: Received, 3: Read, 4: Played
+    if (ack === 3 || ack === 4) return '<i class="bi bi-check2-all check-icon read" style="color: #53bdeb;"></i>';
+    if (ack === 2) return '<i class="bi bi-check2-all check-icon" style="color: #999;"></i>';
+    if (ack === 1) return '<i class="bi bi-check2 check-icon" style="color: #999;"></i>';
+    return '<i class="bi bi-clock check-icon" style="color: #999;"></i>';
+}
+
 function escapeHtml(text) {
     if (!text) return '';
     const div = document.createElement('div');

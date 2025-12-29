@@ -6,6 +6,8 @@ class AutoReplyService {
     constructor(db, whatsapp) {
         this.db = db;
         this.whatsapp = whatsapp;
+        this.cooldowns = new Map();
+        this.COOLDOWN_MS = 10000; // 10 seconds
     }
 
     setWhatsApp(whatsapp) {
@@ -38,11 +40,35 @@ class AutoReplyService {
             return false;
         }
 
+        // Check cooldown
+        const lastReplyTime = this.cooldowns.get(msgData.chatId);
+        if (lastReplyTime && Date.now() - lastReplyTime < this.COOLDOWN_MS) {
+            return false;
+        }
+
         const rules = this.db.autoReplies.getActive.all();
         const messageBody = msgData.body.toLowerCase();
         const context = this.buildTemplateContext(msgData);
 
+        // Fetch chat tags if needed
+        let chatTagIds = null;
+
         for (const rule of rules) {
+            // Check Tag Constraints
+            if (rule.required_tag_id || rule.exclude_tag_id) {
+                if (chatTagIds === null) {
+                    const tags = this.db.contactTags.getByChatId.all(msgData.chatId);
+                    chatTagIds = new Set(tags.map(t => t.id));
+                }
+
+                if (rule.required_tag_id && !chatTagIds.has(rule.required_tag_id)) {
+                    continue;
+                }
+                if (rule.exclude_tag_id && chatTagIds.has(rule.exclude_tag_id)) {
+                    continue;
+                }
+            }
+
             const trigger = rule.trigger_word.toLowerCase();
             let matched = false;
 
@@ -94,6 +120,7 @@ class AutoReplyService {
 
                     await this.whatsapp.sendMessage(msgData.chatId, response);
                     this.db.autoReplies.incrementCount.run(rule.id);
+                    this.cooldowns.set(msgData.chatId, Date.now());
 
                     this.db.logs.add.run('info', 'auto-reply',
                         'Auto-reply sent for trigger: ' + rule.trigger_word,

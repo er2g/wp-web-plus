@@ -36,7 +36,8 @@ class WhatsAppClient {
             syncOnConnect: true,
             maxMessagesPerChat: 50,
             uploadToDrive: true,
-            downloadMediaOnSync: false
+            downloadMediaOnSync: false,
+            ghostMode: false
         };
         this.contactCache = new Map();
         this.lastProgressEmit = 0;
@@ -146,6 +147,15 @@ class WhatsAppClient {
         this.client.on('message_create', async (msg) => {
             if (msg.fromMe) await this.handleMessage(msg, true);
         });
+
+        this.client.on('message_ack', async (msg, ack) => {
+            try {
+                this.db.messages.updateAck.run(ack, msg.id._serialized);
+                this.emit('message_ack', { messageId: msg.id._serialized, ack });
+            } catch (e) {
+                // Ignore errors if message not found
+            }
+        });
     }
 
     async downloadMediaWithRetry(msg, maxRetries = CONSTANTS.DEFAULT_MAX_RETRIES, timeoutMs = CONSTANTS.DEFAULT_DOWNLOAD_TIMEOUT_MS) {
@@ -245,6 +255,7 @@ class WhatsAppClient {
                 msgData.mediaMimetype,
                 msgData.isGroup ? 1 : 0,
                 msgData.isFromMe ? 1 : 0,
+                msg.ack || 0,
                 msgData.timestamp
             );
 
@@ -311,6 +322,7 @@ class WhatsAppClient {
                     msgData.mediaMimetype,
                     msgData.isGroup ? 1 : 0,
                     msgData.isFromMe ? 1 : 0,
+                    msg.ack || 0,
                     msgData.timestamp
                 );
             }
@@ -404,6 +416,21 @@ class WhatsAppClient {
             }
             this.log('info', 'message', 'Message sent to ' + chatId);
             return result;
+        } catch (e) {
+            throw e;
+        }
+    }
+
+    async markAsRead(chatId) {
+        if (this.settings.ghostMode) {
+            return { success: false, reason: 'Ghost Mode is enabled' };
+        }
+        if (!this.isReady()) throw new Error('WhatsApp not connected');
+
+        try {
+            const chat = await this.client.getChatById(chatId);
+            await chat.sendSeen();
+            return { success: true };
         } catch (e) {
             throw e;
         }

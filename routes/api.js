@@ -10,6 +10,7 @@ const path = require('path');
 const fs = require('fs');
 const config = require('../config');
 const { hashPassword, passwordMeetsPolicy } = require('../services/passwords');
+const aiService = require('../services/aiService');
 
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
@@ -259,6 +260,15 @@ router.get('/settings', requireRole(['admin', 'manager']), (req, res) => {
 router.post('/settings', requireRole(['admin', 'manager']), (req, res) => {
     const settings = req.account.whatsapp.updateSettings(req.body);
     res.json({ success: true, settings });
+});
+
+router.post('/chats/:id/mark-read', async (req, res) => {
+    try {
+        const result = await req.account.whatsapp.markAsRead(req.params.id);
+        res.json(result);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 });
 
 // ============ CHATS ============
@@ -571,7 +581,7 @@ router.get('/auto-replies', (req, res) => {
 });
 
 router.post('/auto-replies', requireRole(['admin', 'manager']), (req, res) => {
-    const { trigger_word, response, template_id, match_type, is_active } = req.body;
+    const { trigger_word, response, template_id, match_type, is_active, required_tag_id, exclude_tag_id } = req.body;
     if (!trigger_word || (!response && !template_id)) {
         return res.status(400).json({ error: 'trigger_word and response or template_id required' });
     }
@@ -581,6 +591,13 @@ router.post('/auto-replies', requireRole(['admin', 'manager']), (req, res) => {
     }
     if (response && response.length > LIMITS.MESSAGE_LENGTH) {
         return res.status(400).json({ error: 'Response too long (max ' + LIMITS.MESSAGE_LENGTH + ' chars)' });
+    }
+    if (match_type === 'regex') {
+        try {
+            new RegExp(trigger_word);
+        } catch (e) {
+            return res.status(400).json({ error: 'Invalid regular expression' });
+        }
     }
     if (template_id) {
         const template = req.account.db.messageTemplates.getById.get(template_id);
@@ -593,13 +610,22 @@ router.post('/auto-replies', requireRole(['admin', 'manager']), (req, res) => {
         response || '',
         template_id || null,
         match_type || 'contains',
-        is_active !== false ? 1 : 0
+        is_active !== false ? 1 : 0,
+        required_tag_id || null,
+        exclude_tag_id || null
     );
     res.json({ success: true, id: result.lastInsertRowid });
 });
 
 router.put('/auto-replies/:id', requireRole(['admin', 'manager']), (req, res) => {
-    const { trigger_word, response, template_id, match_type, is_active } = req.body;
+    const { trigger_word, response, template_id, match_type, is_active, required_tag_id, exclude_tag_id } = req.body;
+    if (match_type === 'regex') {
+        try {
+            new RegExp(trigger_word);
+        } catch (e) {
+            return res.status(400).json({ error: 'Invalid regular expression' });
+        }
+    }
     if (template_id) {
         const template = req.account.db.messageTemplates.getById.get(template_id);
         if (!template) {
@@ -612,6 +638,8 @@ router.put('/auto-replies/:id', requireRole(['admin', 'manager']), (req, res) =>
         template_id || null,
         match_type || 'contains',
         is_active ? 1 : 0,
+        required_tag_id || null,
+        exclude_tag_id || null,
         req.params.id
     );
     res.json({ success: true });
@@ -813,6 +841,19 @@ router.post('/scripts/test', requireRole(['admin']), async (req, res) => {
 
     const result = await req.account.scriptRunner.testScript(code, data);
     res.json(result);
+});
+
+router.post('/ai/generate-script', requireRole(['admin']), async (req, res) => {
+    try {
+        const { prompt } = req.body;
+        if (!prompt) {
+            return res.status(400).json({ error: 'Prompt is required' });
+        }
+        const script = await aiService.generateScript(prompt);
+        res.json({ success: true, script });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 });
 
 router.get('/scripts/:id/logs', requireRole(['admin']), (req, res) => {
@@ -1175,6 +1216,20 @@ router.delete('/users/:id', requireRole(['admin']), (req, res) => {
         return res.status(400).json({ error: 'Cannot delete active user' });
     }
     req.account.db.users.delete.run(userId);
+    res.json({ success: true });
+});
+
+router.put('/users/me/preferences', (req, res) => {
+    const userId = req.session.userId;
+    if (!userId) {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    const preferences = req.body;
+    if (!preferences) {
+        return res.status(400).json({ error: 'Preferences required' });
+    }
+    const preferencesJson = JSON.stringify(preferences);
+    req.account.db.users.updatePreferences.run(preferencesJson, userId);
     res.json({ success: true });
 });
 
