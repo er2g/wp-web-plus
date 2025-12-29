@@ -1,22 +1,44 @@
 const express = require('express');
 const router = express.Router();
+const { z } = require('zod');
 
 const { validateChatId } = require('../../lib/apiValidation');
 const { sendError } = require('../../lib/httpResponses');
+const { validate } = require('../middleware/validate');
+
+const intLike = (message) => z.preprocess(
+    (value) => {
+        if (value === undefined || value === null || value === '') return value;
+        const parsed = parseInt(String(value), 10);
+        return Number.isFinite(parsed) ? parsed : value;
+    },
+    z.number({
+        required_error: message,
+        invalid_type_error: message
+    }).int().positive(message)
+);
+
+const chatIdParamSchema = z.object({
+    id: z.preprocess(
+        (value) => (typeof value === 'string' ? value.trim() : value),
+        z.string({
+            required_error: 'Invalid chatId format',
+            invalid_type_error: 'Invalid chatId format'
+        }).refine(validateChatId, { message: 'Invalid chatId format' })
+    )
+}).strict();
+
+const tagIdBodySchema = z.object({
+    tag_id: intLike('tag_id required')
+}).strict();
 
 router.get('/:id/tags', (req, res) => {
     return res.json(req.account.db.contactTags.getByChatId.all(req.params.id));
 });
 
-router.post('/:id/tags', (req, res) => {
-    const chatId = req.params.id;
-    const tagId = req.body?.tag_id;
-    if (!tagId) {
-        return sendError(req, res, 400, 'tag_id required');
-    }
-    if (!validateChatId(chatId)) {
-        return sendError(req, res, 400, 'Invalid chatId format');
-    }
+router.post('/:id/tags', validate({ params: chatIdParamSchema, body: tagIdBodySchema }), (req, res) => {
+    const chatId = req.validatedParams.id;
+    const tagId = req.validatedBody.tag_id;
     const tag = req.account.db.tags.getById.get(tagId);
     if (!tag) {
         return sendError(req, res, 404, 'Tag not found');

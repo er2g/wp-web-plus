@@ -1,29 +1,41 @@
 const express = require('express');
 const router = express.Router();
+const { z } = require('zod');
 
 const { createAccountUpload } = require('../middleware/upload');
 const { validateChatId, validateMessage } = require('../../lib/apiValidation');
 const { sendError } = require('../../lib/httpResponses');
+const { validate } = require('../middleware/validate');
 
 const upload = createAccountUpload();
 
-router.post('/', upload.single('media'), async (req, res) => {
+const sendBodySchema = z.object({
+    chatId: z.preprocess(
+        (value) => (typeof value === 'string' ? value.trim() : value),
+        z.string({
+            required_error: 'chatId and message or media required',
+            invalid_type_error: 'chatId and message or media required'
+        })
+            .min(1, 'chatId and message or media required')
+            .refine(validateChatId, { message: 'Invalid chatId format' })
+    ),
+    message: z.preprocess((value) => {
+        if (value === undefined || value === null) return undefined;
+        if (typeof value !== 'string') return value;
+        const trimmed = value.trim();
+        return trimmed ? trimmed : undefined;
+    }, z.string().refine(validateMessage, { message: 'Message too long or invalid' }).optional())
+});
+
+router.post('/', upload.single('media'), validate({ body: sendBodySchema }), async (req, res) => {
     try {
-        const body = req.body || {};
-        const chatId = body.chatId;
-        const message = body.message;
-        const trimmedMessage = (message || '').trim();
-        if (!chatId || (!trimmedMessage && !req.file)) {
+        const { chatId, message } = req.validatedBody;
+        const messageText = message || '';
+        if (!messageText && !req.file) {
             return sendError(req, res, 400, 'chatId and message or media required');
         }
-        if (!validateChatId(chatId)) {
-            return sendError(req, res, 400, 'Invalid chatId format');
-        }
-        if (trimmedMessage && !validateMessage(trimmedMessage)) {
-            return sendError(req, res, 400, 'Message too long or invalid');
-        }
         const options = req.file ? { mediaPath: req.file.path } : {};
-        const result = await req.account.whatsapp.sendMessage(chatId, trimmedMessage, options);
+        const result = await req.account.whatsapp.sendMessage(chatId, messageText, options);
         return res.json({ success: true, messageId: result.id._serialized });
     } catch (error) {
         return sendError(req, res, 500, error.message);

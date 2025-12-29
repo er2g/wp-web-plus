@@ -1,8 +1,53 @@
 const express = require('express');
 const router = express.Router();
+const { z } = require('zod');
 
 const { LIMITS, validateChatId, validateNote } = require('../../lib/apiValidation');
 const { sendError } = require('../../lib/httpResponses');
+const { validate } = require('../middleware/validate');
+
+const intLike = (message) => z.preprocess(
+    (value) => {
+        if (value === undefined || value === null || value === '') return value;
+        const parsed = parseInt(String(value), 10);
+        return Number.isFinite(parsed) ? parsed : value;
+    },
+    z.number({
+        required_error: message,
+        invalid_type_error: message
+    }).int().positive(message)
+);
+
+const chatIdParamSchema = z.object({
+    id: z.preprocess(
+        (value) => (typeof value === 'string' ? value.trim() : value),
+        z.string({
+            required_error: 'Invalid chatId format',
+            invalid_type_error: 'Invalid chatId format'
+        }).refine(validateChatId, { message: 'Invalid chatId format' })
+    )
+}).strict();
+
+const tagIdBodySchema = z.object({
+    tag_id: intLike('tag_id required')
+}).strict();
+
+const noteBodySchema = z.object({
+    content: z.preprocess(
+        (value) => (typeof value === 'string' ? value.trim() : value),
+        z.string({
+            required_error: 'content required',
+            invalid_type_error: 'content required'
+        })
+            .min(1, 'content required')
+            .refine(validateNote, { message: 'Note too long' })
+    )
+}).strict();
+
+const noteParamsSchema = z.object({
+    id: chatIdParamSchema.shape.id,
+    noteId: intLike('Invalid note id')
+}).strict();
 
 router.get('/', (req, res) => {
     const tagFilter = (req.query.tag || '').trim();
@@ -103,15 +148,9 @@ router.get('/:id/tags', (req, res) => {
     return res.json(req.account.db.contactTags.getByChatId.all(req.params.id));
 });
 
-router.post('/:id/tags', (req, res) => {
-    const chatId = req.params.id;
-    const tagId = req.body?.tag_id;
-    if (!tagId) {
-        return sendError(req, res, 400, 'tag_id required');
-    }
-    if (!validateChatId(chatId)) {
-        return sendError(req, res, 400, 'Invalid chatId format');
-    }
+router.post('/:id/tags', validate({ params: chatIdParamSchema, body: tagIdBodySchema }), (req, res) => {
+    const chatId = req.validatedParams.id;
+    const tagId = req.validatedBody.tag_id;
     const tag = req.account.db.tags.getById.get(tagId);
     if (!tag) {
         return sendError(req, res, 404, 'Tag not found');
@@ -133,30 +172,13 @@ router.get('/:id/notes', (req, res) => {
     return res.json(req.account.db.notes.getByChatId.all(req.params.id));
 });
 
-router.post('/:id/notes', (req, res) => {
-    const content = (req.body?.content || '').trim();
-    if (!content) {
-        return sendError(req, res, 400, 'content required');
-    }
-    if (!validateNote(content)) {
-        return sendError(req, res, 400, 'Note too long');
-    }
-    if (!validateChatId(req.params.id)) {
-        return sendError(req, res, 400, 'Invalid chatId format');
-    }
-    req.account.db.notes.create.run(req.params.id, content);
+router.post('/:id/notes', validate({ params: chatIdParamSchema, body: noteBodySchema }), (req, res) => {
+    req.account.db.notes.create.run(req.validatedParams.id, req.validatedBody.content);
     return res.json({ success: true });
 });
 
-router.put('/:id/notes/:noteId', (req, res) => {
-    const content = (req.body?.content || '').trim();
-    if (!content) {
-        return sendError(req, res, 400, 'content required');
-    }
-    if (!validateNote(content)) {
-        return sendError(req, res, 400, 'Note too long');
-    }
-    req.account.db.notes.update.run(content, req.params.noteId, req.params.id);
+router.put('/:id/notes/:noteId', validate({ params: noteParamsSchema, body: noteBodySchema }), (req, res) => {
+    req.account.db.notes.update.run(req.validatedBody.content, req.validatedParams.noteId, req.validatedParams.id);
     return res.json({ success: true });
 });
 
