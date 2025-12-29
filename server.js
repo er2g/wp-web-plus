@@ -111,12 +111,7 @@ const sessionMiddleware = session({
 app.use(sessionMiddleware);
 
 const csrfProtection = csrf();
-app.use((req, res, next) => {
-    if (req.method === 'POST' && req.path === '/auth/login') {
-        return next();
-    }
-    return csrfProtection(req, res, next);
-});
+app.use(csrfProtection);
 
 app.use((req, res, next) => {
     if (typeof req.csrfToken === 'function') {
@@ -235,13 +230,17 @@ server.listen(config.PORT, () => {
 });
 
 // Graceful shutdown
-process.on('SIGINT', async () => {
+process.on('SIGINT', () => {
     logger.info('Shutting down...');
-    await accountManager.shutdown();
-    process.exit(0);
+    server.close(async () => {
+        await accountManager.shutdown();
+        process.exit(0);
+    });
 });
 
-process.on('SIGTERM', async () => {
-    await accountManager.shutdown();
-    process.exit(0);
+process.on('SIGTERM', () => {
+    server.close(async () => {
+        await accountManager.shutdown();
+        process.exit(0);
+    });
 });
