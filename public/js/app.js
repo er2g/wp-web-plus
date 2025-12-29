@@ -1492,7 +1492,10 @@ function getDashboardContent() {
 
 // Scripts Content
 function getScriptsContent() {
-    return '<div style="margin-bottom: 16px;"><button class="btn btn-primary" onclick="showScriptEditor()"><i class="bi bi-plus"></i> Yeni Script</button></div>' +
+    return '<div style="margin-bottom: 16px; display: flex; gap: 10px;">' +
+        '<button class="btn btn-primary" onclick="showScriptEditor()"><i class="bi bi-plus"></i> Yeni Script</button>' +
+        '<button class="btn btn-secondary" onclick="openAiAssistant()" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border: none;"><i class="bi bi-stars"></i> AI Asistan</button>' +
+        '</div>' +
         '<div id="scriptsListModal"></div>';
 }
 

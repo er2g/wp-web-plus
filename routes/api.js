@@ -10,6 +10,7 @@ const path = require('path');
 const fs = require('fs');
 const config = require('../config');
 const { hashPassword, passwordMeetsPolicy } = require('../services/passwords');
+const aiService = require('../services/aiService');
 
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
@@ -831,6 +832,19 @@ router.post('/scripts/test', requireRole(['admin']), async (req, res) => {
 
     const result = await req.account.scriptRunner.testScript(code, data);
     res.json(result);
+});
+
+router.post('/ai/generate-script', requireRole(['admin']), async (req, res) => {
+    try {
+        const { prompt } = req.body;
+        if (!prompt) {
+            return res.status(400).json({ error: 'Prompt is required' });
+        }
+        const script = await aiService.generateScript(prompt);
+        res.json({ success: true, script });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 });
 
 router.get('/scripts/:id/logs', requireRole(['admin']), (req, res) => {
