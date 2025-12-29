@@ -401,15 +401,27 @@
                 <div class="settings-item">
                     <i class="icon bi bi-image"></i>
                     <div class="info">
-                        <div class="title">Sohbet Duvari</div>
-                        <div class="subtitle">Arka plan desenini sec</div>
+                        <div class="title">Arka Plan</div>
+                        <div class="subtitle">Sohbet arka planini ozellestir</div>
                     </div>
-                    <select id="wallpaperSelect" class="select-input" onchange="updateWallpaperChoice(this.value)">
-                        <option value="default">Varsayilan</option>
-                        <option value="subtle">Sade</option>
-                        <option value="grid">Grid</option>
-                        <option value="solid">Duz</option>
-                    </select>
+                    <div style="display: flex; flex-direction: column; gap: 8px; width: 50%;">
+                        <select id="bgTypeSelect" class="select-input" onchange="updateBackgroundType(this.value)">
+                            <option value="default">Varsayilan</option>
+                            <option value="image">Resim URL</option>
+                            <option value="solid">Duz Renk</option>
+                            <option value="gradient">Gradyan</option>
+                        </select>
+                        <div id="bgImageControl" style="display: none;">
+                            <input type="text" id="bgImageInput" class="form-input" placeholder="https://..." onchange="updateBackgroundImage(this.value)" style="padding: 4px 8px; font-size: 12px;">
+                        </div>
+                        <div id="bgColorControl" style="display: none;">
+                            <input type="color" id="bgColorInput" value="#efeae2" onchange="updateBackgroundColor(this.value)" style="width: 100%; height: 30px; border: none; background: transparent;">
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span style="font-size: 11px; color: var(--text-secondary);">Opaklik</span>
+                            <input type="range" id="bgOpacityRange" min="0" max="100" value="100" oninput="updateBackgroundOpacity(this.value)" style="flex: 1;">
+                        </div>
+                    </div>
                 </div>
                 <div class="settings-item">
                     <i class="icon bi bi-type"></i>

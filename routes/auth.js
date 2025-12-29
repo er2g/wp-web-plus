@@ -130,10 +130,22 @@ router.post('/logout', (req, res) => {
 
 // Check auth status
 router.get('/check', (req, res) => {
+    let preferences = null;
+    if (req.session && req.session.authenticated && req.session.userId) {
+        const db = accountManager.getAccountContext(accountManager.getDefaultAccountId()).db;
+        const user = db.users.getById.get(req.session.userId);
+        if (user && user.preferences) {
+            try {
+                preferences = JSON.parse(user.preferences);
+            } catch (e) {}
+        }
+    }
+
     res.json({
         authenticated: req.session && req.session.authenticated === true,
         userId: req.session?.userId || null,
-        role: req.session?.role || null
+        role: req.session?.role || null,
+        preferences
     });
 });
 

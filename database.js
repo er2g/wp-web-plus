@@ -168,6 +168,7 @@ function createDatabase(config) {
         password_hash TEXT NOT NULL,
         password_salt TEXT NOT NULL,
         is_active INTEGER DEFAULT 1,
+        preferences TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -302,6 +303,15 @@ function createDatabase(config) {
             apply: () => {
                 if (!columnExists('messages', 'ack')) {
                     db.exec('ALTER TABLE messages ADD COLUMN ack INTEGER DEFAULT 0');
+                }
+            }
+        },
+        {
+            version: 8,
+            name: 'add_preferences_to_users',
+            apply: () => {
+                if (!columnExists('users', 'preferences')) {
+                    db.exec('ALTER TABLE users ADD COLUMN preferences TEXT');
                 }
             }
         }
@@ -560,7 +570,8 @@ function createDatabase(config) {
         LEFT JOIN roles ON roles.id = user_roles.role_id
         WHERE users.username = ?
     `),
-        create: db.prepare('INSERT INTO users (username, display_name, password_hash, password_salt, is_active) VALUES (?, ?, ?, ?, ?)'),
+        create: db.prepare('INSERT INTO users (username, display_name, password_hash, password_salt, is_active, preferences) VALUES (?, ?, ?, ?, ?, ?)'),
+        updatePreferences: db.prepare('UPDATE users SET preferences = ? WHERE id = ?'),
         delete: db.prepare('DELETE FROM users WHERE id = ?'),
         count: db.prepare('SELECT COUNT(*) as count FROM users')
     };

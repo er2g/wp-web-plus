@@ -27,11 +27,16 @@ let settings = {
     ghostMode: false
 };
 let uiPreferences = {
-    accentColor: localStorage.getItem('uiAccent') || '',
-    wallpaper: localStorage.getItem('uiWallpaper') || 'default',
-    fontSize: localStorage.getItem('uiFontSize') || '14.2',
-    compactMode: localStorage.getItem('uiCompactMode') === 'true',
-    bubbleStyle: localStorage.getItem('uiBubbleStyle') || 'rounded'
+    accentColor: '',
+    wallpaper: 'default',
+    fontSize: '14.2',
+    compactMode: false,
+    bubbleStyle: 'rounded',
+    backgroundType: 'default',
+    backgroundImage: '',
+    backgroundGradient: '',
+    backgroundColor: '#efeae2',
+    backgroundOpacity: 100
 };
 let selectedAttachment = null;
 const MESSAGE_PAGE_SIZE = 50;
@@ -102,6 +107,8 @@ function updateThemeUI(theme) {
 
 async function initializeApp() {
     try {
+        // Load preferences from server first
+        await fetchUserPreferences();
         await loadAccounts();
         initSocket();
         loadInitialData();
@@ -112,19 +119,77 @@ async function initializeApp() {
 }
 
 // Customization Management
+async function fetchUserPreferences() {
+    try {
+        const response = await fetch('auth/check');
+        const data = await response.json();
+        if (data.preferences) {
+            uiPreferences = { ...uiPreferences, ...data.preferences };
+        } else {
+            // Fallback to localStorage if no server prefs
+            loadLocalPreferences();
+        }
+    } catch (e) {
+        console.error('Failed to fetch preferences', e);
+        loadLocalPreferences();
+    }
+    applyCustomizations();
+}
+
+function loadLocalPreferences() {
+    uiPreferences.accentColor = localStorage.getItem('uiAccent') || uiPreferences.accentColor;
+    uiPreferences.wallpaper = localStorage.getItem('uiWallpaper') || uiPreferences.wallpaper;
+    uiPreferences.fontSize = localStorage.getItem('uiFontSize') || uiPreferences.fontSize;
+    uiPreferences.compactMode = localStorage.getItem('uiCompactMode') === 'true';
+    uiPreferences.bubbleStyle = localStorage.getItem('uiBubbleStyle') || uiPreferences.bubbleStyle;
+
+    // New fields
+    uiPreferences.backgroundType = localStorage.getItem('uiBackgroundType') || uiPreferences.backgroundType;
+    uiPreferences.backgroundImage = localStorage.getItem('uiBackgroundImage') || uiPreferences.backgroundImage;
+    uiPreferences.backgroundGradient = localStorage.getItem('uiBackgroundGradient') || uiPreferences.backgroundGradient;
+    uiPreferences.backgroundColor = localStorage.getItem('uiBackgroundColor') || uiPreferences.backgroundColor;
+    uiPreferences.backgroundOpacity = localStorage.getItem('uiBackgroundOpacity') || uiPreferences.backgroundOpacity;
+}
+
 function loadCustomizations() {
+    // Deprecated, logic moved to fetchUserPreferences
     if (!uiPreferences.accentColor) {
         const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
         uiPreferences.accentColor = accent || '#00a884';
     }
-    if (uiPreferences.accentColor) {
-        applyAccentColor(uiPreferences.accentColor);
-    }
-    applyWallpaper(uiPreferences.wallpaper);
+    applyCustomizations();
+}
+
+function applyCustomizations() {
+    if (uiPreferences.accentColor) applyAccentColor(uiPreferences.accentColor);
+    applyWallpaper(uiPreferences.wallpaper); // Kept for legacy
     applyFontSize(uiPreferences.fontSize);
     applyCompactMode(uiPreferences.compactMode);
     applyBubbleStyle(uiPreferences.bubbleStyle);
+    applyBackgroundSettings();
     updateCustomizationUI();
+}
+
+async function saveUserPreferences() {
+    // Save to local storage for offline/fallback
+    localStorage.setItem('uiAccent', uiPreferences.accentColor);
+    localStorage.setItem('uiWallpaper', uiPreferences.wallpaper);
+    localStorage.setItem('uiFontSize', uiPreferences.fontSize);
+    localStorage.setItem('uiCompactMode', uiPreferences.compactMode);
+    localStorage.setItem('uiBubbleStyle', uiPreferences.bubbleStyle);
+
+    localStorage.setItem('uiBackgroundType', uiPreferences.backgroundType);
+    localStorage.setItem('uiBackgroundImage', uiPreferences.backgroundImage);
+    localStorage.setItem('uiBackgroundGradient', uiPreferences.backgroundGradient);
+    localStorage.setItem('uiBackgroundColor', uiPreferences.backgroundColor);
+    localStorage.setItem('uiBackgroundOpacity', uiPreferences.backgroundOpacity);
+
+    // Sync with server
+    try {
+        await api('api/users/me/preferences', 'PUT', uiPreferences);
+    } catch (e) {
+        console.warn('Failed to sync preferences to server', e);
+    }
 }
 
 function updateCustomizationUI() {
@@ -132,7 +197,7 @@ function updateCustomizationUI() {
     if (accentInput && uiPreferences.accentColor) {
         accentInput.value = uiPreferences.accentColor;
     }
-    const wallpaperSelect = document.getElementById('wallpaperSelect');
+    const wallpaperSelect = document.getElementById('wallpaperSelect'); // Legacy
     if (wallpaperSelect) {
         wallpaperSelect.value = uiPreferences.wallpaper;
     }
@@ -148,18 +213,35 @@ function updateCustomizationUI() {
     if (bubbleStyleSelect) {
         bubbleStyleSelect.value = uiPreferences.bubbleStyle;
     }
+
+    // New Background UI
+    const bgTypeSelect = document.getElementById('bgTypeSelect');
+    if (bgTypeSelect) bgTypeSelect.value = uiPreferences.backgroundType;
+
+    const bgImageInput = document.getElementById('bgImageInput');
+    if (bgImageInput) bgImageInput.value = uiPreferences.backgroundImage;
+
+    const bgColorInput = document.getElementById('bgColorInput');
+    if (bgColorInput) bgColorInput.value = uiPreferences.backgroundColor;
+
+    const bgOpacityRange = document.getElementById('bgOpacityRange');
+    if (bgOpacityRange) bgOpacityRange.value = uiPreferences.backgroundOpacity;
+
+    // Show/Hide controls based on type
+    document.getElementById('bgImageControl').style.display = uiPreferences.backgroundType === 'image' ? 'block' : 'none';
+    document.getElementById('bgColorControl').style.display = (uiPreferences.backgroundType === 'solid' || uiPreferences.backgroundType === 'gradient') ? 'block' : 'none';
 }
 
 function updateAccentColor(color) {
     uiPreferences.accentColor = color;
-    localStorage.setItem('uiAccent', color);
     applyAccentColor(color);
+    saveUserPreferences();
 }
 
 function updateWallpaperChoice(value) {
     uiPreferences.wallpaper = value;
-    localStorage.setItem('uiWallpaper', value);
     applyWallpaper(value);
+    saveUserPreferences();
 }
 
 function applyAccentColor(color) {
@@ -178,8 +260,8 @@ function applyWallpaper(value) {
 
 function updateFontSize(size) {
     uiPreferences.fontSize = size;
-    localStorage.setItem('uiFontSize', size);
     applyFontSize(size);
+    saveUserPreferences();
 }
 
 function applyFontSize(size) {
@@ -188,9 +270,9 @@ function applyFontSize(size) {
 
 function toggleCompactMode() {
     uiPreferences.compactMode = !uiPreferences.compactMode;
-    localStorage.setItem('uiCompactMode', uiPreferences.compactMode);
     applyCompactMode(uiPreferences.compactMode);
     updateCustomizationUI();
+    saveUserPreferences();
 }
 
 function applyCompactMode(isCompact) {
@@ -199,40 +281,73 @@ function applyCompactMode(isCompact) {
 
 function updateBubbleStyle(style) {
     uiPreferences.bubbleStyle = style;
-    localStorage.setItem('uiBubbleStyle', style);
     applyBubbleStyle(style);
+    saveUserPreferences();
 }
 
 function applyBubbleStyle(style) {
     const root = document.documentElement;
     let radius = '7.5px';
     if (style === 'boxy') radius = '2px';
-    else if (style === 'leaf') radius = '0 12px 12px 12px'; // Will need specific class handling or just simplistic global radius
+    else if (style === 'leaf') radius = '7.5px';
+    else if (style === 'rounded') radius = '18px';
+    root.style.setProperty('--bubble-radius', radius);
+}
 
-    // For 'leaf' style, we might need more complex CSS logic in style.css or separate variables for corners.
-    // Let's stick to simple radius change first or improve logic.
-    // Actually, leaf style usually means sent messages have top-right rounded, received have top-left rounded.
-    // My CSS uses specific border-radius overrides:
-    // .message-bubble.sent { border-top-right-radius: 0; }
-    // .message-bubble.received { border-top-left-radius: 0; }
+function updateBackgroundType(type) {
+    uiPreferences.backgroundType = type;
+    updateCustomizationUI(); // to toggle inputs
+    applyBackgroundSettings();
+    saveUserPreferences();
+}
 
-    if (style === 'leaf') {
-        // Leaf style: mostly rounded, but tails are sharp.
-        // My existing CSS already does a "leaf-like" shape (standard WhatsApp).
-        // Let's make "rounded" fully rounded (like Messenger) and "boxy" square.
-        // Standard WhatsApp is already "leaf".
+function updateBackgroundImage(url) {
+    uiPreferences.backgroundImage = url;
+    applyBackgroundSettings();
+    saveUserPreferences();
+}
 
-        // Let's redefine:
-        // 'rounded' -> 18px (Messenger style)
-        // 'boxy' -> 2px (Slack style)
-        // 'leaf' -> 7.5px (Standard WhatsApp)
+function updateBackgroundColor(color) {
+    uiPreferences.backgroundColor = color;
+    applyBackgroundSettings();
+    saveUserPreferences();
+}
 
-        radius = '7.5px';
-    } else if (style === 'rounded') {
-        radius = '18px';
+function updateBackgroundOpacity(opacity) {
+    uiPreferences.backgroundOpacity = opacity;
+    applyBackgroundSettings();
+    saveUserPreferences();
+}
+
+function applyBackgroundSettings() {
+    const root = document.documentElement;
+    const type = uiPreferences.backgroundType;
+    let bgValue = 'var(--wallpaper-default)'; // Default fallback
+
+    if (type === 'image' && uiPreferences.backgroundImage) {
+        bgValue = `url("${uiPreferences.backgroundImage}")`;
+    } else if (type === 'solid') {
+        bgValue = uiPreferences.backgroundColor;
+    } else if (type === 'gradient') {
+        // Simple gradient derived from base color
+        const color = uiPreferences.backgroundColor;
+        const color2 = adjustColor(color, -30);
+        bgValue = `linear-gradient(135deg, ${color} 0%, ${color2} 100%)`;
+    } else if (type === 'default') {
+        bgValue = 'var(--wallpaper-default)';
     }
 
-    root.style.setProperty('--bubble-radius', radius);
+    root.style.setProperty('--chat-wallpaper', bgValue);
+
+    // Opacity handling via overlay hack on body or specific container
+    // Since we use background-image on .chat-area, changing opacity on it affects text.
+    // Best way: use a pseudo-element or separate container.
+    // For now, let's assume direct assignment works for type, but opacity might need CSS change.
+    // If we simply set opacity on the element, text fades.
+    // We'll trust the CSS update to handle ::before overlay if possible, or skip opacity for now.
+    // Wait, the plan said "A pseudo-element ::before on .chat-area".
+    // I need to ensure CSS has that. I'll stick to variable setting here.
+    root.style.setProperty('--chat-bg-opacity', uiPreferences.backgroundOpacity / 100);
 }
 
 function adjustColor(hex, amount) {

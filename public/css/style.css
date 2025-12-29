@@ -450,9 +450,23 @@ body.compact .message-bubble .message-text {
     display: flex;
     flex-direction: column;
     background-color: var(--bg-chat);
+    min-width: 0;
+    position: relative;
+    z-index: 0;
+}
+
+.chat-area::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
     background-image: var(--chat-wallpaper);
     background-size: cover;
-    min-width: 0;
+    background-position: center;
+    opacity: var(--chat-bg-opacity, 1);
+    z-index: -1;
 }
 
 .chat-area.empty {

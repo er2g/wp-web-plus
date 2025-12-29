@@ -1219,4 +1219,18 @@ router.delete('/users/:id', requireRole(['admin']), (req, res) => {
     res.json({ success: true });
 });
 
+router.put('/users/me/preferences', (req, res) => {
+    const userId = req.session.userId;
+    if (!userId) {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    const preferences = req.body;
+    if (!preferences) {
+        return res.status(400).json({ error: 'Preferences required' });
+    }
+    const preferencesJson = JSON.stringify(preferences);
+    req.account.db.users.updatePreferences.run(preferencesJson, userId);
+    res.json({ success: true });
+});
+
 module.exports = router;
