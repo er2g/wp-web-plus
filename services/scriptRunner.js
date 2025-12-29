@@ -5,6 +5,44 @@
 const vm = require('vm');
 const { logger } = require('./logger');
 
+function isSafeUrl(rawUrl) {
+    if (!rawUrl || typeof rawUrl !== 'string') {
+        return false;
+    }
+    if (rawUrl.length > 2048) {
+        return false;
+    }
+    let parsed;
+    try {
+        parsed = new URL(rawUrl);
+    } catch (error) {
+        return false;
+    }
+
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+        return false;
+    }
+
+    const hostname = parsed.hostname.toLowerCase();
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
+        return false;
+    }
+
+    const ipv4Match = hostname.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (ipv4Match) {
+        const [, a, b] = ipv4Match.map(Number);
+        if (a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || a === 0) {
+            return false;
+        }
+    }
+
+    if (hostname === '169.254.169.254' || hostname.endsWith('.internal')) {
+        return false;
+    }
+
+    return true;
+}
+
 class ScriptRunner {
     constructor(db, whatsapp) {
         this.db = db;
@@ -67,6 +105,14 @@ class ScriptRunner {
             // HTTP requests
             fetch: async (url, options = {}) => {
                 const axios = require('axios');
+                if (!isSafeUrl(url)) {
+                    return {
+                        ok: false,
+                        status: 0,
+                        json: async () => ({}),
+                        text: async () => 'Blocked URL'
+                    };
+                }
                 try {
                     const response = await axios({
                         url,

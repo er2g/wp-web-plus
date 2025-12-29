@@ -411,6 +411,11 @@ function createDatabase(config) {
           AND (next_attempt_at IS NULL OR datetime(next_attempt_at) <= datetime('now'))
           AND retry_count < ?
     `),
+        getRecurring: db.prepare(`
+        SELECT * FROM scheduled_messages
+        WHERE is_recurring = 1
+          AND cron_expression IS NOT NULL
+    `),
         getById: db.prepare('SELECT * FROM scheduled_messages WHERE id = ?'),
         create: db.prepare(`INSERT INTO scheduled_messages (chat_id, chat_name, message, template_id, scheduled_at, is_recurring, cron_expression) VALUES (?, ?, ?, ?, ?, ?, ?)`),
         markSent: db.prepare(`
