@@ -55,6 +55,7 @@ class SchedulerService {
 
         // Initial check
         this.checkPendingMessages();
+        this.bootstrapRecurring();
 
         logger.info('Scheduler service started', { category: 'scheduler' });
         this.db.logs.add.run('info', 'scheduler', 'Scheduler service started', null);
@@ -73,6 +74,29 @@ class SchedulerService {
         this.cronJobs.clear();
 
         logger.info('Scheduler service stopped', { category: 'scheduler' });
+    }
+
+    bootstrapRecurring() {
+        try {
+            const recurring = this.db.scheduled.getRecurring.all();
+            recurring.forEach(entry => {
+                if (entry.cron_expression) {
+                    this.setupRecurring(
+                        entry.id,
+                        entry.cron_expression,
+                        entry.chat_id,
+                        entry.message,
+                        entry.template_id,
+                        entry.chat_name
+                    );
+                }
+            });
+        } catch (error) {
+            logger.error('Failed to load recurring schedules', {
+                category: 'scheduler',
+                error: error.message
+            });
+        }
     }
 
     async checkPendingMessages() {

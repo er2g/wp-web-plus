@@ -3,19 +3,13 @@
  */
 const express = require('express');
 const session = require('express-session');
+const rateLimit = require('express-rate-limit');
+const csrf = require('csurf');
+const cors = require('cors');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
 const { randomUUID, randomBytes } = require('crypto');
-
-const config = require('./config');
-const express = require('express');
-const session = require('express-session');
-const rateLimit = require('express-rate-limit');
-const csrf = require('csurf');
-const http = require('http');
-const { Server } = require('socket.io');
-const path = require('path');
 
 const config = require('./config');
 const accountManager = require('./services/accountManager');
@@ -28,6 +22,23 @@ const app = express();
 const server = http.createServer(app);
 
 const isProduction = process.env.NODE_ENV === 'production';
+const insecureDefaults = [];
+
+if (config.SESSION_SECRET === 'change-this-secret-in-production') {
+    insecureDefaults.push('SESSION_SECRET');
+}
+
+if (config.ADMIN_BOOTSTRAP_PASSWORD === 'changeme') {
+    insecureDefaults.push('ADMIN_BOOTSTRAP_PASSWORD');
+}
+
+if (isProduction && insecureDefaults.length > 0) {
+    throw new Error(`Insecure default secrets detected: ${insecureDefaults.join(', ')}. Configure environment variables before start.`);
+}
+
+if (!isProduction && insecureDefaults.length > 0) {
+    console.warn(`Insecure default secrets detected (${insecureDefaults.join(', ')}). Set environment variables before deploying.`);
+}
 
 if (!config.CORS_ORIGINS) {
     throw new Error('CORS_ORIGINS environment variable is required.');
@@ -42,6 +53,10 @@ if (config.CORS_ORIGINS === '*') {
 
 // Parse CORS origins from config
 const corsOrigins = config.CORS_ORIGINS === '*' ? '*' : config.CORS_ORIGINS.split(',').map(o => o.trim());
+const corsOptions = {
+    origin: corsOrigins === '*' ? true : corsOrigins,
+    credentials: true
+};
 
 // Socket.IO with path support for reverse proxy
 const io = new Server(server, {
@@ -55,6 +70,7 @@ const io = new Server(server, {
 // Middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+app.use(cors(corsOptions));
 
 const generateRequestId = () => (typeof randomUUID === 'function' ? randomUUID() : randomBytes(16).toString('hex'));
 app.use((req, res, next) => {

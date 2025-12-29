@@ -16,10 +16,14 @@ class CleanupService {
 
         if (cron.validate(dailyCron)) {
             this.jobs.push(cron.schedule(dailyCron, () => this.runDailyCleanup()));
+        } else {
+            this.db.logs.add.run('warn', 'cleanup', 'Invalid daily cleanup cron', JSON.stringify({ dailyCron }));
         }
 
         if (cron.validate(weeklyCron)) {
             this.jobs.push(cron.schedule(weeklyCron, () => this.runWeeklyCleanup()));
+        } else {
+            this.db.logs.add.run('warn', 'cleanup', 'Invalid weekly cleanup cron', JSON.stringify({ weeklyCron }));
         }
 
         this.runDailyCleanup();

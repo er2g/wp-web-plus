@@ -656,6 +656,9 @@ router.post('/scheduled', (req, res) => {
             resolvedMessage = template.content;
         }
     }
+    if (is_recurring && !cron_expression) {
+        return res.status(400).json({ error: 'cron_expression required for recurring schedule' });
+    }
     const result = req.account.db.scheduled.create.run(
         chat_id,
         chat_name || '',
@@ -665,11 +668,30 @@ router.post('/scheduled', (req, res) => {
         is_recurring ? 1 : 0,
         cron_expression || null
     );
+    if (is_recurring && cron_expression) {
+        const scheduled = req.account.db.scheduled.getById.get(result.lastInsertRowid);
+        if (!req.account.scheduler.setupRecurring(
+            scheduled.id,
+            cron_expression,
+            scheduled.chat_id,
+            scheduled.message,
+            scheduled.template_id,
+            scheduled.chat_name
+        )) {
+            req.account.db.scheduled.delete.run(scheduled.id);
+            return res.status(400).json({ error: 'Invalid cron_expression' });
+        }
+    }
     res.json({ success: true, id: result.lastInsertRowid });
 });
 
 router.delete('/scheduled/:id', (req, res) => {
-    req.account.db.scheduled.delete.run(req.params.id);
+    const scheduledId = parseInt(req.params.id, 10);
+    if (Number.isNaN(scheduledId)) {
+        return res.status(400).json({ error: 'Invalid scheduled id' });
+    }
+    req.account.scheduler.removeRecurring(scheduledId);
+    req.account.db.scheduled.delete.run(scheduledId);
     res.json({ success: true });
 });
 

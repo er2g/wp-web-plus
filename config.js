@@ -10,6 +10,11 @@ try {
     // dotenv not installed, using defaults
 }
 
+function toPositiveInt(value, fallback) {
+    const num = parseInt(value, 10);
+    return Number.isFinite(num) && num > 0 ? num : fallback;
+}
+
 module.exports = {
     // Server
     PORT: process.env.PORT || 3000,
@@ -26,7 +31,7 @@ module.exports = {
 
     // Password policy
     PASSWORD_POLICY: {
-        MIN_LENGTH: parseInt(process.env.PASSWORD_MIN_LENGTH || '8', 10),
+        MIN_LENGTH: toPositiveInt(process.env.PASSWORD_MIN_LENGTH || '8', 8),
         REQUIRE_UPPER: process.env.PASSWORD_REQUIRE_UPPER === 'true',
         REQUIRE_LOWER: process.env.PASSWORD_REQUIRE_LOWER === 'true',
         REQUIRE_NUMBER: process.env.PASSWORD_REQUIRE_NUMBER === 'true',
@@ -35,10 +40,10 @@ module.exports = {
 
     // API Rate limits
     API_RATE_LIMIT: {
-        IP_WINDOW_MS: parseInt(process.env.API_RATE_LIMIT_IP_WINDOW_MS || String(15 * 60 * 1000), 10),
-        IP_MAX: parseInt(process.env.API_RATE_LIMIT_IP_MAX || '300', 10),
-        USER_WINDOW_MS: parseInt(process.env.API_RATE_LIMIT_USER_WINDOW_MS || String(15 * 60 * 1000), 10),
-        USER_MAX: parseInt(process.env.API_RATE_LIMIT_USER_MAX || '150', 10)
+        IP_WINDOW_MS: toPositiveInt(process.env.API_RATE_LIMIT_IP_WINDOW_MS || String(15 * 60 * 1000), 15 * 60 * 1000),
+        IP_MAX: toPositiveInt(process.env.API_RATE_LIMIT_IP_MAX || '300', 300),
+        USER_WINDOW_MS: toPositiveInt(process.env.API_RATE_LIMIT_USER_WINDOW_MS || String(15 * 60 * 1000), 15 * 60 * 1000),
+        USER_MAX: toPositiveInt(process.env.API_RATE_LIMIT_USER_MAX || '150', 150)
     },
     
     // Paths
@@ -63,6 +68,13 @@ module.exports = {
     SCHEDULER_CHECK_INTERVAL: 60000, // 1 minute
     SCHEDULER_MAX_RETRIES: 5,
     SCHEDULER_RETRY_BASE_MS: 60000, // 1 minute
+
+    // Cleanup
+    CLEANUP_DAILY_CRON: process.env.CLEANUP_DAILY_CRON || '0 3 * * *',
+    CLEANUP_WEEKLY_CRON: process.env.CLEANUP_WEEKLY_CRON || '0 4 * * 0',
+    LOG_RETENTION_DAYS: toPositiveInt(process.env.LOG_RETENTION_DAYS || '30', 30),
+    SCRIPT_LOG_RETENTION_DAYS: toPositiveInt(process.env.SCRIPT_LOG_RETENTION_DAYS || '30', 30),
+    MESSAGE_RETENTION_DAYS: toPositiveInt(process.env.MESSAGE_RETENTION_DAYS || '90', 90),
     
     // Webhook
     WEBHOOK_TIMEOUT: 10000, // 10 seconds
