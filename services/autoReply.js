@@ -77,9 +77,13 @@ class AutoReplyService {
                     matched = messageBody === trigger;
                     break;
                 case 'starts':
+                case 'startswith':
+                case 'startsWith':
                     matched = messageBody.startsWith(trigger);
                     break;
                 case 'ends':
+                case 'endswith':
+                case 'endsWith':
                     matched = messageBody.endsWith(trigger);
                     break;
                 case 'regex':

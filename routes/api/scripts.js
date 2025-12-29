@@ -7,6 +7,40 @@ const { validate } = require('../middleware/validate');
 const { LIMITS } = require('../../lib/apiValidation');
 const { sendError } = require('../../lib/httpResponses');
 
+const booleanLike = z.preprocess((value) => {
+    if (value === undefined) return undefined;
+    if (value === true || value === false) return value;
+    if (value === 1 || value === '1' || value === 'true') return true;
+    if (value === 0 || value === '0' || value === 'false') return false;
+    return value;
+}, z.boolean());
+
+const scriptUpsertSchema = z.object({
+    name: z.preprocess(
+        (value) => (typeof value === 'string' ? value.trim() : value),
+        z.string({
+            required_error: 'name and code required',
+            invalid_type_error: 'name and code required'
+        }).min(1, 'name and code required')
+    ),
+    description: z.preprocess(
+        (value) => (typeof value === 'string' ? value.trim().slice(0, 500) : value),
+        z.string().optional()
+    ),
+    code: z.string({
+        required_error: 'name and code required',
+        invalid_type_error: 'name and code required'
+    }).min(1, 'name and code required'),
+    trigger_type: z.preprocess((value) => {
+        if (value === undefined || value === null) return undefined;
+        if (typeof value !== 'string') return value;
+        const normalized = value.trim().toLowerCase();
+        return normalized ? normalized : undefined;
+    }, z.enum(['message', 'ready', 'manual']).optional()),
+    trigger_filter: z.union([z.record(z.any()), z.null()]).optional(),
+    is_active: booleanLike.optional()
+}).strict();
+
 const scriptTestSchema = z.object({
     code: z.string().trim().min(1, 'code required'),
     testData: z.record(z.any()).optional()
@@ -22,20 +56,46 @@ router.get('/:id', requireRole(['admin']), (req, res) => {
     return res.json(script);
 });
 
-router.post('/', requireRole(['admin']), (req, res) => {
-    const { name, description, code, trigger_type, trigger_filter, is_active } = req.body;
-    if (!name || !code) {
-        return sendError(req, res, 400, 'name and code required');
-    }
+router.post('/', requireRole(['admin']), validate({ body: scriptUpsertSchema }), (req, res) => {
+    const { name, description, code, trigger_type, trigger_filter, is_active } = req.validatedBody;
     const filterJson = trigger_filter ? JSON.stringify(trigger_filter) : null;
-    const result = req.account.db.scripts.create.run(name, description || '', code, trigger_type || 'message', filterJson, is_active !== false ? 1 : 0);
+    const result = req.account.db.scripts.create.run(
+        name,
+        description || '',
+        code,
+        trigger_type || 'message',
+        filterJson,
+        is_active !== false ? 1 : 0
+    );
     return res.json({ success: true, id: result.lastInsertRowid });
 });
 
-router.put('/:id', requireRole(['admin']), (req, res) => {
-    const { name, description, code, trigger_type, trigger_filter, is_active } = req.body;
-    const filterJson = trigger_filter ? JSON.stringify(trigger_filter) : null;
-    req.account.db.scripts.update.run(name, description || '', code, trigger_type || 'message', filterJson, is_active ? 1 : 0, req.params.id);
+router.put('/:id', requireRole(['admin']), validate({ body: scriptUpsertSchema }), (req, res) => {
+    const existing = req.account.db.scripts.getById.get(req.params.id);
+    if (!existing) {
+        return sendError(req, res, 404, 'Not found');
+    }
+
+    const { name, description, code, trigger_type, trigger_filter, is_active } = req.validatedBody;
+
+    const resolvedTriggerType = trigger_type || existing.trigger_type || 'message';
+    const resolvedDescription = description === undefined ? (existing.description || '') : description;
+    const resolvedFilterJson = trigger_filter === undefined
+        ? existing.trigger_filter
+        : trigger_filter === null
+            ? null
+            : JSON.stringify(trigger_filter);
+    const resolvedIsActive = is_active === undefined ? existing.is_active : (is_active ? 1 : 0);
+
+    req.account.db.scripts.update.run(
+        name,
+        resolvedDescription,
+        code,
+        resolvedTriggerType,
+        resolvedFilterJson,
+        resolvedIsActive,
+        req.params.id
+    );
     return res.json({ success: true });
 });
 
