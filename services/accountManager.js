@@ -11,6 +11,7 @@ const { createWebhookService } = require('./webhook');
 const { createScriptRunner } = require('./scriptRunner');
 const { createMessagePipeline } = require('./messagePipeline');
 const { logger } = require('./logger');
+const { sendError } = require('../lib/httpResponses');
 
 const ACCOUNTS_FILE = path.join(config.DATA_DIR, 'accounts.json');
 const ACCOUNTS_DIR = path.join(config.DATA_DIR, 'accounts');
@@ -224,7 +225,7 @@ class AccountManager {
         const accountId = headerAccountId || queryAccountId || sessionAccountId || this.getDefaultAccountId();
 
         if (!isValidAccountId(accountId)) {
-            return res.status(400).json({ error: 'Invalid account id' });
+            return sendError(req, res, 400, 'Invalid account id');
         }
 
         const account = this.findAccount(accountId);
@@ -236,7 +237,7 @@ class AccountManager {
                 req.account = this.getAccountContext(fallbackId);
                 return next();
             }
-            return res.status(404).json({ error: 'Account not found' });
+            return sendError(req, res, 404, 'Account not found');
         }
 
         req.session.accountId = accountId;

@@ -85,12 +85,12 @@ router.post('/deliveries/:id/replay', requireRole(['admin']), async (req, res) =
     try {
         const delivery = req.account.db.webhookDeliveries.getById.get(req.params.id);
         if (!delivery) {
-            return res.status(404).json({ error: 'Delivery not found' });
+            return sendError(req, res, 404, 'Delivery not found');
         }
         await req.account.webhook.replayDelivery(delivery);
         return res.json({ success: true });
     } catch (error) {
-        return res.status(500).json({ error: error.message });
+        return sendError(req, res, 500, error.message);
     }
 });
 

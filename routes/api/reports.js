@@ -2,11 +2,12 @@ const express = require('express');
 const router = express.Router();
 
 const { parseDateRange } = require('../../lib/apiValidation');
+const { sendError } = require('../../lib/httpResponses');
 
 router.get('/overview', (req, res) => {
     const range = parseDateRange(req.query);
     if (!range) {
-        return res.status(400).json({ error: 'Invalid date range' });
+        return sendError(req, res, 400, 'Invalid date range');
     }
     const limit = Math.min(parseInt(req.query.limit) || 5, 25);
 
@@ -28,7 +29,7 @@ router.get('/overview', (req, res) => {
 router.get('/trends', (req, res) => {
     const range = parseDateRange(req.query);
     if (!range) {
-        return res.status(400).json({ error: 'Invalid date range' });
+        return sendError(req, res, 400, 'Invalid date range');
     }
 
     const interval = (req.query.interval || 'daily').toLowerCase();
@@ -46,7 +47,7 @@ router.get('/trends', (req, res) => {
 router.get('/response-time', (req, res) => {
     const range = parseDateRange(req.query);
     if (!range) {
-        return res.status(400).json({ error: 'Invalid date range' });
+        return sendError(req, res, 400, 'Invalid date range');
     }
     const limit = Math.min(parseInt(req.query.limit) || 5, 25);
     const interval = (req.query.interval || 'daily').toLowerCase();
@@ -72,4 +73,3 @@ router.get('/response-time', (req, res) => {
 });
 
 module.exports = router;
-

@@ -3,6 +3,7 @@ const router = express.Router();
 
 const accountManager = require('../../services/accountManager');
 const { requireRole } = require('../middleware/auth');
+const { sendError } = require('../../lib/httpResponses');
 
 router.get('/', requireRole(['admin']), (req, res) => {
     const accounts = accountManager.listAccounts().map(account => {
@@ -22,7 +23,7 @@ router.get('/', requireRole(['admin']), (req, res) => {
 router.post('/', requireRole(['admin']), (req, res) => {
     const name = (req.body?.name || '').trim();
     if (!name) {
-        return res.status(400).json({ error: 'Account name required' });
+        return sendError(req, res, 400, 'Account name required');
     }
 
     const account = accountManager.createAccount(name);
@@ -32,11 +33,11 @@ router.post('/', requireRole(['admin']), (req, res) => {
 router.post('/select', requireRole(['admin']), (req, res) => {
     const accountId = req.body?.accountId;
     if (!accountId) {
-        return res.status(400).json({ error: 'Account id required' });
+        return sendError(req, res, 400, 'Account id required');
     }
     const account = accountManager.findAccount(accountId);
     if (!account) {
-        return res.status(404).json({ error: 'Account not found' });
+        return sendError(req, res, 404, 'Account not found');
     }
     req.session.accountId = accountId;
     accountManager.getAccountContext(accountId);
@@ -44,4 +45,3 @@ router.post('/select', requireRole(['admin']), (req, res) => {
 });
 
 module.exports = router;
-

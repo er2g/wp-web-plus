@@ -334,7 +334,7 @@ function createApp() {
                 const authHeader = req.headers.authorization || '';
                 const expected = `Bearer ${config.METRICS_TOKEN}`;
                 if (authHeader !== expected) {
-                    return res.status(401).json({ error: 'Unauthorized' });
+                    return sendError(req, res, 401, 'Unauthorized');
                 }
             }
 

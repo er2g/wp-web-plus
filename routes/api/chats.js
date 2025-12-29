@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const { LIMITS, validateChatId, validateNote } = require('../../lib/apiValidation');
+const { sendError } = require('../../lib/httpResponses');
 
 router.get('/', (req, res) => {
     const tagFilter = (req.query.tag || '').trim();
@@ -106,14 +107,14 @@ router.post('/:id/tags', (req, res) => {
     const chatId = req.params.id;
     const tagId = req.body?.tag_id;
     if (!tagId) {
-        return res.status(400).json({ error: 'tag_id required' });
+        return sendError(req, res, 400, 'tag_id required');
     }
     if (!validateChatId(chatId)) {
-        return res.status(400).json({ error: 'Invalid chatId format' });
+        return sendError(req, res, 400, 'Invalid chatId format');
     }
     const tag = req.account.db.tags.getById.get(tagId);
     if (!tag) {
-        return res.status(404).json({ error: 'Tag not found' });
+        return sendError(req, res, 404, 'Tag not found');
     }
     const chat = req.account.db.chats.getById.get(chatId);
     const name = chat?.name || chatId;
@@ -135,13 +136,13 @@ router.get('/:id/notes', (req, res) => {
 router.post('/:id/notes', (req, res) => {
     const content = (req.body?.content || '').trim();
     if (!content) {
-        return res.status(400).json({ error: 'content required' });
+        return sendError(req, res, 400, 'content required');
     }
     if (!validateNote(content)) {
-        return res.status(400).json({ error: 'Note too long' });
+        return sendError(req, res, 400, 'Note too long');
     }
     if (!validateChatId(req.params.id)) {
-        return res.status(400).json({ error: 'Invalid chatId format' });
+        return sendError(req, res, 400, 'Invalid chatId format');
     }
     req.account.db.notes.create.run(req.params.id, content);
     return res.json({ success: true });
@@ -150,10 +151,10 @@ router.post('/:id/notes', (req, res) => {
 router.put('/:id/notes/:noteId', (req, res) => {
     const content = (req.body?.content || '').trim();
     if (!content) {
-        return res.status(400).json({ error: 'content required' });
+        return sendError(req, res, 400, 'content required');
     }
     if (!validateNote(content)) {
-        return res.status(400).json({ error: 'Note too long' });
+        return sendError(req, res, 400, 'Note too long');
     }
     req.account.db.notes.update.run(content, req.params.noteId, req.params.id);
     return res.json({ success: true });
@@ -165,4 +166,3 @@ router.delete('/:id/notes/:noteId', (req, res) => {
 });
 
 module.exports = router;
-

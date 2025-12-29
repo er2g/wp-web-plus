@@ -5,6 +5,7 @@ const express = require('express');
 const config = require('../config');
 const accountManager = require('../services/accountManager');
 const { passwordMeetsPolicy, verifyPassword } = require('../services/passwords');
+const { sendError } = require('../lib/httpResponses');
 
 const isProduction = process.env.NODE_ENV === 'production';
 
@@ -137,9 +138,12 @@ function createAuthRouter({ redisClient, redisPrefix } = {}) {
             const rateCheck = await checkRateLimit(ip, req);
 
             if (!rateCheck.allowed) {
-                return res.status(429).json({
-                    error: 'Too many login attempts. Try again in ' + rateCheck.remainingTime + ' seconds.'
-                });
+                return sendError(
+                    req,
+                    res,
+                    429,
+                    'Too many login attempts. Try again in ' + rateCheck.remainingTime + ' seconds.'
+                );
             }
 
             const body = req.body || {};
@@ -153,7 +157,7 @@ function createAuthRouter({ redisClient, redisPrefix } = {}) {
             const normalizedUsername = (username || '').trim().toLowerCase();
             if (!normalizedUsername || !password) {
                 await recordFailedAttempt(ip, req);
-                return res.status(400).json({ error: 'Username and password required' });
+                return sendError(req, res, 400, 'Username and password required');
             }
 
             const db = accountManager.getAccountContext(accountManager.getDefaultAccountId()).db;
@@ -164,7 +168,7 @@ function createAuthRouter({ redisClient, redisPrefix } = {}) {
                 req.session.regenerate(err => {
                     if (err) {
                         req.log?.error('Failed to regenerate session after login', { error: err.message });
-                        return res.status(500).json({ error: 'Session error' });
+                        return sendError(req, res, 500, 'Session error');
                     }
                     req.session.authenticated = true;
                     req.session.userId = user.id;
@@ -175,7 +179,7 @@ function createAuthRouter({ redisClient, redisPrefix } = {}) {
             }
 
             await recordFailedAttempt(ip, req);
-            return res.status(401).json({ error: 'Invalid credentials' });
+            return sendError(req, res, 401, 'Invalid credentials');
         } catch (error) {
             return next(error);
         }
@@ -185,7 +189,7 @@ function createAuthRouter({ redisClient, redisPrefix } = {}) {
         req.session.destroy(err => {
             if (err) {
                 req.log?.error('Failed to destroy session on logout', { error: err.message });
-                return res.status(500).json({ error: 'Session error' });
+                return sendError(req, res, 500, 'Session error');
             }
             res.clearCookie('whatsapp.sid', {
                 path: '/',
@@ -220,4 +224,3 @@ function createAuthRouter({ redisClient, redisPrefix } = {}) {
 }
 
 module.exports = createAuthRouter;
-

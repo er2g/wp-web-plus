@@ -4,6 +4,7 @@ const router = express.Router();
 const fs = require('fs');
 
 const { createAccountUpload } = require('../middleware/upload');
+const { sendError } = require('../../lib/httpResponses');
 
 const upload = createAccountUpload();
 
@@ -30,13 +31,17 @@ router.post('/migrate', async (req, res) => {
             failed: result.failed
         });
     } catch (error) {
-        return res.status(500).json({ success: false, error: error.message });
+        return res.status(500).json({
+            success: false,
+            error: error.message,
+            requestId: req.requestId || null
+        });
     }
 });
 
 router.post('/upload', upload.single('file'), async (req, res) => {
     if (!req.file) {
-        return res.status(400).json({ error: 'No file uploaded' });
+        return sendError(req, res, 400, 'No file uploaded');
     }
 
     try {
@@ -44,7 +49,7 @@ router.post('/upload', upload.single('file'), async (req, res) => {
         const initialized = await drive.initialize();
 
         if (!initialized) {
-            return res.status(400).json({ error: 'Drive not configured' });
+            return sendError(req, res, 400, 'Drive not configured');
         }
 
         const result = await drive.uploadFile(req.file.path, req.file.mimetype);
@@ -58,9 +63,8 @@ router.post('/upload', upload.single('file'), async (req, res) => {
             viewLink: result.viewLink
         });
     } catch (error) {
-        return res.status(500).json({ error: error.message });
+        return sendError(req, res, 500, error.message);
     }
 });
 
 module.exports = router;
-

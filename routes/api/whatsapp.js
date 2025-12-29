@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const { requireRole } = require('../middleware/auth');
+const { sendError } = require('../../lib/httpResponses');
 
 router.get('/status', (req, res) => {
     const { whatsapp, db } = req.account;
@@ -23,7 +24,7 @@ router.post('/connect', async (req, res) => {
         await req.account.whatsapp.initialize();
         res.json({ success: true, message: 'Initializing...' });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        return sendError(req, res, 500, error.message);
     }
 });
 
@@ -32,7 +33,7 @@ router.post('/disconnect', async (req, res) => {
         await req.account.whatsapp.logout();
         res.json({ success: true });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        return sendError(req, res, 500, error.message);
     }
 });
 
@@ -41,7 +42,7 @@ router.post('/sync', async (req, res) => {
         const result = await req.account.whatsapp.fullSync();
         res.json(result);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        return sendError(req, res, 500, error.message);
     }
 });
 
@@ -63,9 +64,8 @@ router.post('/chats/:id/mark-read', async (req, res) => {
         const result = await req.account.whatsapp.markAsRead(req.params.id);
         res.json(result);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        return sendError(req, res, 500, error.message);
     }
 });
 
 module.exports = router;
-
