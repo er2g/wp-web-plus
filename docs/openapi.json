@@ -1,0 +1,1285 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "WhatsApp Web Panel API",
+    "version": "1.0.0",
+    "description": "Cookie tabanli oturum (express-session) + CSRF korumali API. /api altindaki mutating (POST/PUT/DELETE) endpoint'ler icin CSRF header gonderilmelidir."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3000"
+    }
+  ],
+  "tags": [
+    { "name": "Health" },
+    { "name": "Auth" },
+    { "name": "Accounts" },
+    { "name": "WhatsApp" },
+    { "name": "Chats" },
+    { "name": "Messages" },
+    { "name": "Tags" },
+    { "name": "Contacts" },
+    { "name": "Scheduled" },
+    { "name": "Webhooks" },
+    { "name": "Scripts" },
+    { "name": "Templates" },
+    { "name": "AI" },
+    { "name": "Logs" },
+    { "name": "Stats" },
+    { "name": "Reports" },
+    { "name": "Roles" },
+    { "name": "Users" },
+    { "name": "Media" },
+    { "name": "Drive" },
+    { "name": "Observability" }
+  ],
+  "components": {
+    "securitySchemes": {
+      "sessionCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "whatsapp.sid"
+      },
+      "csrfToken": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-CSRF-Token"
+      },
+      "xsrfToken": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-XSRF-TOKEN"
+      }
+    },
+    "parameters": {
+      "AccountIdHeader": {
+        "name": "X-Account-Id",
+        "in": "header",
+        "required": false,
+        "schema": { "type": "string" },
+        "description": "Multi-account icin aktif hesabi secmekte kullanilir."
+      }
+    },
+    "schemas": {
+      "HealthResponse": {
+        "type": "object",
+        "required": ["ok", "uptime", "timestamp"],
+        "properties": {
+          "ok": { "type": "boolean" },
+          "uptime": { "type": "number" },
+          "timestamp": { "type": "integer", "format": "int64" }
+        }
+      },
+      "ReadyResponse": {
+        "type": "object",
+        "required": ["ok", "instanceId", "dependencies", "timestamp"],
+        "properties": {
+          "ok": { "type": "boolean" },
+          "instanceId": { "type": "string" },
+          "dependencies": {
+            "type": "object",
+            "properties": {
+              "redis": {
+                "type": "object",
+                "properties": {
+                  "configured": { "type": "boolean" },
+                  "connected": { "type": "boolean" }
+                }
+              }
+            }
+          },
+          "timestamp": { "type": "integer", "format": "int64" }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": { "type": "string" },
+          "requestId": { "type": "string" }
+        }
+      },
+      "SuccessResponse": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": { "type": "boolean" }
+        }
+      },
+      "AuthCheckResponse": {
+        "type": "object",
+        "required": ["authenticated", "userId", "role", "preferences"],
+        "properties": {
+          "authenticated": { "type": "boolean" },
+          "userId": { "type": ["integer", "null"] },
+          "role": { "type": ["string", "null"] },
+          "preferences": { "type": ["object", "null"] }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/healthz": {
+      "get": {
+        "tags": ["Health"],
+        "summary": "Liveness probe",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HealthResponse" } } }
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": ["Health"],
+        "summary": "Readiness probe",
+        "responses": {
+          "200": {
+            "description": "Ready",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReadyResponse" } } }
+          },
+          "503": {
+            "description": "Not ready",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReadyResponse" } } }
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "tags": ["Observability"],
+        "summary": "OpenAPI spec",
+        "responses": {
+          "200": {
+            "description": "OpenAPI JSON",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": ["Observability"],
+        "summary": "Prometheus metrics",
+        "responses": {
+          "200": {
+            "description": "Prometheus exposition format",
+            "content": { "text/plain": { "schema": { "type": "string" } } }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      }
+    },
+    "/auth/check": {
+      "get": {
+        "tags": ["Auth"],
+        "summary": "Oturum durumunu kontrol eder (CSRF cookie de set edilir)",
+        "responses": {
+          "200": {
+            "description": "Auth state",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthCheckResponse" } } }
+          }
+        }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Login",
+        "security": [{ "xsrfToken": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["username", "password"],
+                "properties": {
+                  "username": { "type": "string" },
+                  "password": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "401": {
+            "description": "Invalid credentials",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Logout",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } }
+          }
+        }
+      }
+    },
+    "/api/status": {
+      "get": {
+        "tags": ["WhatsApp"],
+        "summary": "WhatsApp durum + message stats",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "responses": {
+          "200": { "description": "Status", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/qr": {
+      "get": {
+        "tags": ["WhatsApp"],
+        "summary": "QR kod bilgisi",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "responses": {
+          "200": { "description": "QR", "content": { "application/json": { "schema": { "type": "object" } } } }
+        }
+      }
+    },
+    "/api/connect": {
+      "post": {
+        "tags": ["WhatsApp"],
+        "summary": "WhatsApp initialize",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "responses": {
+          "200": { "description": "Success", "content": { "application/json": { "schema": { "type": "object" } } } }
+        }
+      }
+    },
+    "/api/disconnect": {
+      "post": {
+        "tags": ["WhatsApp"],
+        "summary": "WhatsApp logout",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } }
+          }
+        }
+      }
+    },
+    "/api/sync": {
+      "post": {
+        "tags": ["WhatsApp"],
+        "summary": "Full sync",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "responses": { "200": { "description": "Sync result", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      }
+    },
+    "/api/sync/progress": {
+      "get": {
+        "tags": ["WhatsApp"],
+        "summary": "Sync progress",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "responses": { "200": { "description": "Progress", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      }
+    },
+    "/api/settings": {
+      "get": {
+        "tags": ["WhatsApp"],
+        "summary": "Settings (admin/manager)",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "responses": { "200": { "description": "Settings", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      },
+      "post": {
+        "tags": ["WhatsApp"],
+        "summary": "Settings update (admin/manager)",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": { "200": { "description": "Success", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      }
+    },
+    "/api/chats/{chatId}/mark-read": {
+      "post": {
+        "tags": ["WhatsApp"],
+        "summary": "Chat mark as read",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "chatId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "Result", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      }
+    },
+    "/api/accounts": {
+      "get": {
+        "tags": ["Accounts"],
+        "summary": "Accounts list (admin)",
+        "security": [{ "sessionCookie": [] }],
+        "responses": { "200": { "description": "Accounts", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      },
+      "post": {
+        "tags": ["Accounts"],
+        "summary": "Account create (admin)",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string" } } } } }
+        },
+        "responses": { "200": { "description": "Created", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      }
+    },
+    "/api/accounts/select": {
+      "post": {
+        "tags": ["Accounts"],
+        "summary": "Active account select (admin)",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["accountId"], "properties": { "accountId": { "type": "string" } } } } }
+        },
+        "responses": { "200": { "description": "Selected", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      }
+    },
+    "/api/chats": {
+      "get": {
+        "tags": ["Chats"],
+        "summary": "Chats list",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "tag", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "Chats", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } } }
+      }
+    },
+    "/api/chats/search": {
+      "get": {
+        "tags": ["Chats"],
+        "summary": "Chats search",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "q", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "tag", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "note", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer" } },
+          { "name": "offset", "in": "query", "required": false, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "Results", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } } }
+      }
+    },
+    "/api/chats/{chatId}/messages": {
+      "get": {
+        "tags": ["Chats"],
+        "summary": "Chat messages + tags + notes",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "chatId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer" } },
+          { "name": "offset", "in": "query", "required": false, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "Messages", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      }
+    },
+    "/api/messages": {
+      "get": {
+        "tags": ["Messages"],
+        "summary": "Messages list (paginated)",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer" } },
+          { "name": "offset", "in": "query", "required": false, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "Messages", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      }
+    },
+    "/api/messages/search": {
+      "get": {
+        "tags": ["Messages"],
+        "summary": "Messages search",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "q", "in": "query", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "Results", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } } }
+      }
+    },
+    "/api/tags": {
+      "get": {
+        "tags": ["Tags"],
+        "summary": "Tags list",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "responses": { "200": { "description": "Tags", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } } }
+      },
+      "post": {
+        "tags": ["Tags"],
+        "summary": "Tag create",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string" }, "color": { "type": ["string", "null"] } } } } } },
+        "responses": { "200": { "description": "Created", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      }
+    },
+    "/api/tags/{tagId}": {
+      "put": {
+        "tags": ["Tags"],
+        "summary": "Tag update",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "tagId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string" }, "color": { "type": ["string", "null"] } } } } } },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } }
+          }
+        }
+      },
+      "delete": {
+        "tags": ["Tags"],
+        "summary": "Tag delete",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "tagId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } }
+          }
+        }
+      }
+    },
+    "/api/chats/{chatId}/tags": {
+      "get": {
+        "tags": ["Chats"],
+        "summary": "Chat tags",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "chatId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Tags", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      },
+      "post": {
+        "tags": ["Chats"],
+        "summary": "Chat tag ekle",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "chatId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["tag_id"],
+                "properties": { "tag_id": { "type": "integer" } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Success", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } },
+          "400": { "description": "Validation error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/chats/{chatId}/tags/{tagId}": {
+      "delete": {
+        "tags": ["Chats"],
+        "summary": "Chat tag kaldir",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "chatId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "tagId", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": { "description": "Success", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/chats/{chatId}/notes": {
+      "get": {
+        "tags": ["Chats"],
+        "summary": "Chat notes",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "chatId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Notes", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } }
+        }
+      },
+      "post": {
+        "tags": ["Chats"],
+        "summary": "Chat note ekle",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "chatId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["content"],
+                "properties": { "content": { "type": "string" } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Success", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } },
+          "400": { "description": "Validation error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/chats/{chatId}/notes/{noteId}": {
+      "put": {
+        "tags": ["Chats"],
+        "summary": "Chat note guncelle",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "chatId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "noteId", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["content"],
+                "properties": { "content": { "type": "string" } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Success", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } }
+        }
+      },
+      "delete": {
+        "tags": ["Chats"],
+        "summary": "Chat note sil",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "chatId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "noteId", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": { "description": "Success", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } }
+        }
+      }
+    },
+    "/api/contacts/{chatId}/tags": {
+      "get": {
+        "tags": ["Contacts"],
+        "summary": "Contact tags",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "chatId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Tags", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } }
+        }
+      },
+      "post": {
+        "tags": ["Contacts"],
+        "summary": "Contact tag ekle",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "chatId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["tag_id"],
+                "properties": { "tag_id": { "type": "integer" } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Success", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } }
+        }
+      }
+    },
+    "/api/contacts/{chatId}/tags/{tagId}": {
+      "delete": {
+        "tags": ["Contacts"],
+        "summary": "Contact tag kaldir",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "chatId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "tagId", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": { "description": "Success", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } }
+        }
+      }
+    },
+    "/api/send": {
+      "post": {
+        "tags": ["Messages"],
+        "summary": "Mesaj gonder (text ve/veya media)",
+        "description": "`chatId` zorunlu; `message` veya `media` en az biri dolu olmalidir.",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["chatId"],
+                "properties": {
+                  "chatId": { "type": "string" },
+                  "message": { "type": "string" },
+                  "media": { "type": "string", "format": "binary" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Success", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "400": { "description": "Validation error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/auto-replies": {
+      "get": {
+        "tags": ["Scheduled"],
+        "summary": "Auto replies list",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "responses": { "200": { "description": "Auto replies", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } } }
+      },
+      "post": {
+        "tags": ["Scheduled"],
+        "summary": "Auto reply create (admin/manager)",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["trigger_word"], "properties": { "trigger_word": { "type": "string" }, "response": { "type": "string" }, "template_id": { "type": ["integer", "null"] }, "match_type": { "type": "string" }, "is_active": { "type": "boolean" }, "required_tag_id": { "type": ["integer", "null"] }, "exclude_tag_id": { "type": ["integer", "null"] } } } } } },
+        "responses": { "200": { "description": "Created", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      }
+    },
+    "/api/auto-replies/{id}": {
+      "put": {
+        "tags": ["Scheduled"],
+        "summary": "Auto reply update (admin/manager)",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": { "200": { "description": "Success", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } } }
+      },
+      "delete": {
+        "tags": ["Scheduled"],
+        "summary": "Auto reply delete (admin/manager)",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "Success", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } } }
+      }
+    },
+    "/api/auto-replies/{id}/toggle": {
+      "post": {
+        "tags": ["Scheduled"],
+        "summary": "Auto reply toggle (admin/manager)",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "Success", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      }
+    },
+    "/api/webhooks": {
+      "get": {
+        "tags": ["Webhooks"],
+        "summary": "Webhooks list (admin)",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "responses": {
+          "200": { "description": "Webhooks", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "403": { "description": "Forbidden", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      },
+      "post": {
+        "tags": ["Webhooks"],
+        "summary": "Webhook create (admin)",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["url"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "url": { "type": "string" },
+                  "events": { "type": "string" },
+                  "is_active": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Created", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "400": { "description": "Validation error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/webhooks/{id}": {
+      "put": {
+        "tags": ["Webhooks"],
+        "summary": "Webhook update (admin)",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": { "200": { "description": "Success", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } } }
+      },
+      "delete": {
+        "tags": ["Webhooks"],
+        "summary": "Webhook delete (admin)",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "Success", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } } }
+      }
+    },
+    "/api/webhooks/{id}/deliveries": {
+      "get": {
+        "tags": ["Webhooks"],
+        "summary": "Webhook deliveries (admin)",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer" } },
+          { "name": "offset", "in": "query", "required": false, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "Deliveries", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } } }
+      }
+    },
+    "/api/webhooks/deliveries/{id}/replay": {
+      "post": {
+        "tags": ["Webhooks"],
+        "summary": "Webhook delivery replay (admin)",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "Success", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } } }
+      }
+    },
+    "/api/templates": {
+      "get": {
+        "tags": ["Templates"],
+        "summary": "Templates list",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "responses": { "200": { "description": "Templates", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } } }
+      },
+      "post": {
+        "tags": ["Templates"],
+        "summary": "Template create (admin/manager)",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name", "content"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "content": { "type": "string" },
+                  "variables": { "type": ["string", "array", "null"], "items": { "type": "string" } },
+                  "category": { "type": ["string", "null"] }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Created", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      }
+    },
+    "/api/templates/{id}": {
+      "get": {
+        "tags": ["Templates"],
+        "summary": "Template get",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "Template", "content": { "application/json": { "schema": { "type": "object" } } } }, "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } } }
+      },
+      "put": {
+        "tags": ["Templates"],
+        "summary": "Template update (admin/manager)",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["name", "content"], "properties": { "name": { "type": "string" }, "content": { "type": "string" }, "variables": { "type": ["string", "array", "null"], "items": { "type": "string" } }, "category": { "type": ["string", "null"] } } } } } },
+        "responses": { "200": { "description": "Success", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } } }
+      },
+      "delete": {
+        "tags": ["Templates"],
+        "summary": "Template delete (admin/manager)",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "Success", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } } }
+      }
+    },
+    "/api/scheduled": {
+      "get": {
+        "tags": ["Scheduled"],
+        "summary": "Scheduled messages list",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "responses": { "200": { "description": "Scheduled", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } } }
+      },
+      "post": {
+        "tags": ["Scheduled"],
+        "summary": "Scheduled message create",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["chat_id", "scheduled_at"],
+                "properties": {
+                  "chat_id": { "type": "string" },
+                  "chat_name": { "type": "string" },
+                  "message": { "type": "string" },
+                  "template_id": { "type": ["integer", "null"] },
+                  "scheduled_at": { "type": "string", "format": "date-time" },
+                  "is_recurring": { "type": "boolean" },
+                  "cron_expression": { "type": ["string", "null"] }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Created", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      }
+    },
+    "/api/scheduled/{id}": {
+      "delete": {
+        "tags": ["Scheduled"],
+        "summary": "Scheduled message delete",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "Success", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } } }
+      }
+    },
+    "/api/scripts": {
+      "get": {
+        "tags": ["Scripts"],
+        "summary": "Scripts list (admin)",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "responses": { "200": { "description": "Scripts", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } } }
+      },
+      "post": {
+        "tags": ["Scripts"],
+        "summary": "Script create (admin)",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["name", "code"], "properties": { "name": { "type": "string" }, "description": { "type": "string" }, "code": { "type": "string" }, "trigger_type": { "type": "string" }, "trigger_filter": { "type": ["object", "null"] }, "is_active": { "type": "boolean" } } } } } },
+        "responses": { "200": { "description": "Created", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      }
+    },
+    "/api/scripts/test": {
+      "post": {
+        "tags": ["Scripts"],
+        "summary": "Script test (admin)",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["code"], "properties": { "code": { "type": "string" }, "testData": { "type": ["object", "null"] } } } } } },
+        "responses": { "200": { "description": "Result", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      }
+    },
+    "/api/scripts/{id}": {
+      "get": {
+        "tags": ["Scripts"],
+        "summary": "Script get (admin)",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "Script", "content": { "application/json": { "schema": { "type": "object" } } } }, "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } } }
+      },
+      "put": {
+        "tags": ["Scripts"],
+        "summary": "Script update (admin)",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": { "200": { "description": "Success", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } } }
+      },
+      "delete": {
+        "tags": ["Scripts"],
+        "summary": "Script delete (admin)",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "Success", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } } }
+      }
+    },
+    "/api/scripts/{id}/toggle": {
+      "post": {
+        "tags": ["Scripts"],
+        "summary": "Script toggle (admin)",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "Result", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      }
+    },
+    "/api/scripts/{id}/run": {
+      "post": {
+        "tags": ["Scripts"],
+        "summary": "Script run (admin)",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "requestBody": { "required": false, "content": { "application/json": { "schema": { "type": "object", "properties": { "testData": { "type": "object" } } } } } },
+        "responses": { "200": { "description": "Result", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      }
+    },
+    "/api/scripts/{id}/logs": {
+      "get": {
+        "tags": ["Scripts"],
+        "summary": "Script logs (admin)",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "Logs", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } } }
+      }
+    },
+    "/api/logs": {
+      "get": {
+        "tags": ["Logs"],
+        "summary": "Logs (admin)",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer" } },
+          { "name": "category", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "Logs", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } } }
+      }
+    },
+    "/api/stats": {
+      "get": {
+        "tags": ["Stats"],
+        "summary": "Stats",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "responses": { "200": { "description": "Stats", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      }
+    },
+    "/api/reports/overview": {
+      "get": {
+        "tags": ["Reports"],
+        "summary": "Reports overview",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "start", "in": "query", "required": false, "schema": { "type": "integer", "format": "int64" } },
+          { "name": "end", "in": "query", "required": false, "schema": { "type": "integer", "format": "int64" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "Overview", "content": { "application/json": { "schema": { "type": "object" } } } }, "400": { "description": "Invalid range", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } } }
+      }
+    },
+    "/api/reports/trends": {
+      "get": {
+        "tags": ["Reports"],
+        "summary": "Reports trends",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "start", "in": "query", "required": false, "schema": { "type": "integer", "format": "int64" } },
+          { "name": "end", "in": "query", "required": false, "schema": { "type": "integer", "format": "int64" } },
+          { "name": "interval", "in": "query", "required": false, "schema": { "type": "string", "enum": ["daily", "weekly"] } }
+        ],
+        "responses": { "200": { "description": "Trends", "content": { "application/json": { "schema": { "type": "object" } } } }, "400": { "description": "Invalid range", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } } }
+      }
+    },
+    "/api/reports/response-time": {
+      "get": {
+        "tags": ["Reports"],
+        "summary": "Reports response time",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "start", "in": "query", "required": false, "schema": { "type": "integer", "format": "int64" } },
+          { "name": "end", "in": "query", "required": false, "schema": { "type": "integer", "format": "int64" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer" } },
+          { "name": "interval", "in": "query", "required": false, "schema": { "type": "string", "enum": ["daily", "weekly"] } }
+        ],
+        "responses": { "200": { "description": "Response time report", "content": { "application/json": { "schema": { "type": "object" } } } }, "400": { "description": "Invalid range", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } } }
+      }
+    },
+    "/api/roles": {
+      "get": {
+        "tags": ["Roles"],
+        "summary": "Roles list (admin)",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "responses": { "200": { "description": "Roles", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } } }
+      },
+      "post": {
+        "tags": ["Roles"],
+        "summary": "Role create (admin)",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string" }, "description": { "type": "string" } } } } } },
+        "responses": { "200": { "description": "Created", "content": { "application/json": { "schema": { "type": "object" } } } }, "409": { "description": "Already exists", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } } }
+      }
+    },
+    "/api/roles/{id}": {
+      "delete": {
+        "tags": ["Roles"],
+        "summary": "Role delete (admin)",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "Success", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } }, "400": { "description": "Assigned", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } } }
+      }
+    },
+    "/api/users": {
+      "get": {
+        "tags": ["Users"],
+        "summary": "Users list (admin)",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "responses": { "200": { "description": "Users", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } } }
+      },
+      "post": {
+        "tags": ["Users"],
+        "summary": "User create (admin)",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["username", "password", "roleId"],
+                "properties": {
+                  "username": { "type": "string" },
+                  "display_name": { "type": "string" },
+                  "password": { "type": "string" },
+                  "roleId": { "type": "integer" }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Created", "content": { "application/json": { "schema": { "type": "object" } } } }, "409": { "description": "Username exists", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } } }
+      }
+    },
+    "/api/users/{id}": {
+      "delete": {
+        "tags": ["Users"],
+        "summary": "User delete (admin)",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "Success", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } } }
+      }
+    },
+    "/api/users/{id}/role": {
+      "put": {
+        "tags": ["Users"],
+        "summary": "User role update (admin)",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["roleId"], "properties": { "roleId": { "type": "integer" } } } } } },
+        "responses": { "200": { "description": "Success", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } } }
+      }
+    },
+    "/api/users/me/preferences": {
+      "put": {
+        "tags": ["Users"],
+        "summary": "My preferences update",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": { "200": { "description": "Success", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } } }
+      }
+    },
+    "/api/media/{filename}": {
+      "get": {
+        "tags": ["Media"],
+        "summary": "Media file fetch",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "filename", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "File", "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } } },
+          "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/drive/status": {
+      "get": {
+        "tags": ["Drive"],
+        "summary": "Drive status",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "responses": { "200": { "description": "Status", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      }
+    },
+    "/api/drive/migrate": {
+      "post": {
+        "tags": ["Drive"],
+        "summary": "Drive migrate existing media",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "responses": { "200": { "description": "Result", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      }
+    },
+    "/api/drive/upload": {
+      "post": {
+        "tags": ["Drive"],
+        "summary": "Drive upload",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["file"],
+                "properties": {
+                  "file": { "type": "string", "format": "binary" }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Uploaded", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      }
+    },
+    "/api/ai/generate-script": {
+      "post": {
+        "tags": ["AI"],
+        "summary": "AI ile script uret (Gemini) (admin)",
+        "security": [{ "sessionCookie": [], "csrfToken": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["prompt"], "properties": { "prompt": { "type": "string" } } } } } },
+        "responses": { "200": { "description": "Script", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      }
+    }
+  }
+}

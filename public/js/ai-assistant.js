@@ -2,7 +2,7 @@
  * WhatsApp Web Panel - AI Assistant Frontend Logic
  */
 
-function openAiAssistant() {
+function openGeminiAssistant() {
     closeModal(); // Close existing modals
 
     const modal = document.createElement('div');
@@ -47,6 +47,11 @@ function openAiAssistant() {
 
     document.body.appendChild(modal);
     document.getElementById('aiPromptInput').focus();
+}
+
+// Backward compatibility (older UI code)
+function openAiAssistant() {
+    return openGeminiAssistant();
 }
 
 let lastGeneratedScript = null;

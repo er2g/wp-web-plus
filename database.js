@@ -154,6 +154,15 @@ function createDatabase(config) {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS service_locks (
+        name TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL,
+        acquired_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_service_locks_expires_at ON service_locks(expires_at);
+
     CREATE TABLE IF NOT EXISTS roles (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT UNIQUE NOT NULL,
@@ -538,6 +547,22 @@ function createDatabase(config) {
         cleanup: db.prepare(`DELETE FROM logs WHERE created_at < datetime('now', ?)`)
     };
 
+    const locks = {
+        acquire: db.prepare(`
+        INSERT INTO service_locks (name, owner_id, acquired_at, expires_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(name) DO UPDATE SET
+            owner_id = excluded.owner_id,
+            acquired_at = excluded.acquired_at,
+            expires_at = excluded.expires_at
+        WHERE service_locks.owner_id = excluded.owner_id
+           OR service_locks.expires_at < excluded.acquired_at
+    `),
+        release: db.prepare('DELETE FROM service_locks WHERE name = ? AND owner_id = ?'),
+        get: db.prepare('SELECT * FROM service_locks WHERE name = ?'),
+        cleanupExpired: db.prepare('DELETE FROM service_locks WHERE expires_at < ?')
+    };
+
     const roles = {
         getAll: db.prepare('SELECT * FROM roles ORDER BY name ASC'),
         getById: db.prepare('SELECT * FROM roles WHERE id = ?'),
@@ -857,6 +882,7 @@ function createDatabase(config) {
         scripts,
         scriptLogs,
         logs,
+        locks,
         roles,
         users,
         userRoles,

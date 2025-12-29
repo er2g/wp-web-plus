@@ -5,7 +5,7 @@ const path = require('path');
 
 // Load environment variables from .env file
 try {
-    require('dotenv').config();
+    require('dotenv').config({ quiet: true });
 } catch (e) {
     // dotenv not installed, using defaults
 }
@@ -15,7 +15,19 @@ function toPositiveInt(value, fallback) {
     return Number.isFinite(num) && num > 0 ? num : fallback;
 }
 
+const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(__dirname, 'data');
+const logsDir = process.env.LOGS_DIR ? path.resolve(process.env.LOGS_DIR) : path.join(__dirname, 'logs');
+
 module.exports = {
+    // Instance identity (useful for PM2 / multi-process locks)
+    INSTANCE_ID: process.env.INSTANCE_ID
+        || process.env.pm_id
+        || process.env.NODE_APP_INSTANCE
+        || String(process.pid),
+
+    // Background jobs (scheduler/cleanup)
+    ENABLE_BACKGROUND_JOBS: process.env.ENABLE_BACKGROUND_JOBS !== 'false',
+
     // Server
     PORT: process.env.PORT || 3000,
 
@@ -29,6 +41,14 @@ module.exports = {
 
     // CORS Origins (required)
     CORS_ORIGINS: process.env.CORS_ORIGINS,
+
+    // Redis (optional)
+    REDIS_URL: process.env.REDIS_URL,
+    REDIS_PREFIX: process.env.REDIS_PREFIX || 'wp-panel:',
+
+    // Metrics (optional)
+    METRICS_ENABLED: process.env.METRICS_ENABLED === 'true',
+    METRICS_TOKEN: process.env.METRICS_TOKEN,
 
     // Password policy
     PASSWORD_POLICY: {
@@ -48,11 +68,11 @@ module.exports = {
     },
     
     // Paths
-    DATA_DIR: path.join(__dirname, 'data'),
-    SESSION_DIR: path.join(__dirname, 'data', 'session'),
-    DB_PATH: path.join(__dirname, 'data', 'whatsapp.db'),
-    LOGS_DIR: path.join(__dirname, 'logs'),
-    MEDIA_DIR: path.join(__dirname, 'data', 'media'),
+    DATA_DIR: dataDir,
+    SESSION_DIR: process.env.SESSION_DIR ? path.resolve(process.env.SESSION_DIR) : path.join(dataDir, 'session'),
+    DB_PATH: process.env.DB_PATH ? path.resolve(process.env.DB_PATH) : path.join(dataDir, 'whatsapp.db'),
+    LOGS_DIR: logsDir,
+    MEDIA_DIR: process.env.MEDIA_DIR ? path.resolve(process.env.MEDIA_DIR) : path.join(dataDir, 'media'),
     
     // WhatsApp
     PUPPETEER_ARGS: [
@@ -69,6 +89,7 @@ module.exports = {
     SCHEDULER_CHECK_INTERVAL: 60000, // 1 minute
     SCHEDULER_MAX_RETRIES: 5,
     SCHEDULER_RETRY_BASE_MS: 60000, // 1 minute
+    SCHEDULER_LOCK_TTL_MS: toPositiveInt(process.env.SCHEDULER_LOCK_TTL_MS || String(3 * 60 * 1000), 3 * 60 * 1000),
 
     // Cleanup
     CLEANUP_DAILY_CRON: process.env.CLEANUP_DAILY_CRON || '0 3 * * *',
@@ -76,6 +97,7 @@ module.exports = {
     LOG_RETENTION_DAYS: toPositiveInt(process.env.LOG_RETENTION_DAYS || '30', 30),
     SCRIPT_LOG_RETENTION_DAYS: toPositiveInt(process.env.SCRIPT_LOG_RETENTION_DAYS || '30', 30),
     MESSAGE_RETENTION_DAYS: toPositiveInt(process.env.MESSAGE_RETENTION_DAYS || '90', 90),
+    CLEANUP_LOCK_TTL_MS: toPositiveInt(process.env.CLEANUP_LOCK_TTL_MS || String(15 * 60 * 1000), 15 * 60 * 1000),
     
     // Webhook
     WEBHOOK_TIMEOUT: 10000, // 10 seconds
@@ -83,5 +105,5 @@ module.exports = {
     WEBHOOK_RETRY_BASE_MS: 1000, // 1 second
     
     // Logging
-    LOG_LEVEL: 'info'
+    LOG_LEVEL: process.env.LOG_LEVEL || 'info'
 };

@@ -11,6 +11,10 @@ class SchedulerService {
         this.config = config;
         this.checkInterval = null;
         this.cronJobs = new Map();
+        this.instanceId = config.INSTANCE_ID || String(process.pid);
+        this.lockName = 'scheduler';
+        this.lockTtlMs = config.SCHEDULER_LOCK_TTL_MS || 3 * 60 * 1000;
+        this.tickInProgress = false;
     }
 
     setWhatsApp(whatsapp) {
@@ -50,12 +54,14 @@ class SchedulerService {
     start() {
         // Check for pending messages every minute
         this.checkInterval = setInterval(() => {
-            this.checkPendingMessages();
+            this.tick().catch(() => {});
         }, this.config.SCHEDULER_CHECK_INTERVAL);
+        if (typeof this.checkInterval.unref === 'function') {
+            this.checkInterval.unref();
+        }
 
-        // Initial check
-        this.checkPendingMessages();
-        this.bootstrapRecurring();
+        // Initial tick
+        this.tick().catch(() => {});
 
         logger.info('Scheduler service started', { category: 'scheduler' });
         this.db.logs.add.run('info', 'scheduler', 'Scheduler service started', null);
@@ -76,6 +82,38 @@ class SchedulerService {
         logger.info('Scheduler service stopped', { category: 'scheduler' });
     }
 
+    tryAcquireLeaderLock() {
+        if (!this.db?.locks?.acquire) {
+            return true;
+        }
+        const now = Date.now();
+        const expiresAt = now + this.lockTtlMs;
+        try {
+            const result = this.db.locks.acquire.run(this.lockName, this.instanceId, now, expiresAt);
+            return result && result.changes > 0;
+        } catch (error) {
+            return false;
+        }
+    }
+
+    async tick() {
+        if (this.tickInProgress) {
+            return;
+        }
+
+        if (!this.tryAcquireLeaderLock()) {
+            return;
+        }
+
+        this.tickInProgress = true;
+        try {
+            this.syncRecurringSchedules();
+            await this.checkPendingMessages();
+        } finally {
+            this.tickInProgress = false;
+        }
+    }
+
     bootstrapRecurring() {
         try {
             const recurring = this.db.scheduled.getRecurring.all();
@@ -93,6 +131,39 @@ class SchedulerService {
             });
         } catch (error) {
             logger.error('Failed to load recurring schedules', {
+                category: 'scheduler',
+                error: error.message
+            });
+        }
+    }
+
+    syncRecurringSchedules() {
+        try {
+            const recurring = this.db.scheduled.getRecurring.all();
+            const activeIds = new Set(recurring.map(entry => entry.id));
+
+            for (const entry of recurring) {
+                if (!entry.cron_expression) continue;
+                if (!this.cronJobs.has(entry.id)) {
+                    this.setupRecurring(
+                        entry.id,
+                        entry.cron_expression,
+                        entry.chat_id,
+                        entry.message,
+                        entry.template_id,
+                        entry.chat_name
+                    );
+                }
+            }
+
+            for (const [id, job] of this.cronJobs.entries()) {
+                if (!activeIds.has(id)) {
+                    job.stop();
+                    this.cronJobs.delete(id);
+                }
+            }
+        } catch (error) {
+            logger.error('Failed to sync recurring schedules', {
                 category: 'scheduler',
                 error: error.message
             });
@@ -172,6 +243,9 @@ class SchedulerService {
         }
 
         const job = cron.schedule(cronExpression, async () => {
+            if (!this.tryAcquireLeaderLock()) {
+                return;
+            }
             if (this.whatsapp && this.whatsapp.isReady()) {
                 try {
                     const resolvedMessage = this.resolveScheduledMessage({

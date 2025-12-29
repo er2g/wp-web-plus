@@ -9,6 +9,7 @@ const { createCleanupService } = require('./cleanup');
 const { createSchedulerService } = require('./scheduler');
 const { createWebhookService } = require('./webhook');
 const { createScriptRunner } = require('./scriptRunner');
+const { createMessagePipeline } = require('./messagePipeline');
 const { logger } = require('./logger');
 
 const ACCOUNTS_FILE = path.join(config.DATA_DIR, 'accounts.json');
@@ -107,6 +108,7 @@ class AccountManager {
 
         this.contexts = new Map();
         this.io = null;
+        this.metrics = null;
 
         const defaultConfig = getAccountConfig(DEFAULT_ACCOUNT_ID);
         migrateLegacyData(defaultConfig);
@@ -158,6 +160,7 @@ class AccountManager {
         const scheduler = createSchedulerService(db, whatsapp, config);
         const webhook = createWebhookService(db, config);
         const scriptRunner = createScriptRunner(db, whatsapp);
+        const messagePipeline = createMessagePipeline({ autoReply, webhook, scriptRunner, logger, metrics: this.metrics });
 
         const context = {
             account,
@@ -169,7 +172,8 @@ class AccountManager {
             cleanup,
             scheduler,
             webhook,
-            scriptRunner
+            scriptRunner,
+            messagePipeline
         };
 
         const originalHandleMessage = whatsapp.handleMessage.bind(whatsapp);
@@ -177,12 +181,11 @@ class AccountManager {
             const result = await originalHandleMessage(msg, fromMe);
 
             if (result) {
-                if (!fromMe) {
-                    await autoReply.processMessage(result.msgData);
-                }
-
-                await webhook.trigger('message', result.msgData);
-                await scriptRunner.processMessage(result.msgData);
+                messagePipeline.schedule({
+                    msgData: result.msgData,
+                    fromMe,
+                    accountId: resolvedId
+                });
             }
 
             return result;
@@ -192,8 +195,12 @@ class AccountManager {
             whatsapp.setSocketIO(this.io, resolvedId);
         }
 
-        scheduler.start();
-        cleanup.start();
+        if (config.ENABLE_BACKGROUND_JOBS) {
+            scheduler.start();
+            cleanup.start();
+        } else {
+            logger.info('Background jobs disabled', { category: 'lifecycle', accountId: resolvedId });
+        }
 
         this.contexts.set(resolvedId, context);
         return context;
@@ -204,6 +211,10 @@ class AccountManager {
         for (const [accountId, context] of this.contexts.entries()) {
             context.whatsapp.setSocketIO(io, accountId);
         }
+    }
+
+    setMetrics(metrics) {
+        this.metrics = metrics || null;
     }
 
     attachAccount(req, res, next) {

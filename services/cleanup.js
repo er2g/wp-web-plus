@@ -2,12 +2,30 @@
  * WhatsApp Web Panel - Cleanup Service
  */
 const cron = require('node-cron');
+const { logger } = require('./logger');
 
 class CleanupService {
     constructor(db, config) {
         this.db = db;
         this.config = config;
         this.jobs = [];
+        this.instanceId = config.INSTANCE_ID || String(process.pid);
+        this.lockName = 'cleanup';
+        this.lockTtlMs = config.CLEANUP_LOCK_TTL_MS || 15 * 60 * 1000;
+    }
+
+    tryAcquireLeaderLock() {
+        if (!this.db?.locks?.acquire) {
+            return true;
+        }
+        const now = Date.now();
+        const expiresAt = now + this.lockTtlMs;
+        try {
+            const result = this.db.locks.acquire.run(this.lockName, this.instanceId, now, expiresAt);
+            return result && result.changes > 0;
+        } catch (error) {
+            return false;
+        }
     }
 
     start() {
@@ -29,23 +47,29 @@ class CleanupService {
         this.runDailyCleanup();
         this.runWeeklyCleanup();
 
-        console.log('Cleanup service started');
+        logger.info('Cleanup service started', { category: 'cleanup' });
         this.db.logs.add.run('info', 'cleanup', 'Cleanup service started', null);
     }
 
     stop() {
         this.jobs.forEach(job => job.stop());
         this.jobs = [];
-        console.log('Cleanup service stopped');
+        logger.info('Cleanup service stopped', { category: 'cleanup' });
     }
 
     runDailyCleanup() {
+        if (!this.tryAcquireLeaderLock()) {
+            return;
+        }
         try {
             const logRetention = `-${this.config.LOG_RETENTION_DAYS} days`;
             const scriptLogRetention = `-${this.config.SCRIPT_LOG_RETENTION_DAYS} days`;
 
             const logResult = this.db.logs.cleanup.run(logRetention);
             const scriptLogResult = this.db.scriptLogs.cleanup.run(scriptLogRetention);
+            if (this.db?.locks?.cleanupExpired) {
+                this.db.locks.cleanupExpired.run(Date.now());
+            }
 
             this.recordSummary('daily', {
                 logsDeleted: logResult.changes,
@@ -59,6 +83,9 @@ class CleanupService {
     }
 
     runWeeklyCleanup() {
+        if (!this.tryAcquireLeaderLock()) {
+            return;
+        }
         try {
             const cutoff = Date.now() - this.config.MESSAGE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
             const messageResult = this.db.maintenance.cleanupMessages.run(cutoff);
