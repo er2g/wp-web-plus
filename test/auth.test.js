@@ -180,6 +180,8 @@ test('GET /docs requires auth', async () => {
     const client = createClient();
     const res = await client.request({ method: 'GET', urlPath: '/docs' });
     assert.equal(res.status, 401);
+    const parsed = JSON.parse(res.body);
+    assert.ok(parsed.requestId);
 });
 
 test('GET /docs serves swagger ui for admin', async () => {
@@ -215,6 +217,8 @@ test('GET /metrics returns 401 when token is missing or wrong', async () => {
 
     const missing = await client.request({ method: 'GET', urlPath: '/metrics' });
     assert.equal(missing.status, 401);
+    const missingBody = JSON.parse(missing.body);
+    assert.ok(missingBody.requestId);
 
     const wrong = await client.request({
         method: 'GET',
@@ -222,6 +226,8 @@ test('GET /metrics returns 401 when token is missing or wrong', async () => {
         headers: { Authorization: 'Bearer wrong-token' }
     });
     assert.equal(wrong.status, 401);
+    const wrongBody = JSON.parse(wrong.body);
+    assert.ok(wrongBody.requestId);
 });
 
 test('POST /auth/login rejects without CSRF token', async () => {
@@ -237,6 +243,7 @@ test('POST /auth/login rejects without CSRF token', async () => {
     assert.equal(res.status, 403);
     const parsed = JSON.parse(res.body);
     assert.equal(parsed.error, 'Invalid CSRF token');
+    assert.ok(parsed.requestId);
 });
 
 test('POST /auth/login succeeds with CSRF token', async () => {
@@ -269,6 +276,9 @@ test('GET /api/status requires auth', async () => {
     const client = createClient();
     const res = await client.request({ method: 'GET', urlPath: '/api/status' });
     assert.equal(res.status, 401);
+    const parsed = JSON.parse(res.body);
+    assert.equal(parsed.error, 'Not authenticated');
+    assert.ok(parsed.requestId);
 });
 
 test('GET /api/status returns whatsapp status + stats', async () => {
