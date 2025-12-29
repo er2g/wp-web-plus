@@ -571,7 +571,7 @@ router.get('/auto-replies', (req, res) => {
 });
 
 router.post('/auto-replies', requireRole(['admin', 'manager']), (req, res) => {
-    const { trigger_word, response, template_id, match_type, is_active } = req.body;
+    const { trigger_word, response, template_id, match_type, is_active, required_tag_id, exclude_tag_id } = req.body;
     if (!trigger_word || (!response && !template_id)) {
         return res.status(400).json({ error: 'trigger_word and response or template_id required' });
     }
@@ -581,6 +581,13 @@ router.post('/auto-replies', requireRole(['admin', 'manager']), (req, res) => {
     }
     if (response && response.length > LIMITS.MESSAGE_LENGTH) {
         return res.status(400).json({ error: 'Response too long (max ' + LIMITS.MESSAGE_LENGTH + ' chars)' });
+    }
+    if (match_type === 'regex') {
+        try {
+            new RegExp(trigger_word);
+        } catch (e) {
+            return res.status(400).json({ error: 'Invalid regular expression' });
+        }
     }
     if (template_id) {
         const template = req.account.db.messageTemplates.getById.get(template_id);
@@ -593,13 +600,22 @@ router.post('/auto-replies', requireRole(['admin', 'manager']), (req, res) => {
         response || '',
         template_id || null,
         match_type || 'contains',
-        is_active !== false ? 1 : 0
+        is_active !== false ? 1 : 0,
+        required_tag_id || null,
+        exclude_tag_id || null
     );
     res.json({ success: true, id: result.lastInsertRowid });
 });
 
 router.put('/auto-replies/:id', requireRole(['admin', 'manager']), (req, res) => {
-    const { trigger_word, response, template_id, match_type, is_active } = req.body;
+    const { trigger_word, response, template_id, match_type, is_active, required_tag_id, exclude_tag_id } = req.body;
+    if (match_type === 'regex') {
+        try {
+            new RegExp(trigger_word);
+        } catch (e) {
+            return res.status(400).json({ error: 'Invalid regular expression' });
+        }
+    }
     if (template_id) {
         const template = req.account.db.messageTemplates.getById.get(template_id);
         if (!template) {
@@ -612,6 +628,8 @@ router.put('/auto-replies/:id', requireRole(['admin', 'manager']), (req, res) =>
         template_id || null,
         match_type || 'contains',
         is_active ? 1 : 0,
+        required_tag_id || null,
+        exclude_tag_id || null,
         req.params.id
     );
     res.json({ success: true });

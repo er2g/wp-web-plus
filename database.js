@@ -282,6 +282,18 @@ function createDatabase(config) {
                     db.exec('ALTER TABLE scheduled_messages ADD COLUMN template_id INTEGER');
                 }
             }
+        },
+        {
+            version: 6,
+            name: 'add_tags_to_auto_replies',
+            apply: () => {
+                if (!columnExists('auto_replies', 'required_tag_id')) {
+                    db.exec('ALTER TABLE auto_replies ADD COLUMN required_tag_id INTEGER');
+                }
+                if (!columnExists('auto_replies', 'exclude_tag_id')) {
+                    db.exec('ALTER TABLE auto_replies ADD COLUMN exclude_tag_id INTEGER');
+                }
+            }
         }
     ];
 
@@ -387,8 +399,8 @@ function createDatabase(config) {
         getAll: db.prepare('SELECT * FROM auto_replies ORDER BY created_at DESC'),
         getActive: db.prepare('SELECT * FROM auto_replies WHERE is_active = 1'),
         getById: db.prepare('SELECT * FROM auto_replies WHERE id = ?'),
-        create: db.prepare(`INSERT INTO auto_replies (trigger_word, response, template_id, match_type, is_active) VALUES (?, ?, ?, ?, ?)`),
-        update: db.prepare(`UPDATE auto_replies SET trigger_word = ?, response = ?, template_id = ?, match_type = ?, is_active = ? WHERE id = ?`),
+        create: db.prepare(`INSERT INTO auto_replies (trigger_word, response, template_id, match_type, is_active, required_tag_id, exclude_tag_id) VALUES (?, ?, ?, ?, ?, ?, ?)`),
+        update: db.prepare(`UPDATE auto_replies SET trigger_word = ?, response = ?, template_id = ?, match_type = ?, is_active = ?, required_tag_id = ?, exclude_tag_id = ? WHERE id = ?`),
         delete: db.prepare('DELETE FROM auto_replies WHERE id = ?'),
         incrementCount: db.prepare('UPDATE auto_replies SET reply_count = reply_count + 1 WHERE id = ?'),
         toggle: db.prepare('UPDATE auto_replies SET is_active = ? WHERE id = ?')
