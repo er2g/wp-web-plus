@@ -411,6 +411,34 @@
                         <option value="solid">Duz</option>
                     </select>
                 </div>
+                <div class="settings-item">
+                    <i class="icon bi bi-type"></i>
+                    <div class="info">
+                        <div class="title">Yazi Boyutu</div>
+                        <div class="subtitle">Mesaj metni boyutu</div>
+                    </div>
+                    <input type="range" id="fontSizeRange" min="12" max="18" step="0.5" oninput="updateFontSize(this.value)" style="width: 100px;">
+                </div>
+                <div class="settings-item" onclick="toggleCompactMode()">
+                    <i class="icon bi bi-list-task"></i>
+                    <div class="info">
+                        <div class="title">Kompakt Mod</div>
+                        <div class="subtitle">Daha sik gorunum</div>
+                    </div>
+                    <div class="toggle" id="toggleCompactMode"></div>
+                </div>
+                <div class="settings-item">
+                    <i class="icon bi bi-chat-square-text"></i>
+                    <div class="info">
+                        <div class="title">Baloncuk Stili</div>
+                        <div class="subtitle">Mesaj kutusu sekli</div>
+                    </div>
+                    <select id="bubbleStyleSelect" class="select-input" onchange="updateBubbleStyle(this.value)">
+                        <option value="rounded">Yuvarlak</option>
+                        <option value="boxy">Koseli</option>
+                        <option value="leaf">Yaprak</option>
+                    </select>
+                </div>
             </div>
 
             <!-- Notifications Section -->

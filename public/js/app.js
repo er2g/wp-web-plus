@@ -28,7 +28,10 @@ let settings = {
 };
 let uiPreferences = {
     accentColor: localStorage.getItem('uiAccent') || '',
-    wallpaper: localStorage.getItem('uiWallpaper') || 'default'
+    wallpaper: localStorage.getItem('uiWallpaper') || 'default',
+    fontSize: localStorage.getItem('uiFontSize') || '14.2',
+    compactMode: localStorage.getItem('uiCompactMode') === 'true',
+    bubbleStyle: localStorage.getItem('uiBubbleStyle') || 'rounded'
 };
 let selectedAttachment = null;
 const MESSAGE_PAGE_SIZE = 50;
@@ -118,6 +121,9 @@ function loadCustomizations() {
         applyAccentColor(uiPreferences.accentColor);
     }
     applyWallpaper(uiPreferences.wallpaper);
+    applyFontSize(uiPreferences.fontSize);
+    applyCompactMode(uiPreferences.compactMode);
+    applyBubbleStyle(uiPreferences.bubbleStyle);
     updateCustomizationUI();
 }
 
@@ -129,6 +135,18 @@ function updateCustomizationUI() {
     const wallpaperSelect = document.getElementById('wallpaperSelect');
     if (wallpaperSelect) {
         wallpaperSelect.value = uiPreferences.wallpaper;
+    }
+    const fontSizeRange = document.getElementById('fontSizeRange');
+    if (fontSizeRange) {
+        fontSizeRange.value = uiPreferences.fontSize;
+    }
+    const toggleCompactMode = document.getElementById('toggleCompactMode');
+    if (toggleCompactMode) {
+        toggleCompactMode.classList.toggle('active', uiPreferences.compactMode);
+    }
+    const bubbleStyleSelect = document.getElementById('bubbleStyleSelect');
+    if (bubbleStyleSelect) {
+        bubbleStyleSelect.value = uiPreferences.bubbleStyle;
     }
 }
 
@@ -156,6 +174,65 @@ function applyWallpaper(value) {
     const root = document.documentElement;
     const wallpaperKey = value || 'default';
     root.style.setProperty('--chat-wallpaper', `var(--wallpaper-${wallpaperKey})`);
+}
+
+function updateFontSize(size) {
+    uiPreferences.fontSize = size;
+    localStorage.setItem('uiFontSize', size);
+    applyFontSize(size);
+}
+
+function applyFontSize(size) {
+    document.documentElement.style.setProperty('--font-size-base', size + 'px');
+}
+
+function toggleCompactMode() {
+    uiPreferences.compactMode = !uiPreferences.compactMode;
+    localStorage.setItem('uiCompactMode', uiPreferences.compactMode);
+    applyCompactMode(uiPreferences.compactMode);
+    updateCustomizationUI();
+}
+
+function applyCompactMode(isCompact) {
+    document.body.classList.toggle('compact', isCompact);
+}
+
+function updateBubbleStyle(style) {
+    uiPreferences.bubbleStyle = style;
+    localStorage.setItem('uiBubbleStyle', style);
+    applyBubbleStyle(style);
+}
+
+function applyBubbleStyle(style) {
+    const root = document.documentElement;
+    let radius = '7.5px';
+    if (style === 'boxy') radius = '2px';
+    else if (style === 'leaf') radius = '0 12px 12px 12px'; // Will need specific class handling or just simplistic global radius
+
+    // For 'leaf' style, we might need more complex CSS logic in style.css or separate variables for corners.
+    // Let's stick to simple radius change first or improve logic.
+    // Actually, leaf style usually means sent messages have top-right rounded, received have top-left rounded.
+    // My CSS uses specific border-radius overrides:
+    // .message-bubble.sent { border-top-right-radius: 0; }
+    // .message-bubble.received { border-top-left-radius: 0; }
+
+    if (style === 'leaf') {
+        // Leaf style: mostly rounded, but tails are sharp.
+        // My existing CSS already does a "leaf-like" shape (standard WhatsApp).
+        // Let's make "rounded" fully rounded (like Messenger) and "boxy" square.
+        // Standard WhatsApp is already "leaf".
+
+        // Let's redefine:
+        // 'rounded' -> 18px (Messenger style)
+        // 'boxy' -> 2px (Slack style)
+        // 'leaf' -> 7.5px (Standard WhatsApp)
+
+        radius = '7.5px';
+    } else if (style === 'rounded') {
+        radius = '18px';
+    }
+
+    root.style.setProperty('--bubble-radius', radius);
 }
 
 function adjustColor(hex, amount) {
