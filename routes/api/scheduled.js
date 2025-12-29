@@ -5,6 +5,7 @@ const { z } = require('zod');
 
 const { validate } = require('../middleware/validate');
 const { validateChatId, validateMessage } = require('../../lib/apiValidation');
+const { sendError } = require('../../lib/httpResponses');
 
 const booleanLike = z.preprocess((value) => {
     if (value === undefined) return undefined;
@@ -65,7 +66,7 @@ router.post('/', validate({ body: scheduleCreateSchema }), (req, res) => {
     if (template_id) {
         const template = req.account.db.messageTemplates.getById.get(template_id);
         if (!template) {
-            return res.status(404).json({ error: 'Template not found' });
+            return sendError(req, res, 404, 'Template not found');
         }
         if (!resolvedMessage) {
             resolvedMessage = template.content;
@@ -73,7 +74,7 @@ router.post('/', validate({ body: scheduleCreateSchema }), (req, res) => {
     }
 
     if (is_recurring && !cron_expression) {
-        return res.status(400).json({ error: 'cron_expression required for recurring schedule' });
+        return sendError(req, res, 400, 'cron_expression required for recurring schedule');
     }
 
     const result = req.account.db.scheduled.create.run(
@@ -97,7 +98,7 @@ router.post('/', validate({ body: scheduleCreateSchema }), (req, res) => {
             scheduled.chat_name
         )) {
             req.account.db.scheduled.delete.run(scheduled.id);
-            return res.status(400).json({ error: 'Invalid cron_expression' });
+            return sendError(req, res, 400, 'Invalid cron_expression');
         }
     }
 
@@ -107,7 +108,7 @@ router.post('/', validate({ body: scheduleCreateSchema }), (req, res) => {
 router.delete('/:id', (req, res) => {
     const scheduledId = parseInt(req.params.id, 10);
     if (Number.isNaN(scheduledId)) {
-        return res.status(400).json({ error: 'Invalid scheduled id' });
+        return sendError(req, res, 400, 'Invalid scheduled id');
     }
     req.account.scheduler.removeRecurring(scheduledId);
     req.account.db.scheduled.delete.run(scheduledId);

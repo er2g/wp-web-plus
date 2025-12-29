@@ -5,6 +5,7 @@ const { z } = require('zod');
 const { requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { LIMITS, validateMessage, normalizeTemplateVariables } = require('../../lib/apiValidation');
+const { sendError } = require('../../lib/httpResponses');
 
 const templateSchema = z.object({
     name: z.string()
@@ -32,7 +33,7 @@ router.get('/', (req, res) => {
 
 router.get('/:id', (req, res) => {
     const template = req.account.db.messageTemplates.getById.get(req.params.id);
-    if (!template) return res.status(404).json({ error: 'Not found' });
+    if (!template) return sendError(req, res, 404, 'Not found');
     return res.json(template);
 });
 

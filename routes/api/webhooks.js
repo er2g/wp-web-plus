@@ -5,6 +5,7 @@ const { z } = require('zod');
 const { requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { LIMITS, validateUrl } = require('../../lib/apiValidation');
+const { sendError } = require('../../lib/httpResponses');
 
 const booleanLike = z.preprocess((value) => {
     if (value === undefined) return undefined;
@@ -55,7 +56,7 @@ router.post('/', requireRole(['admin']), validate({ body: webhookCreateSchema })
 router.put('/:id', requireRole(['admin']), validate({ body: webhookUpdateSchema }), (req, res) => {
     const existing = req.account.db.webhooks.getById.get(req.params.id);
     if (!existing) {
-        return res.status(404).json({ error: 'Not found' });
+        return sendError(req, res, 404, 'Not found');
     }
 
     const { name, url, events, is_active } = req.validatedBody;

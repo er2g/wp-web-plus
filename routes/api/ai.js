@@ -5,6 +5,7 @@ const { z } = require('zod');
 const aiService = require('../../services/aiService');
 const { requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
+const { sendError } = require('../../lib/httpResponses');
 
 const generateScriptSchema = z.object({
     prompt: z.string().trim().min(1, 'Prompt is required')
@@ -16,7 +17,7 @@ router.post('/generate-script', requireRole(['admin']), validate({ body: generat
         const script = await aiService.generateScript(prompt);
         return res.json({ success: true, script });
     } catch (error) {
-        return res.status(500).json({ error: error.message });
+        return sendError(req, res, 500, error.message);
     }
 });
 

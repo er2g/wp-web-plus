@@ -5,6 +5,7 @@ const { z } = require('zod');
 const { requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { LIMITS } = require('../../lib/apiValidation');
+const { sendError } = require('../../lib/httpResponses');
 
 const scriptTestSchema = z.object({
     code: z.string().trim().min(1, 'code required'),
@@ -17,14 +18,14 @@ router.get('/', requireRole(['admin']), (req, res) => {
 
 router.get('/:id', requireRole(['admin']), (req, res) => {
     const script = req.account.db.scripts.getById.get(req.params.id);
-    if (!script) return res.status(404).json({ error: 'Not found' });
+    if (!script) return sendError(req, res, 404, 'Not found');
     return res.json(script);
 });
 
 router.post('/', requireRole(['admin']), (req, res) => {
     const { name, description, code, trigger_type, trigger_filter, is_active } = req.body;
     if (!name || !code) {
-        return res.status(400).json({ error: 'name and code required' });
+        return sendError(req, res, 400, 'name and code required');
     }
     const filterJson = trigger_filter ? JSON.stringify(trigger_filter) : null;
     const result = req.account.db.scripts.create.run(name, description || '', code, trigger_type || 'message', filterJson, is_active !== false ? 1 : 0);
@@ -45,14 +46,14 @@ router.delete('/:id', requireRole(['admin']), (req, res) => {
 
 router.post('/:id/toggle', requireRole(['admin']), (req, res) => {
     const script = req.account.db.scripts.getById.get(req.params.id);
-    if (!script) return res.status(404).json({ error: 'Not found' });
+    if (!script) return sendError(req, res, 404, 'Not found');
     req.account.db.scripts.toggle.run(script.is_active ? 0 : 1, req.params.id);
     return res.json({ success: true, is_active: !script.is_active });
 });
 
 router.post('/:id/run', requireRole(['admin']), async (req, res) => {
     const script = req.account.db.scripts.getById.get(req.params.id);
-    if (!script) return res.status(404).json({ error: 'Not found' });
+    if (!script) return sendError(req, res, 404, 'Not found');
 
     const testData = req.body.testData || {
         chatId: 'test@c.us',
