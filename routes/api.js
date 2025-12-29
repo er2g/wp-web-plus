@@ -165,7 +165,7 @@ router.use(requireAuth);
 router.use(accountManager.attachAccount.bind(accountManager));
 
 // ============ ACCOUNTS ============
-router.get('/accounts', (req, res) => {
+router.get('/accounts', requireRole(['admin']), (req, res) => {
     const accounts = accountManager.listAccounts().map(account => {
         const context = accountManager.getAccountContext(account.id);
         return {
@@ -252,11 +252,11 @@ router.get('/sync/progress', (req, res) => {
     res.json(req.account.whatsapp.getSyncProgress());
 });
 
-router.get('/settings', (req, res) => {
+router.get('/settings', requireRole(['admin', 'manager']), (req, res) => {
     res.json(req.account.whatsapp.getSettings());
 });
 
-router.post('/settings', (req, res) => {
+router.post('/settings', requireRole(['admin', 'manager']), (req, res) => {
     const settings = req.account.whatsapp.updateSettings(req.body);
     res.json({ success: true, settings });
 });
@@ -696,11 +696,11 @@ router.delete('/scheduled/:id', (req, res) => {
 });
 
 // ============ WEBHOOKS ============
-router.get('/webhooks', (req, res) => {
+router.get('/webhooks', requireRole(['admin']), (req, res) => {
     res.json(req.account.db.webhooks.getAll.all());
 });
 
-router.post('/webhooks', (req, res) => {
+router.post('/webhooks', requireRole(['admin']), (req, res) => {
     const { name, url, events, is_active } = req.body;
     if (!url) return res.status(400).json({ error: 'url required' });
     if (!validateUrl(url)) {
@@ -710,7 +710,7 @@ router.post('/webhooks', (req, res) => {
     res.json({ success: true, id: result.lastInsertRowid });
 });
 
-router.put('/webhooks/:id', (req, res) => {
+router.put('/webhooks/:id', requireRole(['admin']), (req, res) => {
     const { name, url, events, is_active } = req.body;
     if (url && !validateUrl(url)) {
         return res.status(400).json({ error: 'Invalid URL. Must be http or https.' });
@@ -719,18 +719,18 @@ router.put('/webhooks/:id', (req, res) => {
     res.json({ success: true });
 });
 
-router.delete('/webhooks/:id', (req, res) => {
+router.delete('/webhooks/:id', requireRole(['admin']), (req, res) => {
     req.account.db.webhooks.delete.run(req.params.id);
     res.json({ success: true });
 });
 
-router.get('/webhooks/:id/deliveries', (req, res) => {
+router.get('/webhooks/:id/deliveries', requireRole(['admin']), (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 50, LIMITS.PAGINATION.WEBHOOK_DELIVERIES);
     const offset = Math.max(parseInt(req.query.offset) || 0, 0);
     res.json(req.account.db.webhookDeliveries.getByWebhookId.all(req.params.id, limit, offset));
 });
 
-router.post('/webhooks/deliveries/:id/replay', async (req, res) => {
+router.post('/webhooks/deliveries/:id/replay', requireRole(['admin']), async (req, res) => {
     try {
         const delivery = req.account.db.webhookDeliveries.getById.get(req.params.id);
         if (!delivery) {
@@ -744,17 +744,17 @@ router.post('/webhooks/deliveries/:id/replay', async (req, res) => {
 });
 
 // ============ SCRIPTS ============
-router.get('/scripts', (req, res) => {
+router.get('/scripts', requireRole(['admin']), (req, res) => {
     res.json(req.account.db.scripts.getAll.all());
 });
 
-router.get('/scripts/:id', (req, res) => {
+router.get('/scripts/:id', requireRole(['admin']), (req, res) => {
     const script = req.account.db.scripts.getById.get(req.params.id);
     if (!script) return res.status(404).json({ error: 'Not found' });
     res.json(script);
 });
 
-router.post('/scripts', (req, res) => {
+router.post('/scripts', requireRole(['admin']), (req, res) => {
     const { name, description, code, trigger_type, trigger_filter, is_active } = req.body;
     if (!name || !code) {
         return res.status(400).json({ error: 'name and code required' });
@@ -764,26 +764,26 @@ router.post('/scripts', (req, res) => {
     res.json({ success: true, id: result.lastInsertRowid });
 });
 
-router.put('/scripts/:id', (req, res) => {
+router.put('/scripts/:id', requireRole(['admin']), (req, res) => {
     const { name, description, code, trigger_type, trigger_filter, is_active } = req.body;
     const filterJson = trigger_filter ? JSON.stringify(trigger_filter) : null;
     req.account.db.scripts.update.run(name, description || '', code, trigger_type || 'message', filterJson, is_active ? 1 : 0, req.params.id);
     res.json({ success: true });
 });
 
-router.delete('/scripts/:id', (req, res) => {
+router.delete('/scripts/:id', requireRole(['admin']), (req, res) => {
     req.account.db.scripts.delete.run(req.params.id);
     res.json({ success: true });
 });
 
-router.post('/scripts/:id/toggle', (req, res) => {
+router.post('/scripts/:id/toggle', requireRole(['admin']), (req, res) => {
     const script = req.account.db.scripts.getById.get(req.params.id);
     if (!script) return res.status(404).json({ error: 'Not found' });
     req.account.db.scripts.toggle.run(script.is_active ? 0 : 1, req.params.id);
     res.json({ success: true, is_active: !script.is_active });
 });
 
-router.post('/scripts/:id/run', async (req, res) => {
+router.post('/scripts/:id/run', requireRole(['admin']), async (req, res) => {
     const script = req.account.db.scripts.getById.get(req.params.id);
     if (!script) return res.status(404).json({ error: 'Not found' });
 
@@ -799,7 +799,7 @@ router.post('/scripts/:id/run', async (req, res) => {
     res.json(result);
 });
 
-router.post('/scripts/test', async (req, res) => {
+router.post('/scripts/test', requireRole(['admin']), async (req, res) => {
     const { code, testData } = req.body;
     if (!code) return res.status(400).json({ error: 'code required' });
 
@@ -815,7 +815,7 @@ router.post('/scripts/test', async (req, res) => {
     res.json(result);
 });
 
-router.get('/scripts/:id/logs', (req, res) => {
+router.get('/scripts/:id/logs', requireRole(['admin']), (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 50, LIMITS.PAGINATION.SCRIPT_LOGS);
     res.json(req.account.db.scriptLogs.getByScript.all(req.params.id, limit));
 });
@@ -831,7 +831,7 @@ router.get('/templates/:id', (req, res) => {
     res.json(template);
 });
 
-router.post('/templates', (req, res) => {
+router.post('/templates', requireRole(['admin', 'manager']), (req, res) => {
     const { name, content, variables, category } = req.body;
     if (!name || !content) {
         return res.status(400).json({ error: 'name and content required' });
@@ -854,7 +854,7 @@ router.post('/templates', (req, res) => {
     res.json({ success: true, id: result.lastInsertRowid });
 });
 
-router.put('/templates/:id', (req, res) => {
+router.put('/templates/:id', requireRole(['admin', 'manager']), (req, res) => {
     const { name, content, variables, category } = req.body;
     if (!name || !content) {
         return res.status(400).json({ error: 'name and content required' });
@@ -877,13 +877,13 @@ router.put('/templates/:id', (req, res) => {
     res.json({ success: true });
 });
 
-router.delete('/templates/:id', (req, res) => {
+router.delete('/templates/:id', requireRole(['admin', 'manager']), (req, res) => {
     req.account.db.messageTemplates.delete.run(req.params.id);
     res.json({ success: true });
 });
 
 // ============ LOGS ============
-router.get('/logs', (req, res) => {
+router.get('/logs', requireRole(['admin']), (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 100, LIMITS.PAGINATION.LOGS);
     const category = (req.query.category || '').substring(0, LIMITS.CATEGORY_LENGTH);
     if (category) {

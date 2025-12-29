@@ -28,6 +28,17 @@ function isSafeUrl(rawUrl) {
         return false;
     }
 
+    // Block IPv6-mapped IPv4 addresses (::ffff:127.0.0.1)
+    if (hostname.includes('::ffff:')) {
+        const ipv4Part = hostname.split('::ffff:')[1];
+        if (ipv4Part) {
+            // Recursively check the IPv4 part
+            if (!isSafeUrl('http://' + ipv4Part)) {
+                return false;
+            }
+        }
+    }
+
     const ipv4Match = hostname.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
     if (ipv4Match) {
         const [, a, b] = ipv4Match.map(Number);
@@ -36,7 +47,7 @@ function isSafeUrl(rawUrl) {
         }
     }
 
-    if (hostname === '169.254.169.254' || hostname.endsWith('.internal')) {
+    if (hostname === '169.254.169.254' || hostname.endsWith('.internal') || hostname.endsWith('.local')) {
         return false;
     }
 
