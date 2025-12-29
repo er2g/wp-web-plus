@@ -29,7 +29,8 @@
     "socket.io": "^4.7.2",
     "swagger-ui-express": "^5.0.1",
     "whatsapp-web.js": "^1.23.0",
-    "winston": "^3.11.0"
+    "winston": "^3.11.0",
+    "zod": "^3.25.76"
   },
   "overrides": {
     "cookie": "0.7.2",

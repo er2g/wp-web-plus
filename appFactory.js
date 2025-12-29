@@ -14,6 +14,7 @@ const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const swaggerUi = require('swagger-ui-express');
 
 const config = require('./config');
+const { sendError } = require('./lib/httpResponses');
 const accountManager = require('./services/accountManager');
 const { logger, requestContext } = require('./services/logger');
 const { requireAuth, requireRole } = require('./routes/middleware/auth');
@@ -399,7 +400,7 @@ function createApp() {
 
     app.use((err, req, res, next) => {
         if (err.code === 'EBADCSRFTOKEN') {
-            return res.status(403).json({ error: 'Invalid CSRF token' });
+            return sendError(req, res, 403, 'Invalid CSRF token');
         }
         return next(err);
     });

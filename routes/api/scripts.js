@@ -1,8 +1,15 @@
 const express = require('express');
 const router = express.Router();
+const { z } = require('zod');
 
 const { requireRole } = require('../middleware/auth');
+const { validate } = require('../middleware/validate');
 const { LIMITS } = require('../../lib/apiValidation');
+
+const scriptTestSchema = z.object({
+    code: z.string().trim().min(1, 'code required'),
+    testData: z.record(z.any()).optional()
+}).strict();
 
 router.get('/', requireRole(['admin']), (req, res) => {
     res.json(req.account.db.scripts.getAll.all());
@@ -59,9 +66,8 @@ router.post('/:id/run', requireRole(['admin']), async (req, res) => {
     return res.json(result);
 });
 
-router.post('/test', requireRole(['admin']), async (req, res) => {
-    const { code, testData } = req.body;
-    if (!code) return res.status(400).json({ error: 'code required' });
+router.post('/test', requireRole(['admin']), validate({ body: scriptTestSchema }), async (req, res) => {
+    const { code, testData } = req.validatedBody;
 
     const data = testData || {
         chatId: 'test@c.us',
@@ -81,4 +87,3 @@ router.get('/:id/logs', requireRole(['admin']), (req, res) => {
 });
 
 module.exports = router;
-
