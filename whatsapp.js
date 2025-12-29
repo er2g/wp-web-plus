@@ -9,13 +9,13 @@ const path = require('path');
 
 const CONSTANTS = {
     SYNC_DELAY_MS: 2000,
-    DEFAULT_MAX_RETRIES: 3,
-    DEFAULT_DOWNLOAD_TIMEOUT_MS: 60000,
-    SYNC_DOWNLOAD_TIMEOUT_MS: 15000,
-    SYNC_MAX_RETRIES: 1,
+    DEFAULT_MAX_RETRIES: 5,
+    DEFAULT_DOWNLOAD_TIMEOUT_MS: 120000,
+    SYNC_DOWNLOAD_TIMEOUT_MS: 45000,
+    SYNC_MAX_RETRIES: 3,
     BACKOFF_MULTIPLIER_MS: 1000,
     MEDIA_URL_PREFIX: 'api/media/',
-    PARALLEL_CHATS: 5,
+    PARALLEL_CHATS: 1,
     PROGRESS_THROTTLE_MS: 500
 };
 
@@ -34,12 +34,13 @@ class WhatsAppClient {
         this.settings = {
             downloadMedia: true,
             syncOnConnect: true,
-            maxMessagesPerChat: 50,
+            maxMessagesPerChat: 1000,
             uploadToDrive: true,
-            downloadMediaOnSync: false,
+            downloadMediaOnSync: true,
             ghostMode: false
         };
         this.contactCache = new Map();
+        this.chatProfileCache = new Map();
         this.lastProgressEmit = 0;
     }
 
@@ -60,6 +61,32 @@ class WhatsAppClient {
     extractPhoneFromId(id) {
         if (!id) return 'Unknown';
         return id.split('@')[0] || 'Unknown';
+    }
+
+    getMessageBody(msg) {
+        let body = msg.body || '';
+        if (!body && msg.type === 'document') {
+            body = msg.filename || msg._data?.filename || '';
+        }
+        return body;
+    }
+
+    async getChatProfilePic(chat) {
+        if (!chat || !chat.id) return null;
+        const chatId = chat.id._serialized;
+        if (this.chatProfileCache.has(chatId)) {
+            return this.chatProfileCache.get(chatId);
+        }
+        let url = null;
+        try {
+            if (typeof chat.getProfilePicUrl === 'function') {
+                url = await chat.getProfilePicUrl();
+            }
+        } catch (e) {
+            url = null;
+        }
+        this.chatProfileCache.set(chatId, url || null);
+        return url || null;
     }
 
     setSocketIO(io, room) {
@@ -169,6 +196,7 @@ class WhatsAppClient {
             } catch (e) {
                 if (attempt < maxRetries) {
                     await new Promise(r => setTimeout(r, CONSTANTS.BACKOFF_MULTIPLIER_MS * attempt));
+                    continue;
                 }
             }
         }
@@ -218,6 +246,7 @@ class WhatsAppClient {
             const chat = await msg.getChat();
             const contact = await this.getContactCached(msg);
 
+            const body = this.getMessageBody(msg);
             const msgData = {
                 messageId: msg.id._serialized,
                 chatId: chat.id._serialized,
@@ -225,11 +254,12 @@ class WhatsAppClient {
                 to: msg.to,
                 fromName: fromMe ? (this.info ? this.info.pushname : 'Me') : this.getSenderName(contact, msg),
                 fromNumber: fromMe ? (this.info?.wid?.user || this.extractPhoneFromId(msg.from)) : this.getSenderNumber(contact, msg),
-                body: msg.body,
+                body,
                 type: msg.type,
                 timestamp: msg.timestamp * 1000,
                 isGroup: chat.isGroup,
-                isFromMe: fromMe
+                isFromMe: fromMe,
+                mediaMimetype: msg.mimetype || msg._data?.mimetype
             };
 
             if (msg.hasMedia && this.settings.downloadMedia) {
@@ -239,6 +269,12 @@ class WhatsAppClient {
                     msgData.mediaPath = mediaResult.mediaPath;
                     msgData.mediaUrl = mediaResult.mediaUrl;
                     msgData.mediaMimetype = media.mimetype;
+                } else {
+                    this.log('warn', 'media', 'Media download failed', {
+                        chatId: chat.id?._serialized,
+                        messageId: msg.id?._serialized,
+                        type: msg.type
+                    });
                 }
             }
 
@@ -259,12 +295,14 @@ class WhatsAppClient {
                 msgData.timestamp
             );
 
+            const lastPreview = msgData.body || (msg.hasMedia ? (msg.type === 'document' ? '[Dosya]' : '[Medya]') : '');
+            const profilePic = await this.getChatProfilePic(chat);
             this.db.chats.upsert.run(
                 chat.id._serialized,
                 chat.name || this.extractPhoneFromId(chat.id.user),
                 chat.isGroup ? 1 : 0,
-                null,
-                msgData.body.substring(0, 100),
+                profilePic,
+                lastPreview.substring(0, 100),
                 msgData.timestamp,
                 chat.unreadCount || 0
             );
@@ -285,18 +323,20 @@ class WhatsAppClient {
             for (const msg of messages) {
                 const contact = await this.getContactCached(msg);
 
-            const msgData = {
-                messageId: msg.id._serialized,
-                chatId: chat.id._serialized,
-                from: msg.from,
-                to: msg.to,
-                fromName: msg.fromMe ? (this.info ? this.info.pushname : 'Me') : this.getSenderName(contact, msg),
-                fromNumber: msg.fromMe ? (this.info?.wid?.user || this.extractPhoneFromId(msg.from)) : this.getSenderNumber(contact, msg),
-                body: msg.body,
-                type: msg.type,
-                timestamp: msg.timestamp * 1000,
-                isGroup: chat.isGroup,
-                isFromMe: msg.fromMe
+                const body = this.getMessageBody(msg);
+                const msgData = {
+                    messageId: msg.id._serialized,
+                    chatId: chat.id._serialized,
+                    from: msg.from,
+                    to: msg.to,
+                    fromName: msg.fromMe ? (this.info ? this.info.pushname : 'Me') : this.getSenderName(contact, msg),
+                    fromNumber: msg.fromMe ? (this.info?.wid?.user || this.extractPhoneFromId(msg.from)) : this.getSenderNumber(contact, msg),
+                    body,
+                    type: msg.type,
+                    timestamp: msg.timestamp * 1000,
+                    isGroup: chat.isGroup,
+                    isFromMe: msg.fromMe,
+                    mediaMimetype: msg.mimetype || msg._data?.mimetype
                 };
 
                 if (msg.hasMedia && (this.settings.downloadMediaOnSync || this.settings.downloadMedia)) {
@@ -306,6 +346,12 @@ class WhatsAppClient {
                         msgData.mediaPath = mediaResult.mediaPath;
                         msgData.mediaUrl = mediaResult.mediaUrl;
                         msgData.mediaMimetype = media.mimetype;
+                    } else {
+                        this.log('warn', 'media', 'Media download failed (sync)', {
+                            chatId: chat.id?._serialized,
+                            messageId: msg.id?._serialized,
+                            type: msg.type
+                        });
                     }
                 }
 
@@ -328,13 +374,15 @@ class WhatsAppClient {
             }
 
             if (messages.length > 0) {
+                const profilePic = await this.getChatProfilePic(chat);
                 const lastMsg = messages[messages.length - 1];
+                const lastPreview = this.getMessageBody(lastMsg) || (lastMsg.hasMedia ? (lastMsg.type === 'document' ? '[Dosya]' : '[Medya]') : '');
                 this.db.chats.upsert.run(
                     chat.id._serialized,
                     chatName,
                     chat.isGroup ? 1 : 0,
-                    null,
-                    (lastMsg.body || '').substring(0, 100),
+                    profilePic,
+                    lastPreview.substring(0, 100),
                     lastMsg.timestamp * 1000,
                     chat.unreadCount || 0
                 );

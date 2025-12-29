@@ -836,7 +836,7 @@ function createDatabase(config) {
         }
 
         const { hash, salt } = hashPassword(password);
-        const result = users.create.run(username, displayName, hash, salt, 1);
+        const result = users.create.run(username, displayName, hash, salt, 1, null);
         const adminRole = roles.getByName.get('admin');
         if (adminRole) {
             userRoles.assign.run(result.lastInsertRowid, adminRole.id);

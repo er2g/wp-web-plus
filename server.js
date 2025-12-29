@@ -3,7 +3,7 @@
  */
 const express = require('express');
 const session = require('express-session');
-const rateLimit = require('express-rate-limit');
+const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const csrf = require('csurf');
 const cors = require('cors');
 const http = require('http');
@@ -139,7 +139,7 @@ const apiIpLimiter = rateLimit({
     max: config.API_RATE_LIMIT.IP_MAX,
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: (req) => req.ip || 'unknown'
+    keyGenerator: (req) => ipKeyGenerator(req.ip || '')
 });
 
 const apiUserLimiter = rateLimit({
@@ -147,10 +147,10 @@ const apiUserLimiter = rateLimit({
     max: config.API_RATE_LIMIT.USER_MAX,
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: (req) => req.session?.accountId || req.sessionID || req.ip || 'unknown'
+    keyGenerator: (req) => req.session?.accountId || req.sessionID || ipKeyGenerator(req.ip || '')
 });
 
-app.use('/api', apiIpLimiter, apiUserLimiter, apiRoutes);
+app.use('/api', apiRoutes);
 
 // Serve login page for unauthenticated users
 app.get('/', (req, res) => {

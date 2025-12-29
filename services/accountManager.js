@@ -218,6 +218,13 @@ class AccountManager {
 
         const account = this.findAccount(accountId);
         if (!account) {
+            const fallbackId = this.getDefaultAccountId();
+            const fallbackAccount = this.findAccount(fallbackId);
+            if (fallbackAccount) {
+                req.session.accountId = fallbackId;
+                req.account = this.getAccountContext(fallbackId);
+                return next();
+            }
             return res.status(404).json({ error: 'Account not found' });
         }
 

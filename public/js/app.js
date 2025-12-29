@@ -492,6 +492,7 @@ function initSocket() {
         showToast('WhatsApp baglantisi kesildi', 'warning');
     });
     socket.on('message', handleNewMessage);
+    socket.on('message_ack', handleMessageAck);
     socket.on('sync_progress', updateSyncProgress);
     socket.on('sync_complete', (data) => {
         showToast('Senkronizasyon tamamlandi: ' + data.chats + ' sohbet, ' + data.messages + ' mesaj', 'success');
@@ -512,10 +513,12 @@ function getCsrfToken() {
     return match ? decodeURIComponent(match[1]) : null;
 }
 
-async function api(url, method, body) {
+async function api(url, method, body, fetchOptions) {
     method = method || 'GET';
+    fetchOptions = fetchOptions || {};
     const headers = { 'Content-Type': 'application/json' };
-    if (activeAccountId) {
+    const isAccountsList = method === 'GET' && url === 'api/accounts';
+    if (activeAccountId && !isAccountsList && fetchOptions.includeAccount !== false) {
         headers['X-Account-Id'] = activeAccountId;
     }
     if (!['GET', 'HEAD'].includes(method.toUpperCase())) {
@@ -531,8 +534,20 @@ async function api(url, method, body) {
     };
     if (body) options.body = JSON.stringify(body);
     const response = await fetch(url, options);
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || 'API Error');
+    if (response.status === 429 && url === 'api/accounts') {
+        return { accounts: [], currentAccountId: activeAccountId };
+    }
+    const rawText = await response.text();
+    let data = null;
+    try {
+        data = rawText ? JSON.parse(rawText) : null;
+    } catch (e) {
+        data = null;
+    }
+    if (!response.ok) {
+        const message = (data && data.error) ? data.error : (rawText || 'API Error');
+        throw new Error(message);
+    }
     return data;
 }
 
@@ -948,6 +963,22 @@ async function toggleSetting(key) {
 }
 
 // Render Functions
+function renderAvatarContent(chat) {
+    const isGroup = chat && chat.chat_id && chat.chat_id.includes('@g.us');
+    const avatarIcon = isGroup ? 'bi-people-fill' : 'bi-person-fill';
+    const profileUrl = sanitizeUrl(chat.profile_pic || chat.profilePic || '');
+    if (profileUrl) {
+        return '<img src="' + profileUrl + '" alt="">';
+    }
+    return '<i class="bi ' + avatarIcon + '"></i>';
+}
+
+function renderChatAvatar(chat) {
+    const isGroup = chat && chat.chat_id && chat.chat_id.includes('@g.us');
+    const avatarClass = isGroup ? 'avatar group' : 'avatar';
+    return '<div class="' + avatarClass + '">' + renderAvatarContent(chat) + '</div>';
+}
+
 function renderChatList(chatList) {
     const container = document.getElementById('chatList');
     if (!container) return;
@@ -958,14 +989,11 @@ function renderChatList(chatList) {
     }
 
     container.innerHTML = chatList.map(c => {
-        const isGroup = c.chat_id && c.chat_id.includes('@g.us');
-        const avatarClass = isGroup ? 'avatar group' : 'avatar';
-        const avatarIcon = isGroup ? 'bi-people-fill' : 'bi-person-fill';
         const isActive = currentChat === c.chat_id;
         const hasUnread = c.unread_count > 0;
 
         return '<div class="chat-item' + (isActive ? ' active' : '') + (hasUnread ? ' unread' : '') + '" onclick="selectChat(\'' + c.chat_id + '\', \'' + escapeHtml(c.name) + '\')">' +
-            '<div class="' + avatarClass + '"><i class="bi ' + avatarIcon + '"></i></div>' +
+            renderChatAvatar(c) +
             '<div class="chat-info">' +
                 '<div class="top-row">' +
                     '<div class="chat-name">' + escapeHtml(c.name) + '</div>' +
@@ -1012,6 +1040,7 @@ function renderMessageListItem(message) {
     const isMine = message.is_from_me === 1 || message.is_from_me === true;
     const direction = isMine ? '<i class="bi bi-arrow-up-right" style="color: var(--accent)"></i>' : '<i class="bi bi-arrow-down-left" style="color: #34b7f1"></i>';
     const displayName = getDisplayNameFromMessage(message);
+    const previewText = getMessagePreviewText(message);
 
     return '<div class="chat-item" onclick="openChatForMessage(\'' + (message.chat_id || '') + '\')">' +
         '<div class="avatar"><i class="bi bi-chat-text-fill"></i></div>' +
@@ -1021,7 +1050,7 @@ function renderMessageListItem(message) {
                 '<span class="chat-time">' + formatTime(message.timestamp) + '</span>' +
             '</div>' +
             '<div class="chat-preview">' +
-                '<span class="preview-text">' + escapeHtml((message.body || '[Medya]').substring(0, 50)) + '</span>' +
+                '<span class="preview-text">' + escapeHtml(previewText.substring(0, 50)) + '</span>' +
             '</div>' +
         '</div>' +
     '</div>';
@@ -1068,12 +1097,14 @@ function renderChatMessages(messages, options = {}) {
     container.innerHTML = sorted.map(m => {
         const isMine = m.is_from_me === 1 || m.is_from_me === true;
         let mediaHtml = '';
+        const type = m.type || 'chat';
         const mediaUrl = m.media_url || m.mediaUrl;
+        const mediaTypes = ['image', 'video', 'audio', 'ptt', 'document', 'sticker'];
+        const hasMediaType = mediaTypes.includes(type);
 
         if (mediaUrl) {
             const safeMediaUrl = sanitizeUrl(mediaUrl);
             if (safeMediaUrl) {
-                const type = m.type || 'chat';
                 if (type === 'image' || type === 'sticker') {
                     mediaHtml = '<div class="message-media"><img src="' + safeMediaUrl + '" onclick="openMediaLightbox(this.src)" loading="lazy" alt=""></div>';
                 } else if (type === 'video') {
@@ -1090,9 +1121,17 @@ function renderChatMessages(messages, options = {}) {
             }
         }
 
+        const isSystem = !mediaHtml && !m.body && !hasMediaType && type !== 'chat';
         let textHtml = '';
-        if (m.body && (m.type === 'chat' || (mediaUrl && m.body && m.type !== 'document'))) {
+        if (m.body && (type === 'chat' || (mediaUrl && m.body && type !== 'document'))) {
             textHtml = '<div class="message-text">' + escapeHtml(m.body) + '</div>';
+        } else if (type === 'document') {
+            const fileName = m.body || 'Belge';
+            textHtml = '<div class="message-text muted">[Dosya] ' + escapeHtml(fileName) + '</div>';
+        } else if (hasMediaType) {
+            textHtml = '<div class="message-text muted">[Medya]</div>';
+        } else if (isSystem) {
+            textHtml = '<div class="message-text muted">[Sistem: ' + escapeHtml(type) + ']</div>';
         } else if (!mediaHtml) {
             textHtml = '<div class="message-text muted">[Bos mesaj]</div>';
         }
@@ -1101,9 +1140,10 @@ function renderChatMessages(messages, options = {}) {
         const senderHtml = (!isMine && displayName) ?
             '<div class="sender-name">' + escapeHtml(formatSenderName(displayName)) + '</div>' : '';
 
-        const checkIcon = isMine ? getMessageStatusIcon(m.ack) : '';
+        const checkIcon = isMine && !isSystem ? getMessageStatusIcon(m.ack) : '';
+        const messageIdAttr = escapeHtml(m.message_id || m.messageId || '');
 
-        return '<div class="message-row ' + (isMine ? 'sent' : 'received') + '">' +
+        return '<div class="message-row ' + (isMine ? 'sent' : 'received') + '" data-message-id="' + messageIdAttr + '">' +
             '<div class="message-bubble ' + (isMine ? 'sent' : 'received') + '">' +
             senderHtml +
             mediaHtml +
@@ -1131,6 +1171,7 @@ function selectChat(chatId, name) {
     currentChatTags = [];
     currentChatNotes = [];
     renderChatMeta();
+    const selectedChat = chats.find(chat => chat.chat_id === chatId) || null;
 
     if (!settings.ghostMode) {
         api('api/chats/' + encodeURIComponent(chatId) + '/mark-read', 'POST').catch(() => {});
@@ -1142,6 +1183,7 @@ function selectChat(chatId, name) {
     const activeChatView = document.getElementById('activeChatView');
     const chatName = document.getElementById('chatName');
     const chatStatus = document.getElementById('chatStatus');
+    const chatAvatar = document.getElementById('chatAvatar');
 
     chatArea.classList.remove('empty');
     emptyChatView.style.display = 'none';
@@ -1152,6 +1194,9 @@ function selectChat(chatId, name) {
 
     chatName.textContent = name;
     chatStatus.textContent = 'son gorulme yakin zamanda';
+    if (chatAvatar) {
+        chatAvatar.innerHTML = selectedChat ? renderAvatarContent(selectedChat) : renderAvatarContent({ chat_id: chatId });
+    }
 
     loadChatMessages(chatId);
     renderChatList(chats);
@@ -1384,8 +1429,10 @@ function handleNewMessage(msg) {
     const incomingChatId = msg.chatId || msg.chat_id;
     if (currentChat && incomingChatId && currentChat === incomingChatId) {
         const normalized = {
+            message_id: msg.messageId || msg.message_id,
             chat_id: incomingChatId,
             is_from_me: msg.isFromMe ?? msg.is_from_me ?? 0,
+            ack: msg.ack || 0,
             timestamp: msg.timestamp || Date.now(),
             body: msg.body || msg.message || '',
             from_name: msg.fromName || msg.from_name,
@@ -1434,9 +1481,20 @@ function appendNewMessage(msg) {
         }
     }
 
+    const type = msg.type || 'chat';
+    const mediaTypes = ['image', 'video', 'audio', 'ptt', 'document', 'sticker'];
+    const hasMediaType = mediaTypes.includes(type);
+    const isSystem = !mediaHtml && !msg.body && !hasMediaType && type !== 'chat';
     let textHtml = '';
-    if (msg.body && (msg.type === 'chat' || msg.type === undefined)) {
+    if (msg.body && (type === 'chat' || type === undefined)) {
         textHtml = '<div class="message-text">' + escapeHtml(msg.body) + '</div>';
+    } else if (type === 'document') {
+        const fileName = msg.body || 'Belge';
+        textHtml = '<div class="message-text muted">[Dosya] ' + escapeHtml(fileName) + '</div>';
+    } else if (hasMediaType) {
+        textHtml = '<div class="message-text muted">[Medya]</div>';
+    } else if (isSystem) {
+        textHtml = '<div class="message-text muted">[Sistem: ' + escapeHtml(type) + ']</div>';
     } else if (!mediaHtml) {
         textHtml = '<div class="message-text muted">[Bos mesaj]</div>';
     }
@@ -1445,10 +1503,11 @@ function appendNewMessage(msg) {
     const senderHtml = (!isMine && displayName) ?
         '<div class="sender-name">' + escapeHtml(formatSenderName(displayName)) + '</div>' : '';
 
-    const checkIcon = isMine ? getMessageStatusIcon(msg.ack || 0) : '';
+    const checkIcon = isMine && !isSystem ? getMessageStatusIcon(msg.ack || 0) : '';
     const time = msg.timestamp ? formatTime(msg.timestamp) : formatTime(Date.now());
+    const messageIdAttr = escapeHtml(msg.messageId || msg.message_id || '');
 
-    const messageHtml = '<div class="message-row ' + (isMine ? 'sent' : 'received') + '">' +
+    const messageHtml = '<div class="message-row ' + (isMine ? 'sent' : 'received') + '" data-message-id="' + messageIdAttr + '">' +
         '<div class="message-bubble ' + (isMine ? 'sent' : 'received') + '">' +
         senderHtml + mediaHtml + textHtml +
         '<div class="message-footer"><span class="message-time">' + time + '</span>' + checkIcon + '</div>' +
@@ -1456,6 +1515,32 @@ function appendNewMessage(msg) {
 
     container.insertAdjacentHTML('beforeend', messageHtml);
     container.scrollTop = container.scrollHeight;
+}
+
+function handleMessageAck(payload) {
+    if (!payload || !payload.messageId) return;
+    const messageId = payload.messageId;
+    const ack = payload.ack || 0;
+
+    if (chatMessagesPagination.items.length) {
+        chatMessagesPagination.items.forEach((item) => {
+            const itemId = item.message_id || item.messageId;
+            if (itemId === messageId) {
+                item.ack = ack;
+            }
+        });
+    }
+
+    const rows = document.querySelectorAll('[data-message-id="' + CSS.escape(messageId) + '"]');
+    rows.forEach((row) => {
+        const footer = row.querySelector('.message-footer');
+        if (!footer) return;
+        footer.querySelectorAll('.check-icon').forEach((icon) => icon.remove());
+        const checkIcon = getMessageStatusIcon(ack);
+        if (checkIcon) {
+            footer.insertAdjacentHTML('beforeend', checkIcon);
+        }
+    });
 }
 
 // Actions
@@ -2576,6 +2661,17 @@ function getMessageStatusIcon(ack) {
     if (ack === 2) return '<i class="bi bi-check2-all check-icon" style="color: #999;"></i>';
     if (ack === 1) return '<i class="bi bi-check2 check-icon" style="color: #999;"></i>';
     return '<i class="bi bi-clock check-icon" style="color: #999;"></i>';
+}
+
+function getMessagePreviewText(message) {
+    if (!message) return '[Bos mesaj]';
+    const body = message.body || message.message || '';
+    if (body) return body;
+    const type = message.type || 'chat';
+    if (type === 'document') return '[Dosya]';
+    if (['image', 'video', 'audio', 'ptt', 'sticker'].includes(type)) return '[Medya]';
+    if (type && type !== 'chat') return '[Sistem: ' + type + ']';
+    return '[Bos mesaj]';
 }
 
 function escapeHtml(text) {
