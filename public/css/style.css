@@ -2,15 +2,25 @@
 
 :root {
     /* Light Theme */
-    --bg-primary: #ffffff;
-    --bg-secondary: #f0f2f5;
-    --bg-chat: #efeae2;
-    --bg-sidebar: #ffffff;
-    --bg-header: #f0f2f5;
-    --bg-input: #ffffff;
-    --bg-hover: #f5f6f6;
-    --bg-active: #2a3942;
-    --bg-dropdown: #ffffff;
+    --bg-primary-solid: #ffffff;
+    --bg-secondary-solid: #f0f2f5;
+    --bg-chat-solid: #efeae2;
+    --bg-sidebar-solid: #ffffff;
+    --bg-header-solid: #f0f2f5;
+    --bg-input-solid: #ffffff;
+    --bg-hover-solid: #f5f6f6;
+    --bg-active-solid: #2a3942;
+    --bg-dropdown-solid: #ffffff;
+
+    --bg-primary: var(--bg-primary-solid);
+    --bg-secondary: var(--bg-secondary-solid);
+    --bg-chat: var(--bg-chat-solid);
+    --bg-sidebar: var(--bg-sidebar-solid);
+    --bg-header: var(--bg-header-solid);
+    --bg-input: var(--bg-input-solid);
+    --bg-hover: var(--bg-hover-solid);
+    --bg-active: var(--bg-active-solid);
+    --bg-dropdown: var(--bg-dropdown-solid);
 
     --text-primary: #111b21;
     --text-secondary: #667781;
@@ -39,6 +49,9 @@
     --chat-spacing: 2px;
     --bubble-radius: 7.5px;
 
+    /* App container surfaces (transparency) */
+    --app-surface-opacity: 100%;
+
     /* Desktop/page background (behind app container on wide screens) */
     --desktop-background: linear-gradient(180deg, var(--accent) 0%, var(--accent) 127px, var(--bg-secondary) 127px);
 
@@ -54,15 +67,25 @@
 
 /* Dark Theme */
 [data-theme="dark"] {
-    --bg-primary: #111b21;
-    --bg-secondary: #202c33;
-    --bg-chat: #0b141a;
-    --bg-sidebar: #111b21;
-    --bg-header: #202c33;
-    --bg-input: #2a3942;
-    --bg-hover: #202c33;
-    --bg-active: #2a3942;
-    --bg-dropdown: #233138;
+    --bg-primary-solid: #111b21;
+    --bg-secondary-solid: #202c33;
+    --bg-chat-solid: #0b141a;
+    --bg-sidebar-solid: #111b21;
+    --bg-header-solid: #202c33;
+    --bg-input-solid: #2a3942;
+    --bg-hover-solid: #202c33;
+    --bg-active-solid: #2a3942;
+    --bg-dropdown-solid: #233138;
+
+    --bg-primary: var(--bg-primary-solid);
+    --bg-secondary: var(--bg-secondary-solid);
+    --bg-chat: var(--bg-chat-solid);
+    --bg-sidebar: var(--bg-sidebar-solid);
+    --bg-header: var(--bg-header-solid);
+    --bg-input: var(--bg-input-solid);
+    --bg-hover: var(--bg-hover-solid);
+    --bg-active: var(--bg-active-solid);
+    --bg-dropdown: var(--bg-dropdown-solid);
 
     --text-primary: #e9edef;
     --text-secondary: #8696a0;
@@ -144,6 +167,20 @@ body.compact .message-bubble .message-text {
     max-width: 100%;
     margin: 0 auto;
     background-color: var(--bg-primary);
+}
+
+@supports (background-color: color-mix(in srgb, #000 50%, transparent)) {
+    .app-container {
+        --bg-primary: color-mix(in srgb, var(--bg-primary-solid) var(--app-surface-opacity), transparent);
+        --bg-secondary: color-mix(in srgb, var(--bg-secondary-solid) var(--app-surface-opacity), transparent);
+        --bg-chat: color-mix(in srgb, var(--bg-chat-solid) var(--app-surface-opacity), transparent);
+        --bg-sidebar: color-mix(in srgb, var(--bg-sidebar-solid) var(--app-surface-opacity), transparent);
+        --bg-header: color-mix(in srgb, var(--bg-header-solid) var(--app-surface-opacity), transparent);
+        --bg-input: color-mix(in srgb, var(--bg-input-solid) var(--app-surface-opacity), transparent);
+        --bg-hover: color-mix(in srgb, var(--bg-hover-solid) var(--app-surface-opacity), transparent);
+        --bg-active: color-mix(in srgb, var(--bg-active-solid) var(--app-surface-opacity), transparent);
+        --bg-dropdown: color-mix(in srgb, var(--bg-dropdown-solid) var(--app-surface-opacity), transparent);
+    }
 }
 
 @media (min-width: 1441px) {

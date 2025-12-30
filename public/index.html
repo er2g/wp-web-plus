@@ -440,6 +440,17 @@
                     </div>
                 </div>
                 <div class="settings-item">
+                    <i class="icon bi bi-sliders"></i>
+                    <div class="info">
+                        <div class="title">Panel Opakligi</div>
+                        <div class="subtitle">Uygulama arka plan seffafligi</div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <input type="range" id="appOpacityRange" min="0" max="100" value="100" oninput="updateAppSurfaceOpacity(this.value)" style="width: 120px;">
+                        <span id="appOpacityValue" style="font-size: 12px; color: var(--text-secondary); min-width: 38px; text-align: right;">100%</span>
+                    </div>
+                </div>
+                <div class="settings-item">
                     <i class="icon bi bi-image"></i>
                     <div class="info">
                         <div class="title">Arka Plan</div>

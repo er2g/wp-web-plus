@@ -34,6 +34,7 @@ let uiPreferences = {
     fontSize: '14.2',
     compactMode: false,
     bubbleStyle: 'rounded',
+    appSurfaceOpacity: 100,
     desktopBackgroundType: 'default',
     desktopBackgroundImage: '',
     desktopBackgroundGradient: '',
@@ -107,7 +108,6 @@ function toggleTheme() {
     document.documentElement.setAttribute('data-theme', newTheme);
     localStorage.setItem('theme', newTheme);
     updateThemeUI(newTheme);
-    closeAllPanels();
 }
 
 function updateThemeUI(theme) {
@@ -160,6 +160,7 @@ function loadLocalPreferences() {
     uiPreferences.bubbleStyle = localStorage.getItem('uiBubbleStyle') || uiPreferences.bubbleStyle;
 
     // New fields
+    uiPreferences.appSurfaceOpacity = localStorage.getItem('uiAppSurfaceOpacity') || uiPreferences.appSurfaceOpacity;
     uiPreferences.desktopBackgroundType = localStorage.getItem('uiDesktopBackgroundType') || uiPreferences.desktopBackgroundType;
     uiPreferences.desktopBackgroundImage = localStorage.getItem('uiDesktopBackgroundImage') || uiPreferences.desktopBackgroundImage;
     uiPreferences.desktopBackgroundGradient = localStorage.getItem('uiDesktopBackgroundGradient') || uiPreferences.desktopBackgroundGradient;
@@ -184,6 +185,7 @@ function loadCustomizations() {
 function applyCustomizations() {
     if (uiPreferences.accentColor) applyAccentColor(uiPreferences.accentColor);
     applyDesktopBackgroundSettings();
+    applyAppSurfaceOpacity(uiPreferences.appSurfaceOpacity);
     applyWallpaper(uiPreferences.wallpaper); // Kept for legacy
     applyFontSize(uiPreferences.fontSize);
     applyCompactMode(uiPreferences.compactMode);
@@ -200,6 +202,7 @@ async function saveUserPreferences() {
     localStorage.setItem('uiCompactMode', uiPreferences.compactMode);
     localStorage.setItem('uiBubbleStyle', uiPreferences.bubbleStyle);
 
+    localStorage.setItem('uiAppSurfaceOpacity', uiPreferences.appSurfaceOpacity);
     localStorage.setItem('uiDesktopBackgroundType', uiPreferences.desktopBackgroundType);
     localStorage.setItem('uiDesktopBackgroundImage', uiPreferences.desktopBackgroundImage);
     localStorage.setItem('uiDesktopBackgroundGradient', uiPreferences.desktopBackgroundGradient);
@@ -240,6 +243,11 @@ function updateCustomizationUI() {
     if (bubbleStyleSelect) {
         bubbleStyleSelect.value = uiPreferences.bubbleStyle;
     }
+
+    const appOpacityRange = document.getElementById('appOpacityRange');
+    if (appOpacityRange) appOpacityRange.value = uiPreferences.appSurfaceOpacity;
+    const appOpacityValue = document.getElementById('appOpacityValue');
+    if (appOpacityValue) appOpacityValue.textContent = String(uiPreferences.appSurfaceOpacity) + '%';
 
     // Desktop Background UI
     const desktopBgTypeSelect = document.getElementById('desktopBgTypeSelect');
@@ -392,6 +400,21 @@ function applyBubbleStyle(style) {
     else if (style === 'leaf') radius = '7.5px';
     else if (style === 'rounded') radius = '18px';
     root.style.setProperty('--bubble-radius', radius);
+}
+
+function updateAppSurfaceOpacity(opacity) {
+    const parsed = Number.parseInt(opacity, 10);
+    const clamped = Number.isFinite(parsed) ? Math.max(0, Math.min(100, parsed)) : 100;
+    uiPreferences.appSurfaceOpacity = clamped;
+    applyAppSurfaceOpacity(clamped);
+    updateCustomizationUI();
+    saveUserPreferences();
+}
+
+function applyAppSurfaceOpacity(opacity) {
+    const parsed = Number.parseInt(opacity, 10);
+    const clamped = Number.isFinite(parsed) ? Math.max(0, Math.min(100, parsed)) : 100;
+    document.documentElement.style.setProperty('--app-surface-opacity', String(clamped) + '%');
 }
 
 function updateDesktopBackgroundType(type) {
@@ -3221,6 +3244,7 @@ Object.assign(window, {
     updateFontSize,
     toggleCompactMode,
     updateBubbleStyle,
+    updateAppSurfaceOpacity,
     updateDesktopBackgroundType,
     updateDesktopBackgroundImage,
     updateDesktopBackgroundColor,
