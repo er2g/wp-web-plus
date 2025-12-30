@@ -1476,6 +1476,16 @@ body.compact .message-bubble .message-text {
     to { transform: rotate(360deg); }
 }
 
+.spinner {
+    width: 18px;
+    height: 18px;
+    border: 2px solid var(--text-secondary);
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin: 0 auto;
+}
+
 /* Modal */
 .modal-overlay {
     position: fixed;
