@@ -39,6 +39,9 @@
     --chat-spacing: 2px;
     --bubble-radius: 7.5px;
 
+    /* Desktop/page background (behind app container on wide screens) */
+    --desktop-background: linear-gradient(180deg, var(--accent) 0%, var(--accent) 127px, var(--bg-secondary) 127px);
+
     /* Chat wallpaper */
     --wallpaper-default: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADIAAAAyCAMAAAAp4XiDAAAAUVBMVEWFhYWDg4N3d3dtbW17e3t1dXWBgYGHh4d5eXlsbGxwcHCQkJBycnKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqoN1s7aAAAAFHRSTlMAEBAgIDAwQEBQUGBgcHBwcICBEmM/hAAAAb1JREFUeJzt1MkOgjAQRdH7BRYoG5MS3P//yWYbVbJNd9O5oTi4bE/xbp/pE2l3nJsNi2v3kJFlqUqBSeFp+7mp5qYxg0xL0poPzLcnIZx6R6prl9qQpG7qZ1ytq6NEpsIyEfYzX4I0RAZKD3n5dOa1bAStqYkqEVB1gKxL8hXbO3rJv4MSnCXXVQga5RgrKuJx6mV7HLKEG9C0g2C7WmMO0SR4CPsDo8q9zLxq8i5xK1x3lNwsx0yQ9+0r9lK0K7eRqr1aW0X5fM3E1t9ZB3w9PRuC0X7cH3w8mG1/4QOx1G+f6Kp7Q9RZ1zKx1j8u2s2l39c9aDMeVCqFQp3Wy0s8gGk3kC+2v8NwB7L0K4Xqg1UMuJ4pXzrmNhFW2kqPdrO0H+7pfi+2Gq0xg8+2fC1R1yqN2UeSj7Ok0H+N2mX3/ATbqS7P1q4mJwAAAABJRU5ErkJggg=="),
                           linear-gradient(to bottom, rgba(229,221,213,0.95), rgba(229,221,213,0.95));
@@ -93,7 +96,10 @@
 
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-    background-color: var(--bg-secondary);
+    background: var(--desktop-background);
+    background-repeat: no-repeat;
+    background-size: cover;
+    background-position: center;
     color: var(--text-primary);
     height: 100vh;
     overflow: hidden;
@@ -146,10 +152,6 @@ body.compact .message-bubble .message-text {
         height: calc(100vh - 40px);
         max-width: 1600px;
         box-shadow: var(--shadow-lg);
-    }
-
-    body {
-        background: linear-gradient(180deg, var(--accent) 0%, var(--accent) 127px, var(--bg-secondary) 127px);
     }
 }
 

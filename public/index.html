@@ -405,6 +405,43 @@
                 <div class="settings-item">
                     <i class="icon bi bi-image"></i>
                     <div class="info">
+                        <div class="title">Sayfa Arka Plani</div>
+                        <div class="subtitle">Masaustunde panel disini ozellestir</div>
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 8px; width: 50%;">
+                        <select id="desktopBgTypeSelect" class="select-input" onchange="updateDesktopBackgroundType(this.value)">
+                            <option value="default">Varsayilan</option>
+                            <option value="solid">Duz Renk</option>
+                            <option value="gradient">Gradyan</option>
+                            <option value="image">Resim URL</option>
+                        </select>
+                        <div id="desktopBgImageControl" style="display: none;">
+                            <input type="text" id="desktopBgImageInput" class="form-input" placeholder="https://..." onchange="updateDesktopBackgroundImage(this.value)" style="padding: 4px 8px; font-size: 12px;">
+                        </div>
+                        <div id="desktopBgGradientControl" style="display: none;">
+                            <select id="desktopBgGradientSelect" class="select-input" onchange="updateDesktopBackgroundGradient(this.value)">
+                                <option value="auto">Otomatik (vurgu)</option>
+                                <option value="sunset">Gun Batimi</option>
+                                <option value="ocean">Okyanus</option>
+                                <option value="purple">Mor</option>
+                                <option value="forest">Orman</option>
+                                <option value="fire">Alev</option>
+                                <option value="midnight">Gece</option>
+                                <option value="custom">Ozel (CSS)</option>
+                            </select>
+                            <div class="gradient-preview" id="desktopBgGradientPreview"></div>
+                        </div>
+                        <div id="desktopBgGradientCustomControl" style="display: none;">
+                            <input type="text" id="desktopBgGradientInput" class="form-input" placeholder="linear-gradient(180deg, ...)" onchange="updateDesktopBackgroundGradientCustom(this.value)" style="padding: 4px 8px; font-size: 12px;">
+                        </div>
+                        <div id="desktopBgColorControl" style="display: none;">
+                            <input type="color" id="desktopBgColorInput" value="#f0f2f5" onchange="updateDesktopBackgroundColor(this.value)" style="width: 100%; height: 30px; border: none; background: transparent;">
+                        </div>
+                    </div>
+                </div>
+                <div class="settings-item">
+                    <i class="icon bi bi-image"></i>
+                    <div class="info">
                         <div class="title">Arka Plan</div>
                         <div class="subtitle">Sohbet arka planini ozellestir</div>
                     </div>

@@ -34,6 +34,10 @@ let uiPreferences = {
     fontSize: '14.2',
     compactMode: false,
     bubbleStyle: 'rounded',
+    desktopBackgroundType: 'default',
+    desktopBackgroundImage: '',
+    desktopBackgroundGradient: '',
+    desktopBackgroundColor: '#f0f2f5',
     backgroundType: 'default',
     backgroundImage: '',
     backgroundGradient: '',
@@ -156,6 +160,11 @@ function loadLocalPreferences() {
     uiPreferences.bubbleStyle = localStorage.getItem('uiBubbleStyle') || uiPreferences.bubbleStyle;
 
     // New fields
+    uiPreferences.desktopBackgroundType = localStorage.getItem('uiDesktopBackgroundType') || uiPreferences.desktopBackgroundType;
+    uiPreferences.desktopBackgroundImage = localStorage.getItem('uiDesktopBackgroundImage') || uiPreferences.desktopBackgroundImage;
+    uiPreferences.desktopBackgroundGradient = localStorage.getItem('uiDesktopBackgroundGradient') || uiPreferences.desktopBackgroundGradient;
+    uiPreferences.desktopBackgroundColor = localStorage.getItem('uiDesktopBackgroundColor') || uiPreferences.desktopBackgroundColor;
+
     uiPreferences.backgroundType = localStorage.getItem('uiBackgroundType') || uiPreferences.backgroundType;
     uiPreferences.backgroundImage = localStorage.getItem('uiBackgroundImage') || uiPreferences.backgroundImage;
     uiPreferences.backgroundGradient = localStorage.getItem('uiBackgroundGradient') || uiPreferences.backgroundGradient;
@@ -174,6 +183,7 @@ function loadCustomizations() {
 
 function applyCustomizations() {
     if (uiPreferences.accentColor) applyAccentColor(uiPreferences.accentColor);
+    applyDesktopBackgroundSettings();
     applyWallpaper(uiPreferences.wallpaper); // Kept for legacy
     applyFontSize(uiPreferences.fontSize);
     applyCompactMode(uiPreferences.compactMode);
@@ -189,6 +199,11 @@ async function saveUserPreferences() {
     localStorage.setItem('uiFontSize', uiPreferences.fontSize);
     localStorage.setItem('uiCompactMode', uiPreferences.compactMode);
     localStorage.setItem('uiBubbleStyle', uiPreferences.bubbleStyle);
+
+    localStorage.setItem('uiDesktopBackgroundType', uiPreferences.desktopBackgroundType);
+    localStorage.setItem('uiDesktopBackgroundImage', uiPreferences.desktopBackgroundImage);
+    localStorage.setItem('uiDesktopBackgroundGradient', uiPreferences.desktopBackgroundGradient);
+    localStorage.setItem('uiDesktopBackgroundColor', uiPreferences.desktopBackgroundColor);
 
     localStorage.setItem('uiBackgroundType', uiPreferences.backgroundType);
     localStorage.setItem('uiBackgroundImage', uiPreferences.backgroundImage);
@@ -225,6 +240,52 @@ function updateCustomizationUI() {
     if (bubbleStyleSelect) {
         bubbleStyleSelect.value = uiPreferences.bubbleStyle;
     }
+
+    // Desktop Background UI
+    const desktopBgTypeSelect = document.getElementById('desktopBgTypeSelect');
+    if (desktopBgTypeSelect) desktopBgTypeSelect.value = uiPreferences.desktopBackgroundType;
+
+    const desktopBgImageInput = document.getElementById('desktopBgImageInput');
+    if (desktopBgImageInput) desktopBgImageInput.value = uiPreferences.desktopBackgroundImage;
+
+    const desktopBgColorInput = document.getElementById('desktopBgColorInput');
+    if (desktopBgColorInput) desktopBgColorInput.value = uiPreferences.desktopBackgroundColor;
+
+    const desktopBgGradientSelect = document.getElementById('desktopBgGradientSelect');
+    let desktopGradientSelectValue = 'auto';
+    const rawDesktopGradient = String(uiPreferences.desktopBackgroundGradient || '').trim();
+    if (rawDesktopGradient.startsWith('preset:')) {
+        const presetKey = rawDesktopGradient.slice('preset:'.length);
+        desktopGradientSelectValue = GRADIENT_PRESETS[presetKey] ? presetKey : 'auto';
+    } else if (rawDesktopGradient && isSafeCssGradient(rawDesktopGradient)) {
+        desktopGradientSelectValue = 'custom';
+    }
+    if (desktopBgGradientSelect) desktopBgGradientSelect.value = desktopGradientSelectValue;
+
+    const desktopBgGradientInput = document.getElementById('desktopBgGradientInput');
+    if (desktopBgGradientInput) {
+        desktopBgGradientInput.value = desktopGradientSelectValue === 'custom' ? rawDesktopGradient : '';
+    }
+
+    const desktopBgGradientPreview = document.getElementById('desktopBgGradientPreview');
+    if (desktopBgGradientPreview) {
+        if (uiPreferences.desktopBackgroundType === 'gradient') {
+            desktopBgGradientPreview.style.background = getResolvedDesktopGradientValue();
+        } else {
+            desktopBgGradientPreview.style.background = '';
+        }
+    }
+
+    const desktopBgImageControl = document.getElementById('desktopBgImageControl');
+    if (desktopBgImageControl) desktopBgImageControl.style.display = uiPreferences.desktopBackgroundType === 'image' ? 'block' : 'none';
+    const desktopBgGradientControl = document.getElementById('desktopBgGradientControl');
+    if (desktopBgGradientControl) desktopBgGradientControl.style.display = uiPreferences.desktopBackgroundType === 'gradient' ? 'block' : 'none';
+    const desktopBgGradientCustomControl = document.getElementById('desktopBgGradientCustomControl');
+    if (desktopBgGradientCustomControl) {
+        desktopBgGradientCustomControl.style.display = (uiPreferences.desktopBackgroundType === 'gradient' && desktopGradientSelectValue === 'custom') ? 'block' : 'none';
+    }
+    const desktopBgColorControl = document.getElementById('desktopBgColorControl');
+    if (desktopBgColorControl) desktopBgColorControl.style.display = uiPreferences.desktopBackgroundType === 'solid' ? 'block' : 'none';
 
     // New Background UI
     const bgTypeSelect = document.getElementById('bgTypeSelect');
@@ -331,6 +392,104 @@ function applyBubbleStyle(style) {
     else if (style === 'leaf') radius = '7.5px';
     else if (style === 'rounded') radius = '18px';
     root.style.setProperty('--bubble-radius', radius);
+}
+
+function updateDesktopBackgroundType(type) {
+    uiPreferences.desktopBackgroundType = type;
+    updateCustomizationUI(); // to toggle inputs
+    applyDesktopBackgroundSettings();
+    saveUserPreferences();
+}
+
+function updateDesktopBackgroundImage(url) {
+    uiPreferences.desktopBackgroundImage = url;
+    applyDesktopBackgroundSettings();
+    saveUserPreferences();
+}
+
+function updateDesktopBackgroundColor(color) {
+    uiPreferences.desktopBackgroundColor = color;
+    applyDesktopBackgroundSettings();
+    saveUserPreferences();
+}
+
+function updateDesktopBackgroundGradient(value) {
+    if (value === 'auto') {
+        uiPreferences.desktopBackgroundGradient = '';
+    } else if (value === 'custom') {
+        const existing = String(uiPreferences.desktopBackgroundGradient || '').trim();
+        if (!existing || existing.startsWith('preset:')) {
+            uiPreferences.desktopBackgroundGradient = getDefaultDesktopBackground();
+        }
+    } else if (GRADIENT_PRESETS[value]) {
+        uiPreferences.desktopBackgroundGradient = 'preset:' + value;
+    } else {
+        uiPreferences.desktopBackgroundGradient = '';
+    }
+
+    updateCustomizationUI();
+    applyDesktopBackgroundSettings();
+    saveUserPreferences();
+}
+
+function updateDesktopBackgroundGradientCustom(value) {
+    const trimmed = String(value || '').trim();
+    if (!trimmed) {
+        uiPreferences.desktopBackgroundGradient = '';
+        updateCustomizationUI();
+        applyDesktopBackgroundSettings();
+        saveUserPreferences();
+        return;
+    }
+
+    if (!isSafeCssGradient(trimmed)) {
+        showToast('Gradyan formati gecersiz (linear-gradient / radial-gradient)', 'error');
+        updateCustomizationUI();
+        return;
+    }
+
+    uiPreferences.desktopBackgroundGradient = trimmed;
+    updateCustomizationUI();
+    applyDesktopBackgroundSettings();
+    saveUserPreferences();
+}
+
+function getDefaultDesktopBackground() {
+    return 'linear-gradient(180deg, var(--accent) 0%, var(--accent) 127px, var(--bg-secondary) 127px)';
+}
+
+function getResolvedDesktopGradientValue() {
+    const rawGradient = String(uiPreferences.desktopBackgroundGradient || '').trim();
+    if (rawGradient.startsWith('preset:')) {
+        const presetKey = rawGradient.slice('preset:'.length);
+        return GRADIENT_PRESETS[presetKey] || getDefaultDesktopBackground();
+    }
+    if (rawGradient && isSafeCssGradient(rawGradient)) {
+        return rawGradient;
+    }
+    return getDefaultDesktopBackground();
+}
+
+function applyDesktopBackgroundSettings() {
+    const root = document.documentElement;
+    const type = uiPreferences.desktopBackgroundType;
+
+    if (type === 'default') {
+        root.style.removeProperty('--desktop-background');
+        return;
+    }
+
+    let bgValue = getDefaultDesktopBackground();
+
+    if (type === 'image' && uiPreferences.desktopBackgroundImage) {
+        bgValue = `url("${uiPreferences.desktopBackgroundImage}")`;
+    } else if (type === 'solid') {
+        bgValue = uiPreferences.desktopBackgroundColor || '#f0f2f5';
+    } else if (type === 'gradient') {
+        bgValue = getResolvedDesktopGradientValue();
+    }
+
+    root.style.setProperty('--desktop-background', bgValue);
 }
 
 function updateBackgroundType(type) {
@@ -3062,6 +3221,11 @@ Object.assign(window, {
     updateFontSize,
     toggleCompactMode,
     updateBubbleStyle,
+    updateDesktopBackgroundType,
+    updateDesktopBackgroundImage,
+    updateDesktopBackgroundColor,
+    updateDesktopBackgroundGradient,
+    updateDesktopBackgroundGradientCustom,
     updateBackgroundType,
     updateBackgroundImage,
     updateBackgroundColor,
