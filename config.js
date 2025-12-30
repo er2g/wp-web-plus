@@ -86,9 +86,9 @@ const envSchema = z.object({
     PASSWORD_REQUIRE_SYMBOL: booleanLike(false),
 
     API_RATE_LIMIT_IP_WINDOW_MS: positiveInt(15 * 60 * 1000),
-    API_RATE_LIMIT_IP_MAX: positiveInt(300),
+    API_RATE_LIMIT_IP_MAX: positiveInt(300 * 1000),
     API_RATE_LIMIT_USER_WINDOW_MS: positiveInt(15 * 60 * 1000),
-    API_RATE_LIMIT_USER_MAX: positiveInt(150),
+    API_RATE_LIMIT_USER_MAX: positiveInt(150 * 1000),
 
     DATA_DIR: optionalString(),
     LOGS_DIR: optionalString(),
