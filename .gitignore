@@ -3,5 +3,7 @@ node_modules/
 logs/
 data/
 *.log
+cookies.txt
+check_logs.js
 .env
 .DS_Store

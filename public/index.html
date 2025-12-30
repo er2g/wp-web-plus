@@ -6,6 +6,7 @@
     <title>WhatsApp Premium Plus</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" rel="stylesheet">
     <link href="css/style.css" rel="stylesheet">
+    <link href="css/loading.css" rel="stylesheet">
 </head>
 <body>
     <div class="app-container">
@@ -190,6 +191,9 @@
                                 </div>
                                 <div class="dropdown-item" onclick="exportChat()">
                                     <i class="bi bi-download"></i> Sohbeti Disa Aktar
+                                </div>
+                                <div class="dropdown-item" onclick="recoverMedia()">
+                                    <i class="bi bi-cloud-download-fill"></i> Eksik Medyalari İndir
                                 </div>
                                 <div class="dropdown-item" onclick="clearChat()">
                                     <i class="bi bi-trash"></i> Sohbeti Temizle
@@ -413,6 +417,22 @@
                         </select>
                         <div id="bgImageControl" style="display: none;">
                             <input type="text" id="bgImageInput" class="form-input" placeholder="https://..." onchange="updateBackgroundImage(this.value)" style="padding: 4px 8px; font-size: 12px;">
+                        </div>
+                        <div id="bgGradientControl" style="display: none;">
+                            <select id="bgGradientSelect" class="select-input" onchange="updateBackgroundGradient(this.value)">
+                                <option value="auto">Otomatik (baz renk)</option>
+                                <option value="sunset">Gun Batimi</option>
+                                <option value="ocean">Okyanus</option>
+                                <option value="purple">Mor</option>
+                                <option value="forest">Orman</option>
+                                <option value="fire">Alev</option>
+                                <option value="midnight">Gece</option>
+                                <option value="custom">Ozel (CSS)</option>
+                            </select>
+                            <div class="gradient-preview" id="bgGradientPreview"></div>
+                        </div>
+                        <div id="bgGradientCustomControl" style="display: none;">
+                            <input type="text" id="bgGradientInput" class="form-input" placeholder="linear-gradient(135deg, #fff, #000)" onchange="updateBackgroundGradientCustom(this.value)" style="padding: 4px 8px; font-size: 12px;">
                         </div>
                         <div id="bgColorControl" style="display: none;">
                             <input type="color" id="bgColorInput" value="#efeae2" onchange="updateBackgroundColor(this.value)" style="width: 100%; height: 30px; border: none; background: transparent;">

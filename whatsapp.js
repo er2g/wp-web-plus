@@ -4,14 +4,17 @@
  */
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
+const crypto = require('crypto');
 const fs = require('fs');
+const https = require('https');
 const path = require('path');
+const mime = require('mime-types');
 
 const CONSTANTS = {
     SYNC_DELAY_MS: 2000,
     DEFAULT_MAX_RETRIES: 5,
-    DEFAULT_DOWNLOAD_TIMEOUT_MS: 120000,
-    SYNC_DOWNLOAD_TIMEOUT_MS: 45000,
+    DEFAULT_DOWNLOAD_TIMEOUT_MS: 300000,
+    SYNC_DOWNLOAD_TIMEOUT_MS: 60000,
     SYNC_MAX_RETRIES: 3,
     BACKOFF_MULTIPLIER_MS: 1000,
     MEDIA_URL_PREFIX: 'api/media/',
@@ -45,6 +48,167 @@ class WhatsAppClient {
         this.contactCache = new Map();
         this.chatProfileCache = new Map();
         this.lastProgressEmit = 0;
+    }
+
+    getWhatsAppMediaKeyInfoString(type) {
+        switch (type) {
+            case 'image':
+            case 'sticker':
+                return 'WhatsApp Image Keys';
+            case 'video':
+                return 'WhatsApp Video Keys';
+            case 'audio':
+            case 'ptt':
+                return 'WhatsApp Audio Keys';
+            case 'document':
+            default:
+                return 'WhatsApp Document Keys';
+        }
+    }
+
+    deriveWhatsAppMediaKeys(mediaKeyBase64, type) {
+        const info = this.getWhatsAppMediaKeyInfoString(type);
+        const mediaKey = Buffer.from(mediaKeyBase64, 'base64');
+        const salt = Buffer.alloc(32, 0);
+        const expandedRaw = crypto.hkdfSync('sha256', mediaKey, salt, Buffer.from(info, 'utf8'), 112);
+        const expanded = Buffer.isBuffer(expandedRaw) ? expandedRaw : Buffer.from(expandedRaw);
+
+        return {
+            iv: expanded.subarray(0, 16),
+            cipherKey: expanded.subarray(16, 48),
+            macKey: expanded.subarray(48, 80)
+        };
+    }
+
+    async downloadDecryptFromDirectPath({ directPath, mediaKey, type, timeoutMs }) {
+        if (!directPath || !mediaKey) return null;
+        const url = directPath.startsWith('http')
+            ? directPath
+            : `https://mmg.whatsapp.net${directPath}`;
+
+        const keys = this.deriveWhatsAppMediaKeys(mediaKey, type);
+
+        const tmpName = `tmp_${Date.now()}_${crypto.randomBytes(6).toString('hex')}.bin`;
+        const tmpPath = path.join(this.config.MEDIA_DIR, tmpName);
+
+        await new Promise((resolve, reject) => {
+            const out = fs.createWriteStream(tmpPath);
+            let finished = false;
+
+            const cleanup = (err) => {
+                if (finished) return;
+                finished = true;
+                try { out.destroy(); } catch (e) {}
+                if (err) {
+                    try { fs.unlinkSync(tmpPath); } catch (e) {}
+                    reject(err);
+                    return;
+                }
+                resolve();
+            };
+
+            out.on('error', (err) => cleanup(err));
+
+            const hmac = crypto.createHmac('sha256', keys.macKey);
+            hmac.update(keys.iv);
+            const decipher = crypto.createDecipheriv('aes-256-cbc', keys.cipherKey, keys.iv);
+            let tail = Buffer.alloc(0);
+
+            const req = https.get(url, { timeout: Math.max(5000, Number(timeoutMs) || 300000) }, (res) => {
+                if (res.statusCode !== 200) {
+                    res.resume();
+                    cleanup(new Error(`DirectPath download failed: HTTP ${res.statusCode}`));
+                    return;
+                }
+
+                res.on('data', (chunk) => {
+                    const data = tail.length ? Buffer.concat([tail, chunk]) : chunk;
+                    if (data.length <= 10) {
+                        tail = Buffer.from(data);
+                        return;
+                    }
+
+                    const processable = data.subarray(0, data.length - 10);
+                    tail = data.subarray(data.length - 10);
+
+                    hmac.update(processable);
+                    out.write(decipher.update(processable));
+                });
+
+                res.on('end', () => {
+                    try {
+                        if (tail.length !== 10) {
+                            throw new Error(`DirectPath download failed: invalid MAC length (${tail.length})`);
+                        }
+                        const expectedMac = hmac.digest().subarray(0, 10);
+                        if (!crypto.timingSafeEqual(tail, expectedMac)) {
+                            throw new Error('DirectPath download failed: HMAC verification failed');
+                        }
+
+                        out.end(decipher.final(), () => cleanup());
+                    } catch (e) {
+                        cleanup(e);
+                    }
+                });
+
+                res.on('error', (err) => cleanup(err));
+            });
+
+            req.on('timeout', () => {
+                req.destroy(new Error('DirectPath download timed out'));
+            });
+            req.on('error', (err) => cleanup(err));
+        });
+
+        return tmpPath;
+    }
+
+    async tryDownloadMediaViaDirectPath(msg, timeoutMs) {
+        const msgId = msg?.id?._serialized;
+        if (!msgId) return null;
+
+        let meta = null;
+        try {
+            meta = await this.client.pupPage.evaluate(async (msgId) => {
+                const m = globalThis.Store.Msg.get(msgId) || (await globalThis.Store.Msg.getMessagesById([msgId]))?.messages?.[0];
+                if (!m) return null;
+                return {
+                    type: m.type,
+                    mimetype: m.mimetype,
+                    filename: m.filename,
+                    directPath: m.directPath,
+                    mediaKey: m.mediaKey
+                };
+            }, msgId);
+        } catch (e) {
+            meta = null;
+        }
+
+        if (!meta?.directPath || !meta?.mediaKey) return null;
+
+        // We only enable this path for document-like types to avoid surprises,
+        // and because WhatsApp Web downloadAndMaybeDecrypt currently fails for PDFs.
+        if (meta.type !== 'document') return null;
+
+        try {
+            const tmpPath = await this.downloadDecryptFromDirectPath({
+                directPath: meta.directPath,
+                mediaKey: meta.mediaKey,
+                type: meta.type,
+                timeoutMs
+            });
+            if (!tmpPath) return null;
+
+            return {
+                tempFilePath: tmpPath,
+                data: null,
+                mimetype: meta.mimetype || msg.mimetype || 'application/octet-stream',
+                filename: meta.filename
+            };
+        } catch (e) {
+            this.log('warn', 'media_debug', `DirectPath fallback failed: ${e.message}`);
+            return null;
+        }
     }
 
     normalizeSettings(input) {
@@ -281,29 +445,164 @@ class WhatsAppClient {
 
     async downloadMediaWithRetry(msg, maxRetries = CONSTANTS.DEFAULT_MAX_RETRIES, timeoutMs = CONSTANTS.DEFAULT_DOWNLOAD_TIMEOUT_MS) {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            const startTime = Date.now();
+            this.log('info', 'media_debug', `Start download attempt ${attempt}/${maxRetries} for msg ${msg.id._serialized}`);
+            
             try {
+                // Try standard way first
                 const media = await Promise.race([
                     msg.downloadMedia(),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), timeoutMs))
+                    new Promise((_, reject) => setTimeout(() => reject(new Error(`Timeout after ${timeoutMs}ms`)), timeoutMs))
                 ]);
-                if (media && media.data) return media;
-            } catch (e) {
-                if (attempt < maxRetries) {
-                    await new Promise(r => setTimeout(r, CONSTANTS.BACKOFF_MULTIPLIER_MS * attempt));
-                    continue;
+
+                if (media && media.data) {
+                    this.log('info', 'media_debug', `Standard method SUCCESS!`);
+                    return media;
                 }
+            } catch (e) {
+                this.log('warn', 'media_debug', `Standard method failed (${e.message}). Starting NATIVE BROWSER CAPTURE...`);
+
+                // First try: DirectPath download + Node-side decrypt (bypasses WA Web downloadAndMaybeDecrypt PDF bug)
+                const directPathMedia = await this.tryDownloadMediaViaDirectPath(msg, timeoutMs);
+                if (directPathMedia) {
+                    this.log('info', 'media_debug', 'DirectPath fallback SUCCESS!');
+                    return directPathMedia;
+                }
+                
+                try {
+                    const page = await this.client.pupPage;
+                    if (page) {
+                        // Use CDP to intercept download
+                        const client = await page.target().createCDPSession();
+                        await client.send('Browser.setDownloadBehavior', {
+                            behavior: 'allow',
+                            downloadPath: this.config.MEDIA_DIR,
+                            eventsEnabled: true
+                        });
+
+                        // Trigger download by clicking the UI button
+                        await page.evaluate((msgId) => {
+                            const el = globalThis.document.querySelector(`[data-id*="${msgId}"]`);
+                            if (el) {
+                                const btn = el.querySelector('span[data-icon="download"]')
+                                    || el.querySelector('div[role="button"]');
+                                if (btn) btn.click();
+                            }
+                        }, msg.id._serialized);
+
+                        this.log('info', 'media_debug', 'Native download triggered. Polling file system...');
+
+                        // Poll for file
+                        await new Promise(r => setTimeout(r, 5000)); // Wait for download start
+
+                        // Poll loop for up to 5 minutes for large files
+                        let matchedFile = null;
+                        const pollStartTime = Date.now();
+                        
+                        while ((Date.now() - pollStartTime) < 300000) {
+                            const files = fs.readdirSync(this.config.MEDIA_DIR)
+                                .map(name => {
+                                    const stat = fs.statSync(path.join(this.config.MEDIA_DIR, name));
+                                    return { name, time: stat.mtime.getTime(), size: stat.size };
+                                })
+                                .sort((a, b) => b.time - a.time); // Newest first
+
+                            // Find a file that matches criteria
+                            for (const file of files) {
+                                // Only consider files modified AFTER we clicked download
+                                if (file.time < (startTime - 5000)) continue; // Allow some clock drift buffer
+                                
+                                // Ignore partial downloads (crdownload, tmp, etc)
+                                if (file.name.endsWith('.crdownload') || file.name.endsWith('.tmp')) continue;
+
+                                // 1. Extension Check
+                                const ext = path.extname(file.name).toLowerCase();
+                                const isImage = ['.jpg', '.jpeg', '.png', '.webp'].includes(ext);
+                                const isVideo = ['.mp4', '.mov'].includes(ext);
+                                const isAudio = ['.mp3', '.ogg', '.wav'].includes(ext);
+                                
+                                if (msg.type === 'image' && !isImage && ext !== '.bin') continue;
+                                if (msg.type === 'video' && !isVideo && ext !== '.bin') continue;
+                                if (msg.type === 'audio' && !isAudio && ext !== '.bin') continue;
+                                // Documents can be anything, but usually not .webp unless it's a sticker sent as doc
+                                
+                                // 2. Size Check (Critical)
+                                // If msg has size info, match it with 10% tolerance or at least ensure it's not tiny
+                                if (msg.size || (msg._data && msg._data.size)) {
+                                    const expectedSize = msg.size || msg._data.size;
+                                    const diff = Math.abs(file.size - expectedSize);
+                                    if (diff > 5000000) continue; // Allow 5MB variance? Maybe too loose.
+                                    // Better: if file is tiny (<10KB) and expected is huge (>1MB), ignore
+                                    if (expectedSize > 1000000 && file.size < 100000) continue;
+                                }
+
+                                matchedFile = file;
+                                break;
+                            }
+
+                            if (matchedFile) break;
+                            await new Promise(r => setTimeout(r, 2000));
+                        }
+
+                        if (matchedFile) {
+                            this.log('info', 'media_debug', 'NATIVE DOWNLOAD SUCCESS! Matched File: ' + matchedFile.name + ' Size: ' + matchedFile.size);
+                            const filePath = path.join(this.config.MEDIA_DIR, matchedFile.name);
+                            
+                            // Detect actual mimetype from the downloaded file
+                            const detectedMime = mime.lookup(matchedFile.name) || msg.mimetype || 'application/octet-stream';
+                            
+                            return {
+                                tempFilePath: filePath,
+                                data: null, 
+                                mimetype: detectedMime,
+                                filename: matchedFile.name
+                            };
+                        } else {
+                             this.log('warn', 'media_debug', 'Native download timed out or no matching file found.');
+                        }
+                    }
+                } catch (fallbackErr) {
+                    this.log('error', 'media_debug', `Native fallback failed: ${fallbackErr.message}`);
+                }
+
+                if (attempt === maxRetries) {
+                    this.log('error', 'media', `All methods failed for ${msg.id._serialized}`);
+                }
+                
+                await new Promise(r => setTimeout(r, 5000));
             }
         }
         return null;
     }
 
     async saveMedia(media, msgId, timestamp) {
-        if (!media || !media.data) return { mediaPath: null, mediaUrl: null };
+        if (!media || (!media.data && !media.tempFilePath)) return { mediaPath: null, mediaUrl: null };
         try {
-            const ext = (media.mimetype.split('/')[1] || 'bin').split(';')[0];
-            const filename = timestamp + '_' + msgId.replace(/[^a-zA-Z0-9]/g, '_') + '.' + ext;
+            let ext = (media.mimetype.split('/')[1] || 'bin').split(';')[0];
+            
+            // If extension is generic, try to get a better one from the provided filename
+            if ((ext === 'bin' || ext === 'octet-stream' || ext === 'plain') && media.filename) {
+                const fileExt = path.extname(media.filename).replace('.', '').toLowerCase();
+                if (fileExt && fileExt.length < 10) ext = fileExt;
+            }
+
+            // Clean and shorten the ID for a prettier filename
+            const cleanId = msgId.split('_').pop().replace(/[^a-zA-Z0-9]/g, '').substring(0, 12);
+            const filename = timestamp + '_' + cleanId + '.' + ext;
             const localPath = path.join(this.config.MEDIA_DIR, filename);
-            fs.writeFileSync(localPath, Buffer.from(media.data, 'base64'));
+
+            if (media.tempFilePath) {
+                // Optimized path: Move existing file
+                if (fs.existsSync(media.tempFilePath)) {
+                    // Rename (move)
+                    fs.renameSync(media.tempFilePath, localPath);
+                } else {
+                    return { mediaPath: null, mediaUrl: null };
+                }
+            } else {
+                // Standard path: Write from base64 buffer
+                fs.writeFileSync(localPath, Buffer.from(media.data, 'base64'));
+            }
 
             if (this.settings.uploadToDrive && this.drive) {
                 try {
@@ -318,6 +617,7 @@ class WhatsAppClient {
             }
             return { mediaPath: localPath, mediaUrl: CONSTANTS.MEDIA_URL_PREFIX + filename };
         } catch (e) {
+            this.log('error', 'media', 'Save media failed: ' + e.message);
             return { mediaPath: null, mediaUrl: null };
         }
     }
@@ -353,25 +653,12 @@ class WhatsAppClient {
                 timestamp: msg.timestamp * 1000,
                 isGroup: chat.isGroup,
                 isFromMe: fromMe,
-                mediaMimetype: msg.mimetype || msg._data?.mimetype
+                mediaMimetype: msg.mimetype || msg._data?.mimetype,
+                mediaPath: null,
+                mediaUrl: null
             };
 
-            if (msg.hasMedia && this.settings.downloadMedia) {
-                const media = await this.downloadMediaWithRetry(msg);
-                if (media) {
-                    const mediaResult = await this.saveMedia(media, msg.id._serialized, msg.timestamp * 1000);
-                    msgData.mediaPath = mediaResult.mediaPath;
-                    msgData.mediaUrl = mediaResult.mediaUrl;
-                    msgData.mediaMimetype = media.mimetype;
-                } else {
-                    this.log('warn', 'media', 'Media download failed', {
-                        chatId: chat.id?._serialized,
-                        messageId: msg.id?._serialized,
-                        type: msg.type
-                    });
-                }
-            }
-
+            // 1. Save and Emit IMMEDIATELY (Fire and forget)
             this.db.messages.save.run(
                 msgData.messageId,
                 msgData.chatId,
@@ -380,8 +667,8 @@ class WhatsAppClient {
                 msgData.fromName,
                 msgData.body,
                 msgData.type,
-                msgData.mediaPath,
-                msgData.mediaUrl,
+                null, // No media yet
+                null, // No url yet
                 msgData.mediaMimetype,
                 msgData.isGroup ? 1 : 0,
                 msgData.isFromMe ? 1 : 0,
@@ -391,6 +678,7 @@ class WhatsAppClient {
 
             const lastPreview = msgData.body || (msg.hasMedia ? (msg.type === 'document' ? '[Dosya]' : '[Medya]') : '');
             const profilePic = await this.getChatProfilePic(chat);
+            
             this.db.chats.upsert.run(
                 chat.id._serialized,
                 chat.name || this.extractPhoneFromId(chat.id.user),
@@ -402,6 +690,40 @@ class WhatsAppClient {
             );
 
             this.emit('message', msgData);
+
+            // 2. Download Media in Background
+            if (msg.hasMedia && this.settings.downloadMedia) {
+                // Do not await this
+                (async () => {
+                    try {
+                        const media = await this.downloadMediaWithRetry(msg);
+                        if (media) {
+                            const mediaResult = await this.saveMedia(media, msg.id._serialized, msg.timestamp * 1000);
+                            
+                            // Update DB
+                            this.db.db.prepare('UPDATE messages SET media_path = ?, media_url = ?, media_mimetype = ? WHERE message_id = ?')
+                                .run(mediaResult.mediaPath, mediaResult.mediaUrl, media.mimetype, msgData.messageId);
+
+                            // Emit update event
+                            this.emit('media_downloaded', {
+                                messageId: msgData.messageId,
+                                mediaUrl: mediaResult.mediaUrl,
+                                mediaMimetype: media.mimetype
+                            });
+                            
+                            this.log('info', 'media', 'Media downloaded for ' + msgData.messageId);
+                        } else {
+                            this.log('warn', 'media', 'Media download failed (background)', {
+                                chatId: chat.id?._serialized,
+                                messageId: msg.id?._serialized
+                            });
+                        }
+                    } catch (err) {
+                        this.log('error', 'media', 'Background media download error: ' + err.message);
+                    }
+                })();
+            }
+
             return { msgData, chat, msg, contact };
         } catch (e) {
             this.log('error', 'message', 'Failed to process message: ' + e.message);
@@ -468,9 +790,28 @@ class WhatsAppClient {
             }
 
             if (messages.length > 0) {
-                const profilePic = await this.getChatProfilePic(chat);
+                // Try to get profile pic from cache first
+                let profilePic = await this.getChatProfilePic(chat);
+                
+                // If not in cache or null, try aggressive fetch with timeout
+                if (!profilePic) {
+                    try {
+                         const fetchPic = async (id) => {
+                            return Promise.race([
+                                this.client.getProfilePicUrl(id),
+                                new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000))
+                            ]);
+                        };
+                        profilePic = await fetchPic(chat.id._serialized);
+                        if (profilePic) {
+                            this.chatProfileCache.set(chat.id._serialized, profilePic);
+                        }
+                    } catch(e) {}
+                }
+
                 const lastMsg = messages[messages.length - 1];
                 const lastPreview = this.getMessageBody(lastMsg) || (lastMsg.hasMedia ? (lastMsg.type === 'document' ? '[Dosya]' : '[Medya]') : '');
+                
                 this.db.chats.upsert.run(
                     chat.id._serialized,
                     chatName,
@@ -521,6 +862,9 @@ class WhatsAppClient {
                 this.syncProgress.current = processed;
                 this.syncProgress.chat = chunk.map(c => c.name || c.id.user).join(', ');
                 this.emitProgress();
+
+                // Yield to event loop to prevent blocking
+                await new Promise(resolve => setImmediate(resolve));
             }
 
             this.contactCache.clear();
@@ -583,6 +927,132 @@ class WhatsAppClient {
             settings: this.settings,
             lastError: this.lastError
         };
+    }
+
+    async refreshChatPicture(chatId) {
+        if (!this.isReady()) throw new Error('WhatsApp not connected');
+        
+        try {
+            // Use client-level method which is more reliable
+            // Add a timeout race to prevent hanging
+            const fetchPic = async (id) => {
+                return Promise.race([
+                    this.client.getProfilePicUrl(id),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Profile picture fetch timeout')), 10000))
+                ]);
+            };
+
+            let url = null;
+            try {
+                url = await fetchPic(chatId);
+            } catch (e) {
+                this.log('warn', 'profile_pic', 'Timeout fetching pic for ' + chatId);
+            }
+            
+            // If it's a group and url is null, sometimes we need to wait or retry
+            if (!url && chatId.endsWith('@g.us')) {
+                await new Promise(r => setTimeout(r, 1000));
+                try {
+                    url = await fetchPic(chatId);
+                } catch (e) {}
+            }
+
+            // Update cache
+            this.chatProfileCache.set(chatId, url || null);
+
+            // Update Database with specific UPDATE to avoid overwriting other fields if row exists
+            // We only want to update the profile picture and updated_at
+            this.db.db.prepare('UPDATE chats SET profile_pic = ?, updated_at = datetime(\'now\') WHERE chat_id = ?').run(url, chatId);
+
+            return { success: true, url };
+        } catch (e) {
+            this.log('error', 'profile_pic', 'Failed to refresh picture for ' + chatId + ': ' + e.message);
+            return { success: false, error: e.message };
+        }
+    }
+
+    async forceDownloadChatMedia(chatId) {
+        if (!this.isReady()) throw new Error('WhatsApp not connected');
+
+        try {
+            // Find messages with missing media
+            // We look for messages that have a media mimetype OR are of media type, but media_url is null
+            const missing = this.db.db.prepare(`
+                SELECT message_id, timestamp 
+                FROM messages 
+                WHERE chat_id = ? 
+                  AND (type IN ('image', 'video', 'audio', 'ptt', 'document', 'sticker') OR media_mimetype IS NOT NULL)
+                  AND media_url IS NULL
+                ORDER BY timestamp DESC
+                LIMIT 20
+            `).all(chatId);
+
+            this.log('info', 'media_recovery', `Found ${missing.length} messages with missing media in ${chatId}`);
+
+            let successCount = 0;
+
+            for (const row of missing) {
+                try {
+                    this.log('info', 'media_recovery', `Attempting to recover media for ${row.message_id}...`);
+                    
+                    // 1. Warm up the chat context
+                    try {
+                        const chat = await this.client.getChatById(chatId);
+                        // Briefly 'touch' the chat to make it active in browser memory
+                        await chat.sendSeen(); 
+                        await new Promise(r => setTimeout(r, 1000));
+                    } catch (e) {
+                        this.log('warn', 'media_recovery', 'Failed to warm up chat: ' + e.message);
+                    }
+
+                    // 2. Fetch the actual message object with a retry/timeout
+                    const msg = await Promise.race([
+                        this.client.getMessageById(row.message_id),
+                        new Promise((_, reject) => setTimeout(() => reject(new Error('Message fetch timeout')), 10000))
+                    ]);
+
+                    if (!msg || !msg.hasMedia) {
+                        this.log('warn', 'media_recovery', `Message ${row.message_id} not found or has no media`);
+                        continue;
+                    }
+
+                    // 3. Force download with higher retry count and huge timeout
+                    const media = await this.downloadMediaWithRetry(msg, 3, 900000); // 3 attempts, 15 min timeout
+                    
+                    if (media) {
+                        const mediaResult = await this.saveMedia(media, row.message_id, row.timestamp); // Timestamp is already stored as ms in DB? No, in saveMedia it expects ms. row.timestamp in DB is ms.
+                        
+                        // Update DB
+                        this.db.db.prepare('UPDATE messages SET media_path = ?, media_url = ?, media_mimetype = ? WHERE message_id = ?')
+                            .run(mediaResult.mediaPath, mediaResult.mediaUrl, media.mimetype, row.message_id);
+
+                        // Emit update event
+                        this.emit('media_downloaded', {
+                            messageId: row.message_id,
+                            mediaUrl: mediaResult.mediaUrl,
+                            mediaMimetype: media.mimetype
+                        });
+                        
+                        successCount++;
+                        this.log('info', 'media_recovery', `Successfully recovered media for ${row.message_id}`);
+                    } else {
+                        this.log('error', 'media_recovery', `Failed to download media for ${row.message_id}`);
+                    }
+                    
+                    // Wait a bit between files to let GC run and avoid rate limits
+                    await new Promise(r => setTimeout(r, 2000));
+
+                } catch (innerErr) {
+                    this.log('error', 'media_recovery', `Error processing message ${row.message_id}: ${innerErr.message}`);
+                }
+            }
+
+            return { success: true, recovered: successCount, total: missing.length };
+
+        } catch (e) {
+            this.log('error', 'media_recovery', 'Fatal error in recovery: ' + e.message);
+            return { success: false, error: e.message };
+        }
     }
 
     async logout() {

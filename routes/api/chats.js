@@ -202,4 +202,33 @@ router.delete('/:id/notes/:noteId', validate({ params: noteParamsSchema }), (req
     return res.json({ success: true });
 });
 
+router.post('/:id/refresh-picture', validate({ params: chatIdParamSchema }), async (req, res) => {
+    try {
+        const result = await req.account.whatsapp.refreshChatPicture(req.validatedParams.id);
+        if (!result.success) {
+            return sendError(req, res, 500, result.error);
+        }
+        return res.json({ success: true, url: result.url });
+    } catch (error) {
+        return sendError(req, res, 500, error.message);
+    }
+});
+
+router.post('/:id/force-media', validate({ params: chatIdParamSchema }), async (req, res) => {
+    try {
+        // Run in background to avoid timeout
+        req.account.whatsapp.forceDownloadChatMedia(req.validatedParams.id)
+            .then(result => {
+                req.log.info('Media recovery completed', result);
+            })
+            .catch(err => {
+                req.log.error('Media recovery failed', { error: err.message });
+            });
+
+        return res.json({ success: true, message: 'Medya kurtarma islemi arka planda baslatildi. Dosyalar indikce ekrana dusecektir.' });
+    } catch (error) {
+        return sendError(req, res, 500, error.message);
+    }
+});
+
 module.exports = router;

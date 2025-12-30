@@ -20,110 +20,139 @@ class ScriptRunner {
     // Create sandboxed context for script execution
     createContext(scriptId, triggerData) {
         const self = this;
+        
+        // Create a null-prototype object to prevent prototype chain attacks
+        const context = Object.create(null);
 
-        return {
+        // Define properties directly on the null-prototype object
+        Object.defineProperties(context, {
             // Messaging
-            sendMessage: async (chatId, message) => {
-                if (!self.whatsapp || !self.whatsapp.isReady()) {
-                    throw new Error('WhatsApp not connected');
-                }
-                return await self.whatsapp.sendMessage(chatId, message);
+            sendMessage: {
+                value: async (chatId, message) => {
+                    if (!self.whatsapp || !self.whatsapp.isReady()) {
+                        throw new Error('WhatsApp not connected');
+                    }
+                    return await self.whatsapp.sendMessage(chatId, message);
+                },
+                writable: false, configurable: false
             },
 
-            reply: async (message) => {
-                if (!triggerData || !triggerData.chatId) {
-                    throw new Error('No chat context for reply');
-                }
-                return await self.whatsapp.sendMessage(triggerData.chatId, message);
+            reply: {
+                value: async (message) => {
+                    if (!triggerData || !triggerData.chatId) {
+                        throw new Error('No chat context for reply');
+                    }
+                    return await self.whatsapp.sendMessage(triggerData.chatId, message);
+                },
+                writable: false, configurable: false
             },
 
             // Data access
-            getChats: () => self.db.chats.getAll.all(),
-            getMessages: (chatId, limit = 50) => self.db.messages.getByChatId.all(chatId, limit),
-            searchMessages: (query) => self.db.messages.search.all('%' + query + '%'),
+            getChats: {
+                value: () => self.db.chats.getAll.all(),
+                writable: false, configurable: false
+            },
+            getMessages: {
+                value: (chatId, limit = 50) => self.db.messages.getByChatId.all(chatId, limit),
+                writable: false, configurable: false
+            },
+            searchMessages: {
+                value: (query) => self.db.messages.search.all('%' + query + '%'),
+                writable: false, configurable: false
+            },
 
             // Trigger data
-            msg: triggerData,
-            message: triggerData,
+            msg: { value: triggerData, writable: false, configurable: false },
+            message: { value: triggerData, writable: false, configurable: false },
 
             // Utilities
             console: {
-                log: (...args) => self.scriptLog(scriptId, 'info', args.join(' ')),
-                info: (...args) => self.scriptLog(scriptId, 'info', args.join(' ')),
-                warn: (...args) => self.scriptLog(scriptId, 'warn', args.join(' ')),
-                error: (...args) => self.scriptLog(scriptId, 'error', args.join(' '))
+                value: Object.freeze({
+                    log: (...args) => self.scriptLog(scriptId, 'info', args.join(' ')),
+                    info: (...args) => self.scriptLog(scriptId, 'info', args.join(' ')),
+                    warn: (...args) => self.scriptLog(scriptId, 'warn', args.join(' ')),
+                    error: (...args) => self.scriptLog(scriptId, 'error', args.join(' '))
+                }),
+                writable: false, configurable: false
             },
 
-            log: (...args) => self.scriptLog(scriptId, 'info', args.join(' ')),
+            log: {
+                value: (...args) => self.scriptLog(scriptId, 'info', args.join(' ')),
+                writable: false, configurable: false
+            },
 
-            // Storage (simple key-value per script)
+            // Storage
             storage: {
-                _data: {},
-                get: function(key) { return this._data[key]; },
-                set: function(key, value) { this._data[key] = value; },
-                delete: function(key) { delete this._data[key]; },
-                clear: function() { this._data = {}; }
+                value: {
+                    _data: {},
+                    get: function(key) { return this._data[key]; },
+                    set: function(key, value) { this._data[key] = value; },
+                    delete: function(key) { delete this._data[key]; },
+                    clear: function() { this._data = {}; }
+                },
+                writable: false, configurable: false
             },
 
             // HTTP requests
-            fetch: async (url, options = {}) => {
-                const axios = require('axios');
-                if (!isSafeExternalUrl(url, { maxLength: 2048 })) {
-                    return {
-                        ok: false,
-                        status: 0,
-                        json: async () => ({}),
-                        text: async () => 'Blocked URL'
-                    };
-                }
-                try {
-                    const response = await axios({
-                        url,
-                        method: options.method || 'GET',
-                        headers: options.headers,
-                        data: options.body,
-                        timeout: 10000
-                    });
-                    return {
-                        ok: response.status >= 200 && response.status < 300,
-                        status: response.status,
-                        json: async () => response.data,
-                        text: async () => JSON.stringify(response.data)
-                    };
-                } catch (error) {
-                    return {
-                        ok: false,
-                        status: error.response?.status || 0,
-                        json: async () => ({}),
-                        text: async () => error.message
-                    };
-                }
+            fetch: {
+                value: async (url, options = {}) => {
+                    const axios = require('axios');
+                    if (!isSafeExternalUrl(url, { maxLength: 2048 })) {
+                        return {
+                            ok: false,
+                            status: 0,
+                            json: async () => ({}),
+                            text: async () => 'Blocked URL'
+                        };
+                    }
+                    try {
+                        const response = await axios({
+                            url,
+                            method: options.method || 'GET',
+                            headers: options.headers,
+                            data: options.body,
+                            timeout: 10000
+                        });
+                        return {
+                            ok: response.status >= 200 && response.status < 300,
+                            status: response.status,
+                            json: async () => response.data,
+                            text: async () => JSON.stringify(response.data)
+                        };
+                    } catch (error) {
+                        return {
+                            ok: false,
+                            status: error.response?.status || 0,
+                            json: async () => ({}),
+                            text: async () => error.message
+                        };
+                    }
+                },
+                writable: false, configurable: false
             },
 
             // Timing
-            setTimeout: (fn, ms) => setTimeout(fn, Math.min(ms, 30000)), // Max 30 sec
-            setInterval: null, // Disabled for safety
+            setTimeout: {
+                value: (fn, ms) => setTimeout(fn, Math.min(ms, 30000)),
+                writable: false, configurable: false
+            },
+            
+            // Safe Globals
+            Date: { value: Date, writable: false, configurable: false },
+            JSON: { value: JSON, writable: false, configurable: false },
+            Math: { value: Math, writable: false, configurable: false },
+            String: { value: String, writable: false, configurable: false },
+            Number: { value: Number, writable: false, configurable: false },
+            Boolean: { value: Boolean, writable: false, configurable: false },
+            Array: { value: Array, writable: false, configurable: false },
+            Object: { value: Object, writable: false, configurable: false },
+            parseInt: { value: parseInt, writable: false, configurable: false },
+            parseFloat: { value: parseFloat, writable: false, configurable: false },
+            isNaN: { value: isNaN, writable: false, configurable: false },
+            RegExp: { value: RegExp, writable: false, configurable: false }
+        });
 
-            // Date/Time
-            Date,
-
-            // JSON
-            JSON,
-
-            // Math
-            Math,
-
-            // String/Array utilities
-            String,
-            Array,
-            Object,
-            parseInt,
-            parseFloat,
-            isNaN,
-
-            // Regex
-            RegExp
-        };
+        return context;
     }
 
     scriptLog(scriptId, level, message) {

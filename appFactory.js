@@ -210,8 +210,8 @@ function createApp() {
         });
     });
 
-    app.use(express.json({ limit: '10mb' }));
-    app.use(express.urlencoded({ extended: true }));
+    app.use(express.json({ limit: '500mb' }));
+    app.use(express.urlencoded({ extended: true, limit: '500mb' }));
     app.use(cors(corsOptions));
 
     app.use((req, res, next) => {

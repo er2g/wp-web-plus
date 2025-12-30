@@ -468,7 +468,7 @@ body.compact .message-bubble .message-text {
     left: 0;
     width: 100%;
     height: 100%;
-    background-image: var(--chat-wallpaper);
+    background: var(--chat-wallpaper);
     background-size: cover;
     background-position: center;
     opacity: var(--chat-bg-opacity, 1);
@@ -758,6 +758,8 @@ body.compact .message-bubble .message-text {
     position: relative;
     box-shadow: 0 1px 0.5px rgba(11,20,26,0.13);
     word-wrap: break-word;
+    overflow-wrap: break-word;
+    word-break: break-word;
 }
 
 .message-bubble.sent {
@@ -777,6 +779,7 @@ body.compact .message-bubble .message-text {
     font-size: 12px;
     text-align: center;
     box-shadow: none;
+    max-width: 85%;
 }
 
 .message-bubble .sender-name {
@@ -784,6 +787,9 @@ body.compact .message-bubble .message-text {
     font-weight: 500;
     color: #06cf9c;
     margin-bottom: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .message-bubble .message-text {
@@ -791,6 +797,8 @@ body.compact .message-bubble .message-text {
     line-height: 1.4;
     color: var(--text-primary);
     white-space: pre-wrap;
+    overflow-wrap: break-word;
+    word-break: break-word;
 }
 
 .message-bubble .message-text.muted {
@@ -800,11 +808,13 @@ body.compact .message-bubble .message-text {
 
 .message-bubble .message-media {
     margin: -3px -4px 4px -6px;
+    max-width: calc(100% + 10px);
 }
 
 .message-bubble .message-media img,
 .message-bubble .message-media video {
-    max-width: 330px;
+    max-width: 100%;
+    height: auto;
     border-radius: 6px;
     cursor: pointer;
     display: block;
@@ -845,7 +855,8 @@ body.compact .message-bubble .message-text {
     padding: 10px;
     border-radius: 6px;
     margin-bottom: 4px;
-    min-width: 240px;
+    min-width: 200px;
+    max-width: 100%;
     cursor: pointer;
 }
 
@@ -1080,6 +1091,15 @@ body.compact .message-bubble .message-text {
     padding: 6px 10px;
     border-radius: 8px;
     font-size: 13px;
+}
+
+.settings-item .gradient-preview {
+    width: 100%;
+    height: 18px;
+    margin-top: 6px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-input);
 }
 
 .settings-item .toggle {
@@ -1793,42 +1813,58 @@ body.compact .message-bubble .message-text {
 
 @media (max-width: 768px) {
     .sidebar {
-        position: fixed;
-        left: 0;
-        top: 0;
-        height: 100%;
-        z-index: 100;
         width: 100%;
+        min-width: 100%;
         max-width: 100%;
+        border-right: none;
+        z-index: 50;
     }
 
     .chat-area {
         position: fixed;
-        left: 0;
         top: 0;
+        left: 0;
         width: 100%;
         height: 100%;
-        z-index: 101;
-        display: none;
+        z-index: 100;
+        transform: translateX(100%);
+        transition: transform 0.3s ease-in-out;
+        display: flex !important; /* Always flex, just moved off-screen */
     }
 
     .chat-area.active {
-        display: flex;
+        transform: translateX(0);
     }
+    
+    .chat-area.empty {
+        display: none !important; /* Hide empty state on mobile when chat open */
+    }
+
+    .chat-header .back-btn {
+        display: flex !important;
+        margin-right: 8px;
+    }
+
+    .settings-panel, .features-panel {
+        width: 100%;
+        max-width: 100%;
+    }
+    
+    .settings-panel { right: -100%; }
+    .features-panel { left: -100%; }
 
     .message-bubble {
         max-width: 85%;
     }
-
-.settings-panel {
-    width: 100%;
-    right: -100%;
-}
-
-.features-panel {
-    width: 100%;
-    left: -100%;
-}
+    
+    .messages-container {
+        padding: 10px 16px;
+    }
+    
+    /* Hide some elements on mobile to save space */
+    .chat-meta-panel {
+        display: none; /* Can be toggled if needed, but hidden by default for space */
+    }
 }
 
 .form-card {

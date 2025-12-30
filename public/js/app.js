@@ -40,6 +40,16 @@ let uiPreferences = {
     backgroundColor: '#efeae2',
     backgroundOpacity: 100
 };
+
+const GRADIENT_PRESETS = {
+    sunset: 'linear-gradient(135deg, #ff512f 0%, #dd2476 100%)',
+    ocean: 'linear-gradient(135deg, #2193b0 0%, #6dd5ed 100%)',
+    purple: 'linear-gradient(135deg, #8e2de2 0%, #4a00e0 100%)',
+    forest: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)',
+    fire: 'linear-gradient(135deg, #f12711 0%, #f5af19 100%)',
+    midnight: 'linear-gradient(135deg, #232526 0%, #414345 100%)'
+};
+
 let selectedAttachment = null;
 const MESSAGE_PAGE_SIZE = 50;
 const CHAT_MESSAGE_PAGE_SIZE = 50;
@@ -229,9 +239,36 @@ function updateCustomizationUI() {
     const bgOpacityRange = document.getElementById('bgOpacityRange');
     if (bgOpacityRange) bgOpacityRange.value = uiPreferences.backgroundOpacity;
 
+    const bgGradientSelect = document.getElementById('bgGradientSelect');
+    let gradientSelectValue = 'auto';
+    const rawGradient = String(uiPreferences.backgroundGradient || '').trim();
+    if (rawGradient.startsWith('preset:')) {
+        const presetKey = rawGradient.slice('preset:'.length);
+        gradientSelectValue = GRADIENT_PRESETS[presetKey] ? presetKey : 'auto';
+    } else if (rawGradient && isSafeCssGradient(rawGradient)) {
+        gradientSelectValue = 'custom';
+    }
+    if (bgGradientSelect) bgGradientSelect.value = gradientSelectValue;
+
+    const bgGradientInput = document.getElementById('bgGradientInput');
+    if (bgGradientInput) {
+        bgGradientInput.value = gradientSelectValue === 'custom' ? rawGradient : '';
+    }
+
+    const bgGradientPreview = document.getElementById('bgGradientPreview');
+    if (bgGradientPreview) {
+        if (uiPreferences.backgroundType === 'gradient') {
+            bgGradientPreview.style.background = getResolvedGradientValue();
+        } else {
+            bgGradientPreview.style.background = '';
+        }
+    }
+
     // Show/Hide controls based on type
     document.getElementById('bgImageControl').style.display = uiPreferences.backgroundType === 'image' ? 'block' : 'none';
-    document.getElementById('bgColorControl').style.display = (uiPreferences.backgroundType === 'solid' || uiPreferences.backgroundType === 'gradient') ? 'block' : 'none';
+    document.getElementById('bgGradientControl').style.display = uiPreferences.backgroundType === 'gradient' ? 'block' : 'none';
+    document.getElementById('bgGradientCustomControl').style.display = (uiPreferences.backgroundType === 'gradient' && gradientSelectValue === 'custom') ? 'block' : 'none';
+    document.getElementById('bgColorControl').style.display = (uiPreferences.backgroundType === 'solid' || (uiPreferences.backgroundType === 'gradient' && gradientSelectValue === 'auto')) ? 'block' : 'none';
 }
 
 function updateAccentColor(color) {
@@ -315,10 +352,82 @@ function updateBackgroundColor(color) {
     saveUserPreferences();
 }
 
+function updateBackgroundGradient(value) {
+    if (value === 'auto') {
+        uiPreferences.backgroundGradient = '';
+    } else if (value === 'custom') {
+        const existing = String(uiPreferences.backgroundGradient || '').trim();
+        if (!existing || existing.startsWith('preset:')) {
+            uiPreferences.backgroundGradient = getDerivedGradientFromColor(uiPreferences.backgroundColor);
+        }
+    } else if (GRADIENT_PRESETS[value]) {
+        uiPreferences.backgroundGradient = 'preset:' + value;
+    } else {
+        uiPreferences.backgroundGradient = '';
+    }
+
+    updateCustomizationUI();
+    applyBackgroundSettings();
+    saveUserPreferences();
+}
+
+function updateBackgroundGradientCustom(value) {
+    const trimmed = String(value || '').trim();
+    if (!trimmed) {
+        uiPreferences.backgroundGradient = '';
+        updateCustomizationUI();
+        applyBackgroundSettings();
+        saveUserPreferences();
+        return;
+    }
+
+    if (!isSafeCssGradient(trimmed)) {
+        showToast('Gradyan formati gecersiz (linear-gradient / radial-gradient)', 'error');
+        updateCustomizationUI();
+        return;
+    }
+
+    uiPreferences.backgroundGradient = trimmed;
+    updateCustomizationUI();
+    applyBackgroundSettings();
+    saveUserPreferences();
+}
+
 function updateBackgroundOpacity(opacity) {
     uiPreferences.backgroundOpacity = opacity;
     applyBackgroundSettings();
     saveUserPreferences();
+}
+
+function isSafeCssGradient(value) {
+    if (typeof value !== 'string') return false;
+    const trimmed = value.trim();
+    if (!trimmed) return false;
+    if (trimmed.length > 240) return false;
+    if (!/^(linear-gradient|radial-gradient)\(/i.test(trimmed)) return false;
+    if (/url\s*\(/i.test(trimmed)) return false;
+    if (/expression\s*\(/i.test(trimmed)) return false;
+    // Allow only a strict set of characters to avoid CSS injection primitives.
+    if (/[^a-z0-9#(),.%+\-\s]/i.test(trimmed)) return false;
+    return true;
+}
+
+function getDerivedGradientFromColor(color) {
+    const base = color || '#efeae2';
+    const color2 = adjustColor(base, -30);
+    return `linear-gradient(135deg, ${base} 0%, ${color2} 100%)`;
+}
+
+function getResolvedGradientValue() {
+    const rawGradient = String(uiPreferences.backgroundGradient || '').trim();
+    if (rawGradient.startsWith('preset:')) {
+        const presetKey = rawGradient.slice('preset:'.length);
+        return GRADIENT_PRESETS[presetKey] || getDerivedGradientFromColor(uiPreferences.backgroundColor);
+    }
+    if (rawGradient && isSafeCssGradient(rawGradient)) {
+        return rawGradient;
+    }
+    return getDerivedGradientFromColor(uiPreferences.backgroundColor);
 }
 
 function applyBackgroundSettings() {
@@ -331,10 +440,7 @@ function applyBackgroundSettings() {
     } else if (type === 'solid') {
         bgValue = uiPreferences.backgroundColor;
     } else if (type === 'gradient') {
-        // Simple gradient derived from base color
-        const color = uiPreferences.backgroundColor;
-        const color2 = adjustColor(color, -30);
-        bgValue = `linear-gradient(135deg, ${color} 0%, ${color2} 100%)`;
+        bgValue = getResolvedGradientValue();
     } else if (type === 'default') {
         bgValue = 'var(--wallpaper-default)';
     }
@@ -503,6 +609,7 @@ function initSocket() {
     });
     socket.on('message', handleNewMessage);
     socket.on('message_ack', handleMessageAck);
+    socket.on('media_downloaded', handleMediaDownloaded);
     socket.on('sync_progress', updateSyncProgress);
     socket.on('sync_complete', (data) => {
         showToast('Senkronizasyon tamamlandi: ' + data.chats + ' sohbet, ' + data.messages + ' mesaj', 'success');
@@ -1153,11 +1260,34 @@ function renderChatMessages(messages, options = {}) {
 
         const isSystem = !mediaHtml && !m.body && !hasMediaType && type !== 'chat';
         let textHtml = '';
+        
         if (m.body && (type === 'chat' || (mediaUrl && m.body && type !== 'document'))) {
             textHtml = '<div class="message-text">' + escapeHtml(m.body) + '</div>';
-        } else if (type === 'document') {
+        } else if (type === 'document' && mediaUrl) {
             const fileName = m.body || 'Belge';
             textHtml = '<div class="message-text muted">[Dosya] ' + escapeHtml(fileName) + '</div>';
+        } else if (hasMediaType && !mediaUrl) {
+            // Loading State
+            let iconClass = 'bi-file-earmark';
+            let label = 'Dosya';
+            if (type === 'image') { iconClass = 'bi-image'; label = 'Fotograf'; }
+            else if (type === 'video') { iconClass = 'bi-camera-video'; label = 'Video'; }
+            else if (type === 'audio' || type === 'ptt') { iconClass = 'bi-mic'; label = 'Ses'; }
+            
+            const fileName = m.body || label;
+            
+            textHtml = `<div class="media-loading">
+                <div class="loading-info">
+                    <i class="bi ${iconClass} file-icon"></i>
+                    <div class="loading-text">
+                        <div>${escapeHtml(fileName)}</div>
+                        <div style="font-size: 10px; opacity: 0.8;">Sunucuya indiriliyor...</div>
+                    </div>
+                </div>
+                <div class="progress-track">
+                    <div class="progress-bar"></div>
+                </div>
+            </div>`;
         } else if (hasMediaType) {
             textHtml = '<div class="message-text muted">[Medya]</div>';
         } else if (isSystem) {
@@ -1231,10 +1361,8 @@ function selectChat(chatId, name) {
     loadChatMessages(chatId);
     renderChatList(chats);
 
-    // Mobile: show chat area
-    if (window.innerWidth <= 768) {
-        chatArea.classList.add('active');
-    }
+    // Mobile: show chat area with transition
+    chatArea.classList.add('active');
 }
 
 function closeChat() {
@@ -1242,10 +1370,21 @@ function closeChat() {
     const chatArea = document.getElementById('chatArea');
     const activeChatView = document.getElementById('activeChatView');
 
-    activeChatView.style.display = 'none';
+    // Mobile transition
     chatArea.classList.remove('active');
-    chatArea.classList.add('empty');
-    document.getElementById('emptyChatView').style.display = 'flex';
+    
+    // Delay hiding content slightly for transition to finish if needed, 
+    // but clearing immediately is safer for state.
+    // However, on desktop we want to show empty view.
+    // CSS handles mobile hiding via transform.
+    
+    setTimeout(() => {
+        if (!chatArea.classList.contains('active')) {
+             activeChatView.style.display = 'none';
+             chatArea.classList.add('empty');
+             document.getElementById('emptyChatView').style.display = 'flex';
+        }
+    }, 300); // Match CSS transition duration
 }
 
 function openChatForMessage(chatId) {
@@ -1516,11 +1655,34 @@ function appendNewMessage(msg) {
     const hasMediaType = mediaTypes.includes(type);
     const isSystem = !mediaHtml && !msg.body && !hasMediaType && type !== 'chat';
     let textHtml = '';
+    
     if (msg.body && (type === 'chat' || type === undefined)) {
         textHtml = '<div class="message-text">' + escapeHtml(msg.body) + '</div>';
-    } else if (type === 'document') {
+    } else if (type === 'document' && mediaUrl) {
         const fileName = msg.body || 'Belge';
         textHtml = '<div class="message-text muted">[Dosya] ' + escapeHtml(fileName) + '</div>';
+    } else if (hasMediaType && !mediaUrl) {
+         // Loading State
+         let iconClass = 'bi-file-earmark';
+         let label = 'Dosya';
+         if (type === 'image') { iconClass = 'bi-image'; label = 'Fotograf'; }
+         else if (type === 'video') { iconClass = 'bi-camera-video'; label = 'Video'; }
+         else if (type === 'audio' || type === 'ptt') { iconClass = 'bi-mic'; label = 'Ses'; }
+         
+         const fileName = msg.body || label;
+         
+         textHtml = `<div class="media-loading">
+             <div class="loading-info">
+                 <i class="bi ${iconClass} file-icon"></i>
+                 <div class="loading-text">
+                     <div>${escapeHtml(fileName)}</div>
+                     <div style="font-size: 10px; opacity: 0.8;">Sunucuya indiriliyor...</div>
+                 </div>
+             </div>
+             <div class="progress-track">
+                 <div class="progress-bar"></div>
+             </div>
+         </div>`;
     } else if (hasMediaType) {
         textHtml = '<div class="message-text muted">[Medya]</div>';
     } else if (isSystem) {
@@ -1620,10 +1782,26 @@ function searchInChat() {
     showToast('Sohbette arama henuz desteklenmiyor', 'info');
 }
 
-function refreshChat() {
+async function refreshChat() {
     if (currentChat) {
-        loadChatMessages(currentChat);
-        showToast('Sohbet yenilendi', 'success');
+        setListStatus('chatMessagesStatus', 'Yenileniyor...', true);
+        try {
+            // Refresh messages
+            await loadChatMessages(currentChat);
+            
+            // Refresh profile picture
+            await api('api/chats/' + encodeURIComponent(currentChat) + '/refresh-picture', 'POST');
+            
+            // Reload chat info to update UI
+            loadChats();
+            
+            showToast('Sohbet ve profil fotografi yenilendi', 'success');
+        } catch (e) {
+            console.error(e);
+            showToast('Yenileme kismen basarisiz oldu', 'warning');
+        } finally {
+            setListStatus('chatMessagesStatus', '', false);
+        }
     }
     document.querySelectorAll('.dropdown-menu.show').forEach(m => m.classList.remove('show'));
 }
@@ -1635,6 +1813,17 @@ function exportChat() {
 
 function clearChat() {
     showToast('Sohbet temizleme henuz desteklenmiyor', 'info');
+    document.querySelectorAll('.dropdown-menu.show').forEach(m => m.classList.remove('show'));
+}
+
+async function recoverMedia() {
+    if (!currentChat) return;
+    try {
+        showToast('Eksik dosyalar araniyor ve indiriliyor...', 'info');
+        await api('api/chats/' + encodeURIComponent(currentChat) + '/force-media', 'POST');
+    } catch (err) {
+        showToast('Islem baslatilamadi: ' + err.message, 'error');
+    }
     document.querySelectorAll('.dropdown-menu.show').forEach(m => m.classList.remove('show'));
 }
 
@@ -1730,6 +1919,99 @@ function openMediaLightbox(src) {
     lightbox.appendChild(img);
     lightbox.onclick = () => lightbox.remove();
     document.body.appendChild(lightbox);
+}
+
+function handleMediaDownloaded(payload) {
+    if (!payload || !payload.messageId || !payload.mediaUrl) return;
+    
+    const messageId = payload.messageId;
+    const mediaUrl = payload.mediaUrl;
+    
+    // Update data model
+    const item = chatMessagesPagination.items.find(m => (m.message_id || m.messageId) === messageId);
+    if (item) {
+        item.media_url = mediaUrl;
+        item.mediaUrl = mediaUrl;
+    }
+    
+    // Update DOM
+    const row = document.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
+    if (!row) return;
+    
+    const bubble = row.querySelector('.message-bubble');
+    if (!bubble) return;
+    
+    // Remove existing "Media" or "Dosya" text if simple placeholder
+    const mutedText = bubble.querySelector('.message-text.muted');
+    const loadingEl = bubble.querySelector('.media-loading');
+    
+    if (mutedText && mutedText.textContent.includes('[Medya]')) {
+        mutedText.remove();
+    }
+    
+    // Insert new media content
+    let mediaHtml = '';
+    const type = item ? item.type : 'image'; // fallback
+    const safeMediaUrl = sanitizeUrl(mediaUrl);
+    
+    if (safeMediaUrl) {
+        if (type === 'image' || type === 'sticker') {
+            mediaHtml = `<div class="message-media"><img src="${safeMediaUrl}" onclick="openMediaLightbox(this.src)" loading="lazy" alt=""></div>`;
+        } else if (type === 'video') {
+            mediaHtml = `<div class="message-media"><video src="${safeMediaUrl}" controls></video></div>`;
+        } else if (type === 'audio' || type === 'ptt') {
+            mediaHtml = `<div class="message-media"><audio src="${safeMediaUrl}" controls></audio></div>`;
+        } else if (type === 'document') {
+            // For document, we might want to replace the whole bubble content or just add the icon
+            // If text was "[Dosya] filename", we transform it to clickable bubble
+            // But usually document structure is different. 
+            // Let's just reload the chat messages for this chat if it's open, it's easier and cleaner
+            if (currentChat && (item && item.chat_id === currentChat)) {
+                // If we are looking at this chat, reload to render properly
+                // Or smarter: rerender just this message
+                // Construct a fake message object with new URL
+                const msgObj = item || { 
+                    is_from_me: row.classList.contains('sent'), 
+                    timestamp: Date.now(), 
+                    type: type,
+                    media_url: mediaUrl,
+                    body: bubble.textContent 
+                };
+                
+                // Use existing render logic? No, too complex to extract.
+                // Simple replacement for document:
+                const fileName = msgObj.body || 'Belge';
+                mediaHtml = `<div class="document-bubble" onclick="window.open('${safeMediaUrl}')">` +
+                        `<div class="doc-icon pdf"><i class="bi bi-file-earmark-pdf"></i></div>` +
+                        `<div class="doc-info"><div class="doc-name">${escapeHtml(fileName)}</div>` +
+                        `<div class="doc-size">Indir</div></div></div>`;
+                
+                // If there was a text placeholder, replace it
+                if (mutedText) {
+                    mutedText.outerHTML = mediaHtml;
+                    return; // Done
+                }
+                // If there was a loading placeholder, replace it
+                if (loadingEl) {
+                    loadingEl.outerHTML = mediaHtml;
+                    return;
+                }
+            }
+        }
+        
+        if (mediaHtml) {
+            if (loadingEl) {
+                loadingEl.outerHTML = mediaHtml;
+            } else {
+                const senderName = bubble.querySelector('.sender-name');
+                if (senderName) {
+                    senderName.insertAdjacentHTML('afterend', mediaHtml);
+                } else {
+                    bubble.insertAdjacentHTML('afterbegin', mediaHtml);
+                }
+            }
+        }
+    }
 }
 
 // Modal for Features
@@ -2783,6 +3065,8 @@ Object.assign(window, {
     updateBackgroundType,
     updateBackgroundImage,
     updateBackgroundColor,
+    updateBackgroundGradient,
+    updateBackgroundGradientCustom,
     updateBackgroundOpacity,
     createAccount,
     openSettings,
@@ -2807,6 +3091,7 @@ Object.assign(window, {
     startSync,
     searchInChat,
     refreshChat,
+    recoverMedia,
     exportChat,
     clearChat,
     toggleEmojiPicker,
