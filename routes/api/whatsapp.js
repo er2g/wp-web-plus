@@ -62,7 +62,13 @@ router.get('/qr', (req, res) => {
 
 router.post('/connect', async (req, res) => {
     try {
-        await req.account.whatsapp.initialize();
+        const initPromise = req.account.whatsapp.initialize();
+        Promise.resolve(initPromise).catch((error) => {
+            req.log?.error?.('WhatsApp initialization failed', {
+                category: 'whatsapp',
+                error: error?.message || String(error)
+            });
+        });
         res.json({ success: true, message: 'Initializing...' });
     } catch (error) {
         return sendError(req, res, 500, error.message);

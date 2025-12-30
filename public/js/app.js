@@ -480,7 +480,14 @@ function initSocket() {
 
     socket.on('connect', () => console.log('Socket connected'));
     socket.on('disconnect', () => console.log('Socket disconnected'));
-    socket.on('status', updateConnectionStatus);
+    socket.on('status', (status) => {
+        updateConnectionStatus(status);
+        if (status && status.status === 'qr' && status.qrCode) {
+            showQR(status.qrCode);
+        } else {
+            hideQR();
+        }
+    });
     socket.on('qr', showQR);
     socket.on('ready', (info) => {
         hideQR();
@@ -490,6 +497,7 @@ function initSocket() {
         loadAllMessages();
     });
     socket.on('disconnected', () => {
+        hideQR();
         updateConnectionStatus({ status: 'disconnected' });
         showToast('WhatsApp baglantisi kesildi', 'warning');
     });
@@ -638,6 +646,12 @@ function updateConnectionStatus(status) {
     container.classList.remove('disconnected', 'connecting', 'connected');
 
     switch (status.status) {
+        case 'initializing':
+            container.classList.add('connecting');
+            icon.style.display = 'none';
+            spinner.style.display = 'inline-block';
+            text.textContent = 'Baslatiliyor...';
+            break;
         case 'disconnected':
             container.classList.add('disconnected');
             icon.className = 'bi bi-wifi-off';
@@ -656,6 +670,20 @@ function updateConnectionStatus(status) {
             icon.style.display = 'none';
             spinner.style.display = 'inline-block';
             text.textContent = 'Baglaniyor...';
+            break;
+        case 'auth_failure':
+            container.classList.add('disconnected');
+            icon.className = 'bi bi-wifi-off';
+            icon.style.display = 'inline';
+            spinner.style.display = 'none';
+            text.textContent = 'Kimlik dogrulama hatasi';
+            break;
+        case 'error':
+            container.classList.add('disconnected');
+            icon.className = 'bi bi-wifi-off';
+            icon.style.display = 'inline';
+            spinner.style.display = 'none';
+            text.textContent = 'Baglanti hatasi';
             break;
         case 'ready':
             container.classList.remove('disconnected');

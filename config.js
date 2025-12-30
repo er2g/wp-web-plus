@@ -108,6 +108,8 @@ const envSchema = z.object({
     WEBHOOK_CONCURRENCY: positiveInt(2),
     WEBHOOK_QUEUE_LIMIT: positiveInt(2000),
 
+    WHATSAPP_INIT_TIMEOUT_MS: positiveInt(60000),
+
     LOG_RETENTION_DAYS: positiveInt(30),
     SCRIPT_LOG_RETENTION_DAYS: positiveInt(30),
     MESSAGE_RETENTION_DAYS: positiveInt(90),
@@ -192,6 +194,7 @@ module.exports = {
         '--no-zygote',
         '--disable-gpu'
     ],
+    WHATSAPP_INIT_TIMEOUT_MS: env.WHATSAPP_INIT_TIMEOUT_MS,
     
     // Scheduler
     SCHEDULER_CHECK_INTERVAL: 60000, // 1 minute

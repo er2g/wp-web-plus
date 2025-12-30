@@ -31,6 +31,8 @@ class WhatsAppClient {
         this.io = null;
         this.socketRoom = null;
         this.syncProgress = { syncing: false, current: 0, total: 0, chat: '' };
+        this.lastError = null;
+        this.initPromise = null;
         this.settings = {
             downloadMedia: true,
             syncOnConnect: true,
@@ -144,6 +146,10 @@ class WhatsAppClient {
         this.io.emit(event, data);
     }
 
+    emitStatus() {
+        this.emit('status', this.getStatus());
+    }
+
     emitProgress() {
         const now = Date.now();
         if (now - this.lastProgressEmit >= CONSTANTS.PROGRESS_THROTTLE_MS) {
@@ -160,14 +166,54 @@ class WhatsAppClient {
     }
 
     async initialize() {
-        if (this.client) await this.destroy();
-        this.client = new Client({
-            authStrategy: new LocalAuth({ dataPath: this.config.SESSION_DIR }),
-            puppeteer: { headless: true, args: this.config.PUPPETEER_ARGS }
-        });
-        this.setupEventHandlers();
-        this.log('info', 'whatsapp', 'Initializing WhatsApp client...');
-        await this.client.initialize();
+        if (this.status === 'ready' || this.status === 'authenticated' || this.status === 'qr' || this.status === 'initializing') {
+            return this.initPromise || undefined;
+        }
+
+        if (this.initPromise) {
+            return this.initPromise;
+        }
+
+        this.lastError = null;
+        this.status = 'initializing';
+        this.emitStatus();
+
+        const timeoutMs = Math.max(5000, Number(this.config.WHATSAPP_INIT_TIMEOUT_MS) || 60000);
+
+        this.initPromise = (async () => {
+            if (this.client) {
+                await this.destroy();
+            }
+
+            this.client = new Client({
+                authStrategy: new LocalAuth({ dataPath: this.config.SESSION_DIR }),
+                puppeteer: { headless: true, args: this.config.PUPPETEER_ARGS }
+            });
+            this.setupEventHandlers();
+            this.log('info', 'whatsapp', 'Initializing WhatsApp client...');
+
+            await Promise.race([
+                this.client.initialize(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error(`WhatsApp init timed out after ${timeoutMs}ms`)), timeoutMs))
+            ]);
+        })()
+            .catch(async (error) => {
+                const message = error?.message || String(error);
+                try {
+                    await this.destroy({ preserveError: true });
+                } catch (e) {}
+                this.status = 'error';
+                this.lastError = message;
+                this.emitStatus();
+                this.emit('whatsapp_error', { message });
+                this.log('error', 'whatsapp', 'Initialization failed: ' + message);
+                throw error;
+            })
+            .finally(() => {
+                this.initPromise = null;
+            });
+
+        return this.initPromise;
     }
 
     setupEventHandlers() {
@@ -175,13 +221,16 @@ class WhatsAppClient {
             this.status = 'qr';
             this.qrCode = await qrcode.toDataURL(qr);
             this.emit('qr', this.qrCode);
+            this.emitStatus();
         });
 
         this.client.on('ready', async () => {
             this.status = 'ready';
             this.info = this.client.info;
             this.qrCode = null;
+            this.lastError = null;
             this.emit('ready', { pushname: this.info.pushname, wid: this.info.wid.user });
+            this.emitStatus();
             this.log('info', 'whatsapp', 'Connected as ' + this.info.pushname);
 
             if (this.drive) this.drive.initialize().catch(() => {});
@@ -194,18 +243,22 @@ class WhatsAppClient {
         this.client.on('authenticated', () => {
             this.status = 'authenticated';
             this.emit('authenticated');
+            this.emitStatus();
             this.log('info', 'whatsapp', 'Authenticated');
         });
 
         this.client.on('auth_failure', (msg) => {
             this.status = 'auth_failure';
+            this.lastError = msg ? String(msg) : 'auth_failure';
             this.emit('auth_failure', msg);
+            this.emitStatus();
         });
 
         this.client.on('disconnected', (reason) => {
             this.status = 'disconnected';
             this.info = null;
             this.emit('disconnected', reason);
+            this.emitStatus();
         });
 
         this.client.on('message', async (msg) => {
@@ -527,7 +580,8 @@ class WhatsAppClient {
             qrCode: this.qrCode,
             info: this.info ? { pushname: this.info.pushname, wid: this.info.wid.user, platform: this.info.platform } : null,
             syncProgress: this.syncProgress,
-            settings: this.settings
+            settings: this.settings,
+            lastError: this.lastError
         };
     }
 
@@ -535,19 +589,26 @@ class WhatsAppClient {
         if (this.client) {
             try { await this.client.logout(); } catch (e) {}
         }
+        this.lastError = null;
         this.status = 'disconnected';
         this.info = null;
         this.qrCode = null;
+        this.emitStatus();
     }
 
-    async destroy() {
+    async destroy(options = {}) {
+        const preserveError = options && options.preserveError === true;
         if (this.client) {
             try { await this.client.destroy(); } catch (e) {}
             this.client = null;
         }
+        if (!preserveError) {
+            this.lastError = null;
+        }
         this.status = 'disconnected';
         this.info = null;
         this.qrCode = null;
+        this.emitStatus();
     }
 }
 
