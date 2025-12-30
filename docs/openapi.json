@@ -72,10 +72,12 @@
       },
       "ReadyResponse": {
         "type": "object",
-        "required": ["ok", "instanceId", "dependencies", "timestamp"],
+        "required": ["ok", "instanceId", "ready", "shuttingDown", "dependencies", "timestamp"],
         "properties": {
           "ok": { "type": "boolean" },
           "instanceId": { "type": "string" },
+          "ready": { "type": "boolean" },
+          "shuttingDown": { "type": "boolean" },
           "dependencies": {
             "type": "object",
             "properties": {
@@ -91,12 +93,25 @@
           "timestamp": { "type": "integer", "format": "int64" }
         }
       },
+      "ValidationIssue": {
+        "type": "object",
+        "required": ["message", "code"],
+        "properties": {
+          "path": { "type": ["string", "null"] },
+          "message": { "type": "string" },
+          "code": { "type": "string" }
+        }
+      },
       "ErrorResponse": {
         "type": "object",
         "required": ["error"],
         "properties": {
           "error": { "type": "string" },
-          "requestId": { "type": "string" }
+          "requestId": { "type": "string" },
+          "issues": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/ValidationIssue" }
+          }
         }
       },
       "SuccessResponse": {
@@ -319,8 +334,28 @@
         "summary": "Settings update (admin/manager)",
         "security": [{ "sessionCookie": [], "csrfToken": [] }],
         "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } },
-        "responses": { "200": { "description": "Success", "content": { "application/json": { "schema": { "type": "object" } } } } }
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "downloadMedia": { "type": "boolean" },
+                  "syncOnConnect": { "type": "boolean" },
+                  "maxMessagesPerChat": { "type": "integer" },
+                  "uploadToDrive": { "type": "boolean" },
+                  "downloadMediaOnSync": { "type": "boolean" },
+                  "ghostMode": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Success", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "400": { "description": "Validation error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
       }
     },
     "/api/chats/{chatId}/mark-read": {
@@ -1245,7 +1280,11 @@
         "summary": "Drive migrate existing media",
         "security": [{ "sessionCookie": [], "csrfToken": [] }],
         "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
-        "responses": { "200": { "description": "Result", "content": { "application/json": { "schema": { "type": "object" } } } } }
+        "responses": {
+          "200": { "description": "Result", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "400": { "description": "Not configured", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "500": { "description": "Error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
       }
     },
     "/api/drive/upload": {

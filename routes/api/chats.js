@@ -4,6 +4,7 @@ const { z } = require('zod');
 
 const { LIMITS, validateChatId, validateNote } = require('../../lib/apiValidation');
 const { sendError } = require('../../lib/httpResponses');
+const { queryLimit, queryOffset, queryString } = require('../../lib/zodHelpers');
 const { validate } = require('../middleware/validate');
 
 const intLike = (message) => z.preprocess(
@@ -49,6 +50,24 @@ const noteParamsSchema = z.object({
     noteId: intLike('Invalid note id')
 }).strict();
 
+const chatSearchQuerySchema = z.object({
+    q: queryString({ defaultValue: '', maxLength: LIMITS.QUERY_LENGTH, trim: true }),
+    tag: queryString({ defaultValue: '', maxLength: LIMITS.QUERY_LENGTH, trim: true }),
+    note: queryString({ defaultValue: '', maxLength: LIMITS.QUERY_LENGTH, trim: true }),
+    limit: queryLimit({ defaultValue: 50, max: LIMITS.PAGINATION.MESSAGES }),
+    offset: queryOffset({ defaultValue: 0 })
+});
+
+const paginationQuerySchema = z.object({
+    limit: queryLimit({ defaultValue: 50, max: LIMITS.PAGINATION.MESSAGES }),
+    offset: queryOffset({ defaultValue: 0 })
+});
+
+const tagParamsSchema = z.object({
+    id: chatIdParamSchema.shape.id,
+    tagId: intLike('Invalid tag id')
+}).strict();
+
 router.get('/', (req, res) => {
     const tagFilter = (req.query.tag || '').trim();
     if (!tagFilter) {
@@ -71,12 +90,8 @@ router.get('/', (req, res) => {
     return res.json(chats);
 });
 
-router.get('/search', (req, res) => {
-    const query = (req.query.q || '').substring(0, LIMITS.QUERY_LENGTH).trim();
-    const tagFilter = (req.query.tag || '').trim();
-    const noteQuery = (req.query.note || '').substring(0, LIMITS.QUERY_LENGTH).trim();
-    const limit = Math.min(parseInt(req.query.limit) || 50, LIMITS.PAGINATION.MESSAGES);
-    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+router.get('/search', validate({ query: chatSearchQuerySchema }), (req, res) => {
+    const { q: query, tag: tagFilter, note: noteQuery, limit, offset } = req.validatedQuery;
 
     if (!query && !tagFilter && !noteQuery) return res.json([]);
 
@@ -135,17 +150,17 @@ router.get('/search', (req, res) => {
     return res.json(results);
 });
 
-router.get('/:id/messages', (req, res) => {
-    const limit = Math.min(parseInt(req.query.limit) || 50, LIMITS.PAGINATION.MESSAGES);
-    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
-    const messages = req.account.db.messages.getByChatId.all(req.params.id, limit, offset);
-    const tags = req.account.db.contactTags.getByChatId.all(req.params.id);
-    const notes = req.account.db.notes.getByChatId.all(req.params.id);
+router.get('/:id/messages', validate({ params: chatIdParamSchema, query: paginationQuerySchema }), (req, res) => {
+    const { limit, offset } = req.validatedQuery;
+    const chatId = req.validatedParams.id;
+    const messages = req.account.db.messages.getByChatId.all(chatId, limit, offset);
+    const tags = req.account.db.contactTags.getByChatId.all(chatId);
+    const notes = req.account.db.notes.getByChatId.all(chatId);
     return res.json({ messages, tags, notes });
 });
 
-router.get('/:id/tags', (req, res) => {
-    return res.json(req.account.db.contactTags.getByChatId.all(req.params.id));
+router.get('/:id/tags', validate({ params: chatIdParamSchema }), (req, res) => {
+    return res.json(req.account.db.contactTags.getByChatId.all(req.validatedParams.id));
 });
 
 router.post('/:id/tags', validate({ params: chatIdParamSchema, body: tagIdBodySchema }), (req, res) => {
@@ -163,13 +178,13 @@ router.post('/:id/tags', validate({ params: chatIdParamSchema, body: tagIdBodySc
     return res.json({ success: true });
 });
 
-router.delete('/:id/tags/:tagId', (req, res) => {
-    req.account.db.contactTags.remove.run(req.params.id, req.params.tagId);
+router.delete('/:id/tags/:tagId', validate({ params: tagParamsSchema }), (req, res) => {
+    req.account.db.contactTags.remove.run(req.validatedParams.id, req.validatedParams.tagId);
     return res.json({ success: true });
 });
 
-router.get('/:id/notes', (req, res) => {
-    return res.json(req.account.db.notes.getByChatId.all(req.params.id));
+router.get('/:id/notes', validate({ params: chatIdParamSchema }), (req, res) => {
+    return res.json(req.account.db.notes.getByChatId.all(req.validatedParams.id));
 });
 
 router.post('/:id/notes', validate({ params: chatIdParamSchema, body: noteBodySchema }), (req, res) => {
@@ -182,8 +197,8 @@ router.put('/:id/notes/:noteId', validate({ params: noteParamsSchema, body: note
     return res.json({ success: true });
 });
 
-router.delete('/:id/notes/:noteId', (req, res) => {
-    req.account.db.notes.delete.run(req.params.noteId, req.params.id);
+router.delete('/:id/notes/:noteId', validate({ params: noteParamsSchema }), (req, res) => {
+    req.account.db.notes.delete.run(req.validatedParams.noteId, req.validatedParams.id);
     return res.json({ success: true });
 });
 

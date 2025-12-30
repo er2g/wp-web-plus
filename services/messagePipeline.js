@@ -1,7 +1,20 @@
+const { randomUUID, randomBytes } = require('crypto');
+const { requestContext } = require('./logger');
+
 function createMessagePipeline({ autoReply, webhook, scriptRunner, logger, metrics }) {
+    const generateTraceId = () => (typeof randomUUID === 'function' ? randomUUID() : randomBytes(16).toString('hex'));
+
     function safeInc(counter, labels) {
         try {
             counter?.inc?.(labels, 1);
+        } catch (error) {
+            // metrics should never break message handling
+        }
+    }
+
+    function safeObserve(histogram, labels, value) {
+        try {
+            histogram?.observe?.(labels, value);
         } catch (error) {
             // metrics should never break message handling
         }
@@ -20,11 +33,16 @@ function createMessagePipeline({ autoReply, webhook, scriptRunner, logger, metri
             countTask(taskName, 'skipped');
             return;
         }
+        const startNs = process.hrtime.bigint();
         try {
             await fn();
             countTask(taskName, 'success');
+            const durationSeconds = Number(process.hrtime.bigint() - startNs) / 1e9;
+            safeObserve(metrics?.messagePipelineTaskDurationSeconds, { task: taskName, outcome: 'success' }, durationSeconds);
         } catch (error) {
             countTask(taskName, 'error');
+            const durationSeconds = Number(process.hrtime.bigint() - startNs) / 1e9;
+            safeObserve(metrics?.messagePipelineTaskDurationSeconds, { task: taskName, outcome: 'error' }, durationSeconds);
             logger?.error?.('Message pipeline task failed', {
                 ...meta,
                 task: taskName,
@@ -33,29 +51,40 @@ function createMessagePipeline({ autoReply, webhook, scriptRunner, logger, metri
         }
     }
 
-    async function process({ msgData, fromMe, accountId }) {
+    async function processMessage({ msgData, fromMe, accountId }) {
         if (!msgData) return;
-        countMessage(fromMe ? 'outgoing' : 'incoming');
-        const meta = {
-            category: 'message_pipeline',
-            accountId,
-            messageId: msgData.messageId,
-            chatId: msgData.chatId
-        };
+        const traceId = generateTraceId();
+        const direction = fromMe ? 'outgoing' : 'incoming';
+        return requestContext.run({ requestId: traceId }, async () => {
+            const pipelineStartNs = process.hrtime.bigint();
+            countMessage(direction);
+            const meta = {
+                category: 'message_pipeline',
+                traceId,
+                accountId,
+                messageId: msgData.messageId,
+                chatId: msgData.chatId
+            };
 
-        if (!fromMe) {
-            await runSafely('autoReply', () => autoReply?.processMessage?.(msgData), meta);
-        } else {
-            countTask('autoReply', 'skipped');
-        }
+            try {
+                if (!fromMe) {
+                    await runSafely('autoReply', () => autoReply?.processMessage?.(msgData), meta);
+                } else {
+                    countTask('autoReply', 'skipped');
+                }
 
-        await runSafely('webhook', () => webhook?.trigger?.('message', msgData), meta);
-        await runSafely('scriptRunner', () => scriptRunner?.processMessage?.(msgData), meta);
+                await runSafely('webhook', () => webhook?.trigger?.('message', msgData, { traceId, accountId }), meta);
+                await runSafely('scriptRunner', () => scriptRunner?.processMessage?.(msgData), meta);
+            } finally {
+                const durationSeconds = Number(process.hrtime.bigint() - pipelineStartNs) / 1e9;
+                safeObserve(metrics?.messagePipelineDurationSeconds, { direction }, durationSeconds);
+            }
+        });
     }
 
     function schedule(args) {
         const run = () => {
-            void process(args);
+            void processMessage(args);
         };
 
         if (typeof setImmediate === 'function') {
@@ -65,7 +94,7 @@ function createMessagePipeline({ autoReply, webhook, scriptRunner, logger, metri
         }
     }
 
-    return { process, schedule };
+    return { process: processMessage, schedule };
 }
 
 module.exports = { createMessagePipeline };

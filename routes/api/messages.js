@@ -1,11 +1,22 @@
 const express = require('express');
 const router = express.Router();
+const { z } = require('zod');
 
 const { LIMITS } = require('../../lib/apiValidation');
+const { queryLimit, queryOffset, queryString } = require('../../lib/zodHelpers');
+const { validate } = require('../middleware/validate');
 
-router.get('/', (req, res) => {
-    const limit = Math.min(parseInt(req.query.limit) || 100, LIMITS.PAGINATION.MESSAGES);
-    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+const listQuerySchema = z.object({
+    limit: queryLimit({ defaultValue: 100, max: LIMITS.PAGINATION.MESSAGES }),
+    offset: queryOffset({ defaultValue: 0 })
+});
+
+const searchQuerySchema = z.object({
+    q: queryString({ defaultValue: '', maxLength: LIMITS.QUERY_LENGTH })
+});
+
+router.get('/', validate({ query: listQuerySchema }), (req, res) => {
+    const { limit, offset } = req.validatedQuery;
     const messages = req.account.db.messages.getAll.all(limit, offset);
     const chatIds = Array.from(new Set(messages.map(message => message.chat_id).filter(Boolean)));
     if (!chatIds.length) {
@@ -46,11 +57,10 @@ router.get('/', (req, res) => {
     return res.json({ messages, tagsByChat, notesByChat });
 });
 
-router.get('/search', (req, res) => {
-    const query = (req.query.q || '').substring(0, LIMITS.QUERY_LENGTH);
+router.get('/search', validate({ query: searchQuerySchema }), (req, res) => {
+    const query = req.validatedQuery.q;
     if (!query) return res.json([]);
     return res.json(req.account.db.messages.search.all('%' + query + '%'));
 });
 
 module.exports = router;
-

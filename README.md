@@ -12,15 +12,15 @@ Node.js + Express tabanlı WhatsApp yönetim paneli (multi-account, SQLite, Sock
 1. `.env` oluştur:
    - `cp .env.example .env`
    - `CORS_ORIGINS`, `SESSION_SECRET`, `SITE_PASSWORD`/`ADMIN_BOOTSTRAP_PASSWORD` değerlerini güncelle
-2. Bağımlılıkları yükle: `npm install`
+2. Bağımlılıkları yükle: `npm ci`
 3. Çalıştır: `npm start`
 
 ## PM2 ile Çalıştırma
 
-Basit kullanım:
+Önerilen kullanım:
 
 ```bash
-pm2 start server.js --name whatsapp-panel
+pm2 start ecosystem.config.cjs --env production
 ```
 
 Not: `whatsapp-web.js` oturum dizinini (LocalAuth) ve `express-session`’ı paylaşımlı hale getirmeden **cluster/multi-instance** çalıştırmak önerilmez. Eğer yine de birden çok instance çalıştıracaksan:
@@ -45,6 +45,7 @@ Multi-instance için ayrıca **sticky session** gerekir (PM2 tarafında sticky v
 
 - `GET /healthz` → `{ ok: true, ... }`
 - `GET /readyz` → bağımlılıklar hazırsa `200`, değilse `503`
+- Shutdown sırasında `/readyz` otomatik `503` döner (`shuttingDown=true`).
 
 ## Observability
 
@@ -58,6 +59,13 @@ Multi-instance için ayrıca **sticky session** gerekir (PM2 tarafında sticky v
 npm test
 ```
 
+## Kalite Kontrol
+
+```bash
+npm run lint
+npm run check
+```
+
 ## Önemli Ortam Değişkenleri
 
 Detaylar için `.env.example`.
@@ -67,6 +75,7 @@ Detaylar için `.env.example`.
 - `ADMIN_BOOTSTRAP_USERNAME` / `ADMIN_BOOTSTRAP_PASSWORD` (ilk admin kullanıcı)
 - `ENABLE_BACKGROUND_JOBS` (scheduler/cleanup)
 - `DATA_DIR`, `LOGS_DIR` (opsiyonel dizin override)
+- `SHUTDOWN_TIMEOUT_MS` (graceful shutdown timeout)
 - `METRICS_ENABLED`, `METRICS_TOKEN` (opsiyonel; `/metrics`)
 - `API_RATE_LIMIT_*` (opsiyonel; `/api` rate limit ayarları)
 - `PASSWORD_*` (opsiyonel; parola politikası)

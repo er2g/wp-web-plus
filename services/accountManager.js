@@ -157,9 +157,9 @@ class AccountManager {
         const drive = createDriveService(accountConfig);
         const whatsapp = createWhatsAppClient(accountConfig, db, drive);
         const autoReply = createAutoReplyService(db, whatsapp);
-        const cleanup = createCleanupService(db, config);
-        const scheduler = createSchedulerService(db, whatsapp, config);
-        const webhook = createWebhookService(db, config);
+        const cleanup = createCleanupService(db, config, this.metrics, { accountId: resolvedId });
+        const scheduler = createSchedulerService(db, whatsapp, config, this.metrics, { accountId: resolvedId });
+        const webhook = createWebhookService(db, config, this.metrics, { accountId: resolvedId });
         const scriptRunner = createScriptRunner(db, whatsapp);
         const messagePipeline = createMessagePipeline({ autoReply, webhook, scriptRunner, logger, metrics: this.metrics });
 
@@ -216,6 +216,17 @@ class AccountManager {
 
     setMetrics(metrics) {
         this.metrics = metrics || null;
+        for (const context of this.contexts.values()) {
+            try {
+                context.webhook?.setMetrics?.(this.metrics);
+            } catch (e) {}
+            try {
+                context.scheduler?.setMetrics?.(this.metrics);
+            } catch (e) {}
+            try {
+                context.cleanup?.setMetrics?.(this.metrics);
+            } catch (e) {}
+        }
     }
 
     attachAccount(req, res, next) {
@@ -247,10 +258,34 @@ class AccountManager {
 
     async shutdown() {
         for (const context of this.contexts.values()) {
-            context.cleanup.stop();
-            context.scheduler.stop();
-            await context.whatsapp.destroy();
+            try {
+                context.cleanup.stop();
+            } catch (e) {}
+
+            try {
+                context.scheduler.stop();
+            } catch (e) {}
+
+            try {
+                await context.whatsapp.destroy();
+            } catch (e) {}
+
+            try {
+                await context.webhook?.shutdown?.({ timeoutMs: 5000 });
+            } catch (e) {
+                logger.warn('Webhook shutdown timed out', {
+                    category: 'lifecycle',
+                    accountId: context.account?.id,
+                    error: e?.message || String(e)
+                });
+            }
+
+            try {
+                context.db?.close?.();
+            } catch (e) {}
         }
+
+        this.contexts.clear();
     }
 }
 

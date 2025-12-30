@@ -32,8 +32,13 @@ const tagIdBodySchema = z.object({
     tag_id: intLike('tag_id required')
 }).strict();
 
-router.get('/:id/tags', (req, res) => {
-    return res.json(req.account.db.contactTags.getByChatId.all(req.params.id));
+const tagParamsSchema = z.object({
+    id: chatIdParamSchema.shape.id,
+    tagId: intLike('Invalid tag id')
+}).strict();
+
+router.get('/:id/tags', validate({ params: chatIdParamSchema }), (req, res) => {
+    return res.json(req.account.db.contactTags.getByChatId.all(req.validatedParams.id));
 });
 
 router.post('/:id/tags', validate({ params: chatIdParamSchema, body: tagIdBodySchema }), (req, res) => {
@@ -51,8 +56,8 @@ router.post('/:id/tags', validate({ params: chatIdParamSchema, body: tagIdBodySc
     return res.json({ success: true });
 });
 
-router.delete('/:id/tags/:tagId', (req, res) => {
-    req.account.db.contactTags.remove.run(req.params.id, req.params.tagId);
+router.delete('/:id/tags/:tagId', validate({ params: tagParamsSchema }), (req, res) => {
+    req.account.db.contactTags.remove.run(req.validatedParams.id, req.validatedParams.tagId);
     return res.json({ success: true });
 });
 

@@ -101,7 +101,7 @@ ${prompt}
                 const content = response.data.candidates[0].content.parts[0].text;
                 try {
                     // Clean up markdown if Gemini adds it despite instructions
-                    const cleaned = content.replace(/\`\`\`json/g, '').replace(/\`\`\`/g, '').trim();
+                    const cleaned = content.replace(/```json/g, '').replace(/```/g, '').trim();
                     return JSON.parse(cleaned);
                 } catch (e) {
                     logger.error('AI JSON parse error', { error: e.message, content });

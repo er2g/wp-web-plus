@@ -18,10 +18,7 @@ router.post('/migrate', async (req, res) => {
         const initialized = await drive.initialize();
 
         if (!initialized) {
-            return res.json({
-                success: false,
-                error: 'Drive not configured. Please upload OAuth credentials to ' + req.account.config.DATA_DIR
-            });
+            return sendError(req, res, 400, 'Drive not configured. Please upload OAuth credentials to ' + req.account.config.DATA_DIR);
         }
 
         const result = await drive.migrateExistingFiles(req.account.config.MEDIA_DIR, req.account.db.db);
@@ -31,11 +28,7 @@ router.post('/migrate', async (req, res) => {
             failed: result.failed
         });
     } catch (error) {
-        return res.status(500).json({
-            success: false,
-            error: error.message,
-            requestId: req.requestId || null
-        });
+        return sendError(req, res, 500, error.message);
     }
 });
 

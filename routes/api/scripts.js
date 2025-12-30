@@ -5,6 +5,7 @@ const { z } = require('zod');
 const { requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { LIMITS } = require('../../lib/apiValidation');
+const { queryLimit } = require('../../lib/zodHelpers');
 const { sendError } = require('../../lib/httpResponses');
 
 const booleanLike = z.preprocess((value) => {
@@ -45,6 +46,10 @@ const scriptTestSchema = z.object({
     code: z.string().trim().min(1, 'code required'),
     testData: z.record(z.any()).optional()
 }).strict();
+
+const scriptLogsQuerySchema = z.object({
+    limit: queryLimit({ defaultValue: 50, max: LIMITS.PAGINATION.SCRIPT_LOGS })
+});
 
 router.get('/', requireRole(['admin']), (req, res) => {
     res.json(req.account.db.scripts.getAll.all());
@@ -142,9 +147,9 @@ router.post('/test', requireRole(['admin']), validate({ body: scriptTestSchema }
     return res.json(result);
 });
 
-router.get('/:id/logs', requireRole(['admin']), (req, res) => {
-    const limit = Math.min(parseInt(req.query.limit) || 50, LIMITS.PAGINATION.SCRIPT_LOGS);
-    res.json(req.account.db.scriptLogs.getByScript.all(req.params.id, limit));
+router.get('/:id/logs', requireRole(['admin']), validate({ query: scriptLogsQuerySchema }), (req, res) => {
+    const { limit } = req.validatedQuery;
+    return res.json(req.account.db.scriptLogs.getByScript.all(req.params.id, limit));
 });
 
 module.exports = router;

@@ -32,6 +32,8 @@ function createApp() {
     let redisPubClient = null;
     let redisSubClient = null;
     let metrics = null;
+    let shutdownPromise = null;
+    let isShuttingDown = false;
 
     const isProduction = process.env.NODE_ENV === 'production';
     const insecureDefaults = [];
@@ -116,18 +118,83 @@ function createApp() {
             registers: [register]
         });
 
+        const messagePipelineDurationSeconds = new client.Histogram({
+            name: 'wp_panel_message_pipeline_duration_seconds',
+            help: 'Message pipeline end-to-end duration in seconds',
+            labelNames: ['direction'],
+            buckets: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+            registers: [register]
+        });
+
+        const messagePipelineTaskDurationSeconds = new client.Histogram({
+            name: 'wp_panel_message_pipeline_task_duration_seconds',
+            help: 'Message pipeline task duration in seconds',
+            labelNames: ['task', 'outcome'],
+            buckets: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+            registers: [register]
+        });
+
+        const backgroundJobRunsTotal = new client.Counter({
+            name: 'wp_panel_background_job_runs_total',
+            help: 'Total number of background job runs by outcome',
+            labelNames: ['accountId', 'job', 'outcome'],
+            registers: [register]
+        });
+
+        const backgroundJobDurationSeconds = new client.Histogram({
+            name: 'wp_panel_background_job_duration_seconds',
+            help: 'Background job duration in seconds',
+            labelNames: ['accountId', 'job', 'outcome'],
+            buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60],
+            registers: [register]
+        });
+
+        const webhookDeliveriesTotal = new client.Counter({
+            name: 'wp_panel_webhook_deliveries_total',
+            help: 'Total number of webhook deliveries by outcome',
+            labelNames: ['event', 'outcome'],
+            registers: [register]
+        });
+
+        const webhookDeliveryDurationSeconds = new client.Histogram({
+            name: 'wp_panel_webhook_delivery_duration_seconds',
+            help: 'Webhook delivery duration in seconds (includes retries/backoff)',
+            labelNames: ['event', 'outcome'],
+            buckets: [0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30],
+            registers: [register]
+        });
+
+        const webhookQueueSize = new client.Gauge({
+            name: 'wp_panel_webhook_queue_size',
+            help: 'Current webhook delivery queue size',
+            labelNames: ['accountId'],
+            registers: [register]
+        });
+
+        const webhookInFlight = new client.Gauge({
+            name: 'wp_panel_webhook_in_flight',
+            help: 'Current number of webhook deliveries in flight',
+            labelNames: ['accountId'],
+            registers: [register]
+        });
+
         metrics = {
             register,
             httpRequestDurationSeconds,
             httpRequestsTotal,
             messagePipelineMessagesTotal,
-            messagePipelineTaskTotal
+            messagePipelineTaskTotal,
+            messagePipelineDurationSeconds,
+            messagePipelineTaskDurationSeconds,
+            backgroundJobRunsTotal,
+            backgroundJobDurationSeconds,
+            webhookDeliveriesTotal,
+            webhookDeliveryDurationSeconds,
+            webhookQueueSize,
+            webhookInFlight
         };
     }
 
-    app.use(express.json({ limit: '10mb' }));
-    app.use(express.urlencoded({ extended: true }));
-    app.use(cors(corsOptions));
     app.set('trust proxy', 1);
 
     const generateRequestId = () => (typeof randomUUID === 'function' ? randomUUID() : randomBytes(16).toString('hex'));
@@ -142,6 +209,10 @@ function createApp() {
             next();
         });
     });
+
+    app.use(express.json({ limit: '10mb' }));
+    app.use(express.urlencoded({ extended: true }));
+    app.use(cors(corsOptions));
 
     app.use((req, res, next) => {
         res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -307,11 +378,13 @@ function createApp() {
         const redisConfigured = Boolean(config.REDIS_URL);
         const redisConnected = redisConfigured ? Boolean(redisClient?.isOpen) : false;
 
-        const ok = redisConfigured ? redisConnected : true;
+        const ok = !isShuttingDown && isReady && (redisConfigured ? redisConnected : true);
 
         res.status(ok ? 200 : 503).json({
             ok,
             instanceId: config.INSTANCE_ID,
+            ready: isReady,
+            shuttingDown: isShuttingDown,
             dependencies: {
                 redis: {
                     configured: redisConfigured,
@@ -373,6 +446,14 @@ function createApp() {
         }
     });
 
+    app.use((req, res, next) => {
+        const routePath = req.path || req.url || '';
+        if (routePath.startsWith('/api') || routePath.startsWith('/auth')) {
+            return sendError(req, res, 404, 'Not found');
+        }
+        return next();
+    });
+
     io.use((socket, next) => {
         sessionMiddleware(socket.request, {}, next);
     });
@@ -408,17 +489,27 @@ function createApp() {
     accountManager.setSocketIO(io);
     accountManager.setMetrics(metrics);
 
-    app.use((err, req, res, next) => {
+    app.use((err, req, res, _next) => {
+        if (err && err.type === 'entity.parse.failed') {
+            return sendError(req, res, 400, 'Invalid JSON body');
+        }
+
+        if (err && (err.type === 'entity.too.large' || err.status === 413)) {
+            return sendError(req, res, 413, 'Payload too large');
+        }
+
         logger.error('Unhandled error', {
             requestId: req.requestId,
             error: err.message,
             stack: err.stack
         });
 
-        res.status(err.status || 500).json({
-            error: 'Internal Server Error',
-            requestId: req.requestId
-        });
+        const status = typeof err.status === 'number' ? err.status : 500;
+        const message = status >= 500
+            ? 'Internal Server Error'
+            : (err.message || 'Request failed');
+
+        return sendError(req, res, status, message);
     });
 
     let isReady = startupTasks.length === 0;
@@ -431,10 +522,24 @@ function createApp() {
             readyError = error;
             throw error;
         });
+    const beginShutdown = () => {
+        if (isShuttingDown) return;
+        isShuttingDown = true;
+        isReady = false;
+    };
+
     const shutdown = async () => {
-        for (const task of shutdownTasks) {
-            await task();
-        }
+        if (shutdownPromise) return shutdownPromise;
+        beginShutdown();
+        shutdownPromise = (async () => {
+            try {
+                io.close();
+            } catch (e) {}
+            for (const task of shutdownTasks) {
+                await task();
+            }
+        })();
+        return shutdownPromise;
     };
 
     return {
@@ -442,8 +547,13 @@ function createApp() {
         server,
         io,
         ready,
+        beginShutdown,
         shutdown,
-        getReadiness: () => ({ ready: isReady, error: readyError ? String(readyError.message || readyError) : null })
+        getReadiness: () => ({
+            ready: isReady,
+            shuttingDown: isShuttingDown,
+            error: readyError ? String(readyError.message || readyError) : null
+        })
     };
 }
 

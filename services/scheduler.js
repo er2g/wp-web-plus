@@ -5,10 +5,12 @@ const cron = require('node-cron');
 const { logger } = require('./logger');
 
 class SchedulerService {
-    constructor(db, whatsapp, config) {
+    constructor(db, whatsapp, config, metrics = null, options = {}) {
         this.db = db;
         this.whatsapp = whatsapp;
         this.config = config;
+        this.metrics = metrics || null;
+        this.accountId = options?.accountId || null;
         this.checkInterval = null;
         this.cronJobs = new Map();
         this.instanceId = config.INSTANCE_ID || String(process.pid);
@@ -19,6 +21,27 @@ class SchedulerService {
 
     setWhatsApp(whatsapp) {
         this.whatsapp = whatsapp;
+    }
+
+    setMetrics(metrics) {
+        this.metrics = metrics || null;
+    }
+
+    accountIdLabel() {
+        return typeof this.accountId === 'string' && this.accountId ? this.accountId : 'unknown';
+    }
+
+    recordJob(job, outcome, durationSeconds = null) {
+        const labels = { accountId: this.accountIdLabel(), job, outcome };
+        try {
+            this.metrics?.backgroundJobRunsTotal?.inc?.(labels, 1);
+        } catch (e) {}
+
+        if (typeof durationSeconds === 'number' && Number.isFinite(durationSeconds)) {
+            try {
+                this.metrics?.backgroundJobDurationSeconds?.observe?.(labels, durationSeconds);
+            } catch (e) {}
+        }
     }
 
     buildTemplateContext(message) {
@@ -74,7 +97,7 @@ class SchedulerService {
         }
 
         // Stop all cron jobs
-        for (const [id, job] of this.cronJobs) {
+        for (const job of this.cronJobs.values()) {
             job.stop();
         }
         this.cronJobs.clear();
@@ -102,13 +125,21 @@ class SchedulerService {
         }
 
         if (!this.tryAcquireLeaderLock()) {
+            this.recordJob('scheduler.tick', 'skipped');
             return;
         }
 
         this.tickInProgress = true;
+        const startNs = process.hrtime.bigint();
         try {
             this.syncRecurringSchedules();
             await this.checkPendingMessages();
+            const durationSeconds = Number(process.hrtime.bigint() - startNs) / 1e9;
+            this.recordJob('scheduler.tick', 'success', durationSeconds);
+        } catch (error) {
+            const durationSeconds = Number(process.hrtime.bigint() - startNs) / 1e9;
+            this.recordJob('scheduler.tick', 'error', durationSeconds);
+            logger.error('Scheduler tick failed', { category: 'scheduler', error: error.message });
         } finally {
             this.tickInProgress = false;
         }
@@ -181,6 +212,7 @@ class SchedulerService {
             const pending = this.db.scheduled.getPending.all(maxRetries);
 
             for (const msg of pending) {
+                const msgStartNs = process.hrtime.bigint();
                 try {
                     const resolvedMessage = this.resolveScheduledMessage(msg);
                     if (!resolvedMessage) {
@@ -195,7 +227,11 @@ class SchedulerService {
                     );
 
                     logger.info('Scheduled message sent', { category: 'scheduler', messageId: msg.id });
+                    const durationSeconds = Number(process.hrtime.bigint() - msgStartNs) / 1e9;
+                    this.recordJob('scheduler.send_pending', 'success', durationSeconds);
                 } catch (error) {
+                    const durationSeconds = Number(process.hrtime.bigint() - msgStartNs) / 1e9;
+                    this.recordJob('scheduler.send_pending', 'error', durationSeconds);
                     const nextRetryCount = (msg.retry_count || 0) + 1;
                     const delayMs = baseDelayMs * Math.pow(2, Math.max(nextRetryCount - 1, 0));
                     const nextAttemptAt = new Date(Date.now() + delayMs).toISOString();
@@ -244,9 +280,11 @@ class SchedulerService {
 
         const job = cron.schedule(cronExpression, async () => {
             if (!this.tryAcquireLeaderLock()) {
+                this.recordJob('scheduler.send_recurring', 'skipped');
                 return;
             }
             if (this.whatsapp && this.whatsapp.isReady()) {
+                const msgStartNs = process.hrtime.bigint();
                 try {
                     const resolvedMessage = this.resolveScheduledMessage({
                         chat_id: chatId,
@@ -262,12 +300,18 @@ class SchedulerService {
                         'Recurring message sent',
                         JSON.stringify({ id, chatId, cron: cronExpression })
                     );
+                    const durationSeconds = Number(process.hrtime.bigint() - msgStartNs) / 1e9;
+                    this.recordJob('scheduler.send_recurring', 'success', durationSeconds);
                 } catch (error) {
                     this.db.logs.add.run('error', 'scheduler',
                         'Failed to send recurring message',
                         JSON.stringify({ id, error: error.message })
                     );
+                    const durationSeconds = Number(process.hrtime.bigint() - msgStartNs) / 1e9;
+                    this.recordJob('scheduler.send_recurring', 'error', durationSeconds);
                 }
+            } else {
+                this.recordJob('scheduler.send_recurring', 'skipped');
             }
         });
 
@@ -283,8 +327,8 @@ class SchedulerService {
     }
 }
 
-function createSchedulerService(db, whatsapp, config) {
-    return new SchedulerService(db, whatsapp, config);
+function createSchedulerService(db, whatsapp, config, metrics = null, options = {}) {
+    return new SchedulerService(db, whatsapp, config, metrics, options);
 }
 
 module.exports = { createSchedulerService };

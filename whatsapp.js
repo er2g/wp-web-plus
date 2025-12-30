@@ -39,9 +39,50 @@ class WhatsAppClient {
             downloadMediaOnSync: true,
             ghostMode: false
         };
+        this.loadSettingsFromDb();
         this.contactCache = new Map();
         this.chatProfileCache = new Map();
         this.lastProgressEmit = 0;
+    }
+
+    normalizeSettings(input) {
+        if (!input || typeof input !== 'object') return {};
+        const output = {};
+
+        if (typeof input.downloadMedia === 'boolean') output.downloadMedia = input.downloadMedia;
+        if (typeof input.syncOnConnect === 'boolean') output.syncOnConnect = input.syncOnConnect;
+        if (typeof input.uploadToDrive === 'boolean') output.uploadToDrive = input.uploadToDrive;
+        if (typeof input.downloadMediaOnSync === 'boolean') output.downloadMediaOnSync = input.downloadMediaOnSync;
+        if (typeof input.ghostMode === 'boolean') output.ghostMode = input.ghostMode;
+
+        if (input.maxMessagesPerChat !== undefined) {
+            const parsed = parseInt(String(input.maxMessagesPerChat), 10);
+            if (Number.isFinite(parsed) && parsed > 0) {
+                output.maxMessagesPerChat = Math.min(parsed, 5000);
+            }
+        }
+
+        return output;
+    }
+
+    loadSettingsFromDb() {
+        try {
+            const row = this.db?.whatsappSettings?.get?.get();
+            if (!row || !row.settings) return;
+            const parsed = JSON.parse(row.settings);
+            const normalized = this.normalizeSettings(parsed);
+            this.settings = { ...this.settings, ...normalized };
+        } catch (e) {
+            // Ignore settings load errors
+        }
+    }
+
+    persistSettingsToDb() {
+        try {
+            this.db?.whatsappSettings?.upsert?.run(JSON.stringify(this.settings));
+        } catch (e) {
+            // Ignore persistence errors
+        }
     }
 
     getSenderName(contact, msg) {
@@ -445,7 +486,9 @@ class WhatsAppClient {
     }
 
     updateSettings(newSettings) {
-        this.settings = { ...this.settings, ...newSettings };
+        const normalized = this.normalizeSettings(newSettings);
+        this.settings = { ...this.settings, ...normalized };
+        this.persistSettingsToDb();
         return this.settings;
     }
 
@@ -454,19 +497,15 @@ class WhatsAppClient {
 
     async sendMessage(chatId, message, options = {}) {
         if (!this.isReady()) throw new Error('WhatsApp not connected');
-        try {
-            let result;
-            if (options.mediaPath) {
-                const media = MessageMedia.fromFilePath(options.mediaPath);
-                result = await this.client.sendMessage(chatId, media, { caption: message });
-            } else {
-                result = await this.client.sendMessage(chatId, message);
-            }
-            this.log('info', 'message', 'Message sent to ' + chatId);
-            return result;
-        } catch (e) {
-            throw e;
+        let result;
+        if (options.mediaPath) {
+            const media = MessageMedia.fromFilePath(options.mediaPath);
+            result = await this.client.sendMessage(chatId, media, { caption: message });
+        } else {
+            result = await this.client.sendMessage(chatId, message);
         }
+        this.log('info', 'message', 'Message sent to ' + chatId);
+        return result;
     }
 
     async markAsRead(chatId) {
@@ -475,13 +514,9 @@ class WhatsAppClient {
         }
         if (!this.isReady()) throw new Error('WhatsApp not connected');
 
-        try {
-            const chat = await this.client.getChatById(chatId);
-            await chat.sendSeen();
-            return { success: true };
-        } catch (e) {
-            throw e;
-        }
+        const chat = await this.client.getChatById(chatId);
+        await chat.sendSeen();
+        return { success: true };
     }
 
     isReady() { return this.status === 'ready' && this.client; }

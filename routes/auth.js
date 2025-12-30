@@ -138,6 +138,9 @@ function createAuthRouter({ redisClient, redisPrefix } = {}) {
             const rateCheck = await checkRateLimit(ip, req);
 
             if (!rateCheck.allowed) {
+                if (rateCheck.remainingTime) {
+                    res.setHeader('Retry-After', String(rateCheck.remainingTime));
+                }
                 return sendError(
                     req,
                     res,

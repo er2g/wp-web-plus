@@ -5,6 +5,7 @@ const { z } = require('zod');
 const { requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { LIMITS, validateUrl } = require('../../lib/apiValidation');
+const { queryLimit, queryOffset } = require('../../lib/zodHelpers');
 const { sendError } = require('../../lib/httpResponses');
 
 const booleanLike = z.preprocess((value) => {
@@ -37,6 +38,11 @@ const webhookUpdateSchema = z.object({
     events: z.string().trim().max(200).optional(),
     is_active: booleanLike.optional()
 }).strict();
+
+const deliveriesQuerySchema = z.object({
+    limit: queryLimit({ defaultValue: 50, max: LIMITS.PAGINATION.WEBHOOK_DELIVERIES }),
+    offset: queryOffset({ defaultValue: 0 })
+});
 
 router.get('/', requireRole(['admin']), (req, res) => {
     res.json(req.account.db.webhooks.getAll.all());
@@ -75,10 +81,9 @@ router.delete('/:id', requireRole(['admin']), (req, res) => {
     return res.json({ success: true });
 });
 
-router.get('/:id/deliveries', requireRole(['admin']), (req, res) => {
-    const limit = Math.min(parseInt(req.query.limit) || 50, LIMITS.PAGINATION.WEBHOOK_DELIVERIES);
-    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
-    res.json(req.account.db.webhookDeliveries.getByWebhookId.all(req.params.id, limit, offset));
+router.get('/:id/deliveries', requireRole(['admin']), validate({ query: deliveriesQuerySchema }), (req, res) => {
+    const { limit, offset } = req.validatedQuery;
+    return res.json(req.account.db.webhookDeliveries.getByWebhookId.all(req.params.id, limit, offset));
 });
 
 router.post('/deliveries/:id/replay', requireRole(['admin']), async (req, res) => {

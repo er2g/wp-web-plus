@@ -5,13 +5,36 @@ const cron = require('node-cron');
 const { logger } = require('./logger');
 
 class CleanupService {
-    constructor(db, config) {
+    constructor(db, config, metrics = null, options = {}) {
         this.db = db;
         this.config = config;
+        this.metrics = metrics || null;
+        this.accountId = options?.accountId || null;
         this.jobs = [];
         this.instanceId = config.INSTANCE_ID || String(process.pid);
         this.lockName = 'cleanup';
         this.lockTtlMs = config.CLEANUP_LOCK_TTL_MS || 15 * 60 * 1000;
+    }
+
+    setMetrics(metrics) {
+        this.metrics = metrics || null;
+    }
+
+    accountIdLabel() {
+        return typeof this.accountId === 'string' && this.accountId ? this.accountId : 'unknown';
+    }
+
+    recordJob(job, outcome, durationSeconds = null) {
+        const labels = { accountId: this.accountIdLabel(), job, outcome };
+        try {
+            this.metrics?.backgroundJobRunsTotal?.inc?.(labels, 1);
+        } catch (e) {}
+
+        if (typeof durationSeconds === 'number' && Number.isFinite(durationSeconds)) {
+            try {
+                this.metrics?.backgroundJobDurationSeconds?.observe?.(labels, durationSeconds);
+            } catch (e) {}
+        }
     }
 
     tryAcquireLeaderLock() {
@@ -59,8 +82,10 @@ class CleanupService {
 
     runDailyCleanup() {
         if (!this.tryAcquireLeaderLock()) {
+            this.recordJob('cleanup.daily', 'skipped');
             return;
         }
+        const startNs = process.hrtime.bigint();
         try {
             const logRetention = `-${this.config.LOG_RETENTION_DAYS} days`;
             const scriptLogRetention = `-${this.config.SCRIPT_LOG_RETENTION_DAYS} days`;
@@ -77,15 +102,21 @@ class CleanupService {
                 logRetentionDays: this.config.LOG_RETENTION_DAYS,
                 scriptLogRetentionDays: this.config.SCRIPT_LOG_RETENTION_DAYS
             });
+            const durationSeconds = Number(process.hrtime.bigint() - startNs) / 1e9;
+            this.recordJob('cleanup.daily', 'success', durationSeconds);
         } catch (error) {
+            const durationSeconds = Number(process.hrtime.bigint() - startNs) / 1e9;
+            this.recordJob('cleanup.daily', 'error', durationSeconds);
             this.recordError('daily', error);
         }
     }
 
     runWeeklyCleanup() {
         if (!this.tryAcquireLeaderLock()) {
+            this.recordJob('cleanup.weekly', 'skipped');
             return;
         }
+        const startNs = process.hrtime.bigint();
         try {
             const cutoff = Date.now() - this.config.MESSAGE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
             const messageResult = this.db.maintenance.cleanupMessages.run(cutoff);
@@ -94,7 +125,11 @@ class CleanupService {
                 messagesDeleted: messageResult.changes,
                 messageRetentionDays: this.config.MESSAGE_RETENTION_DAYS
             });
+            const durationSeconds = Number(process.hrtime.bigint() - startNs) / 1e9;
+            this.recordJob('cleanup.weekly', 'success', durationSeconds);
         } catch (error) {
+            const durationSeconds = Number(process.hrtime.bigint() - startNs) / 1e9;
+            this.recordJob('cleanup.weekly', 'error', durationSeconds);
             this.recordError('weekly', error);
         }
     }
@@ -118,8 +153,8 @@ class CleanupService {
     }
 }
 
-function createCleanupService(db, config) {
-    return new CleanupService(db, config);
+function createCleanupService(db, config, metrics = null, options = {}) {
+    return new CleanupService(db, config, metrics, options);
 }
 
 module.exports = { createCleanupService };

@@ -38,7 +38,7 @@ class DriveService {
 
         try {
             const credentials = JSON.parse(fs.readFileSync(this.credentialsPath, 'utf8'));
-            const { client_id, client_secret, redirect_uris } = credentials.installed || credentials.web;
+            const { client_id, client_secret } = credentials.installed || credentials.web;
 
             this.oauth2Client = new google.auth.OAuth2(
                 client_id,

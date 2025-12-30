@@ -13,6 +13,16 @@ function createDatabase(config) {
     }
 
     const db = new Database(config.DB_PATH);
+    let isClosed = false;
+    const close = () => {
+        if (isClosed) return;
+        isClosed = true;
+        try {
+            db.close();
+        } catch (error) {
+            // Avoid throwing from shutdown paths
+        }
+    };
     db.pragma('journal_mode = WAL');
 
     // Schema migrations tracking
@@ -222,6 +232,12 @@ function createDatabase(config) {
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS whatsapp_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        settings TEXT NOT NULL,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id);
     CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
     CREATE INDEX IF NOT EXISTS idx_messages_chat_timestamp ON messages(chat_id, timestamp);
@@ -323,6 +339,31 @@ function createDatabase(config) {
                     db.exec('ALTER TABLE users ADD COLUMN preferences TEXT');
                 }
             }
+        },
+        {
+            version: 9,
+            name: 'add_retry_fields_and_webhook_stats',
+            apply: () => {
+                if (!columnExists('scheduled_messages', 'retry_count')) {
+                    db.exec('ALTER TABLE scheduled_messages ADD COLUMN retry_count INTEGER DEFAULT 0');
+                }
+                if (!columnExists('scheduled_messages', 'next_attempt_at')) {
+                    db.exec('ALTER TABLE scheduled_messages ADD COLUMN next_attempt_at DATETIME');
+                }
+                if (!columnExists('scheduled_messages', 'last_error')) {
+                    db.exec('ALTER TABLE scheduled_messages ADD COLUMN last_error TEXT');
+                }
+
+                if (!columnExists('webhooks', 'last_error')) {
+                    db.exec('ALTER TABLE webhooks ADD COLUMN last_error TEXT');
+                }
+                if (!columnExists('webhooks', 'last_status')) {
+                    db.exec('ALTER TABLE webhooks ADD COLUMN last_status INTEGER');
+                }
+                if (!columnExists('webhooks', 'last_duration_ms')) {
+                    db.exec('ALTER TABLE webhooks ADD COLUMN last_duration_ms INTEGER');
+                }
+            }
         }
     ];
 
@@ -345,48 +386,6 @@ function createDatabase(config) {
             logger.info(`Database migration applied: ${migration.name}`, { category: 'database' });
         })();
     });
-
-    try {
-        db.exec("ALTER TABLE scheduled_messages ADD COLUMN retry_count INTEGER DEFAULT 0");
-        logger.info('Database migration: Added retry_count column', { category: 'database' });
-    } catch (e) {
-        // Column already exists
-    }
-
-    try {
-        db.exec("ALTER TABLE scheduled_messages ADD COLUMN next_attempt_at DATETIME");
-        logger.info('Database migration: Added next_attempt_at column', { category: 'database' });
-    } catch (e) {
-        // Column already exists
-    }
-
-    try {
-        db.exec("ALTER TABLE scheduled_messages ADD COLUMN last_error TEXT");
-        logger.info('Database migration: Added last_error column', { category: 'database' });
-    } catch (e) {
-        // Column already exists
-    }
-
-    try {
-        db.exec("ALTER TABLE webhooks ADD COLUMN last_error TEXT");
-        logger.info('Database migration: Added webhooks.last_error column', { category: 'database' });
-    } catch (e) {
-        // Column already exists
-    }
-
-    try {
-        db.exec("ALTER TABLE webhooks ADD COLUMN last_status INTEGER");
-        logger.info('Database migration: Added webhooks.last_status column', { category: 'database' });
-    } catch (e) {
-        // Column already exists
-    }
-
-    try {
-        db.exec("ALTER TABLE webhooks ADD COLUMN last_duration_ms INTEGER");
-        logger.info('Database migration: Added webhooks.last_duration_ms column', { category: 'database' });
-    } catch (e) {
-        // Column already exists
-    }
 
     logger.info('Database initialized', { category: 'database', dbPath: config.DB_PATH });
 
@@ -655,6 +654,17 @@ function createDatabase(config) {
         searchChatIds: db.prepare(`SELECT DISTINCT chat_id FROM notes WHERE content LIKE ?`)
     };
 
+    const whatsappSettings = {
+        get: db.prepare('SELECT settings FROM whatsapp_settings WHERE id = 1'),
+        upsert: db.prepare(`
+            INSERT INTO whatsapp_settings (id, settings, updated_at)
+            VALUES (1, ?, datetime('now'))
+            ON CONFLICT(id) DO UPDATE SET
+                settings = excluded.settings,
+                updated_at = datetime('now')
+        `)
+    };
+
     const maintenance = {
         cleanupMessages: db.prepare(`DELETE FROM messages WHERE timestamp < ?`)
     };
@@ -872,6 +882,7 @@ function createDatabase(config) {
 
     return {
         db,
+        close,
         messages,
         chats,
         autoReplies,
@@ -890,6 +901,7 @@ function createDatabase(config) {
         tags,
         contactTags,
         notes,
+        whatsappSettings,
         maintenance,
         reports
     };

@@ -5,57 +5,172 @@ const axios = require('axios');
 const { logger } = require('./logger');
 
 class WebhookService {
-    constructor(db, config) {
+    constructor(db, config, metrics = null, options = {}) {
         this.db = db;
         this.config = config;
+        this.metrics = metrics || null;
+        this.accountId = options?.accountId || null;
         this.queue = [];
-        this.processing = false;
+        this.inFlight = 0;
+        this.pumpScheduled = false;
+        this.maxConcurrency = Math.max(1, Number(config.WEBHOOK_CONCURRENCY) || 2);
+        this.queueLimit = Math.max(1, Number(config.WEBHOOK_QUEUE_LIMIT) || 2000);
+        this.isShuttingDown = false;
+        this.shutdownPromise = null;
+
+        this.updateGauges();
     }
 
-    async trigger(event, data) {
+    setMetrics(metrics) {
+        this.metrics = metrics || null;
+        this.updateGauges();
+    }
+
+    accountIdLabel() {
+        return typeof this.accountId === 'string' && this.accountId ? this.accountId : 'unknown';
+    }
+
+    updateGauges() {
+        const labels = { accountId: this.accountIdLabel() };
+        try {
+            this.metrics?.webhookQueueSize?.set?.(labels, this.queue.length);
+        } catch (error) {}
+
+        try {
+            this.metrics?.webhookInFlight?.set?.(labels, this.inFlight);
+        } catch (error) {}
+    }
+
+    async trigger(event, data, meta = null) {
+        if (this.isShuttingDown) {
+            this.safeCountDelivery(event, 'dropped');
+            logger.warn('Webhook service is shutting down; dropping trigger', { category: 'webhook', event });
+            return;
+        }
+
         const webhooks = this.db.webhooks.getActive.all();
 
         for (const webhook of webhooks) {
             const events = webhook.events.split(',').map(e => e.trim());
 
             if (events.includes(event) || events.includes('all')) {
-                this.queue.push({ webhook, event, data });
+                if (this.queue.length >= this.queueLimit) {
+                    this.safeCountDelivery(event, 'dropped');
+                    try {
+                        this.db.logs.add.run('warn', 'webhook', 'Webhook queue is full; dropping delivery', JSON.stringify({
+                            webhookId: webhook.id,
+                            event,
+                            queueLimit: this.queueLimit
+                        }));
+                    } catch (e) {}
+
+                    logger.warn('Webhook queue is full; dropping delivery', {
+                        category: 'webhook',
+                        webhookId: webhook.id,
+                        event,
+                        queueLimit: this.queueLimit
+                    });
+                    continue;
+                }
+
+                this.queue.push({ webhook, event, data, meta });
+                this.updateGauges();
             }
         }
 
-        this.processQueue();
+        this.schedulePump();
     }
 
-    async processQueue() {
-        if (this.processing || this.queue.length === 0) {
-            return;
+    async shutdown({ timeoutMs = 5000 } = {}) {
+        if (this.shutdownPromise) return this.shutdownPromise;
+        this.isShuttingDown = true;
+        this.updateGauges();
+
+        this.shutdownPromise = new Promise((resolve, reject) => {
+            const start = Date.now();
+            const tick = () => {
+                if (this.queue.length === 0 && this.inFlight === 0) {
+                    this.updateGauges();
+                    return resolve();
+                }
+                if (Date.now() - start >= timeoutMs) {
+                    return reject(new Error('Webhook shutdown timeout'));
+                }
+                setTimeout(tick, 25);
+            };
+            tick();
+        });
+
+        this.schedulePump();
+        return this.shutdownPromise;
+    }
+
+    schedulePump() {
+        if (this.pumpScheduled) return;
+        this.pumpScheduled = true;
+        const schedule = typeof setImmediate === 'function' ? setImmediate : (fn) => setTimeout(fn, 0);
+        schedule(() => {
+            this.pumpScheduled = false;
+            this.pump();
+        });
+    }
+
+    pump() {
+        while (this.inFlight < this.maxConcurrency && this.queue.length > 0) {
+            const item = this.queue.shift();
+            this.inFlight += 1;
+            this.updateGauges();
+            void this.processItem(item).finally(() => {
+                this.inFlight -= 1;
+                this.updateGauges();
+                this.schedulePump();
+            });
+        }
+    }
+
+    async processItem({ webhook, event, data, meta }) {
+        const payload = {
+            event,
+            timestamp: Date.now(),
+            data
+        };
+
+        if (meta && typeof meta === 'object' && Object.keys(meta).length > 0) {
+            payload.meta = meta;
         }
 
-        this.processing = true;
+        try {
+            await this.deliverWebhook(webhook, event, payload);
+        } catch (error) {
+            // errors are already logged in deliverWebhook
+        }
+    }
 
-        while (this.queue.length > 0) {
-            const { webhook, event, data } = this.queue.shift();
+    safeCountDelivery(event, outcome, durationSeconds = null) {
+        const eventLabel = typeof event === 'string' && event ? event : 'unknown';
+        const outcomeLabel = typeof outcome === 'string' && outcome ? outcome : 'unknown';
+        const labels = { event: eventLabel, outcome: outcomeLabel };
 
-            const payload = {
-                event,
-                timestamp: Date.now(),
-                data
-            };
+        try {
+            this.metrics?.webhookDeliveriesTotal?.inc?.(labels, 1);
+        } catch (error) {
+            // metrics should never break webhook delivery
+        }
 
+        if (typeof durationSeconds === 'number' && Number.isFinite(durationSeconds)) {
             try {
-                await this.deliverWebhook(webhook, event, payload);
+                this.metrics?.webhookDeliveryDurationSeconds?.observe?.(labels, durationSeconds);
             } catch (error) {
-                // errors are already logged in deliverWebhook
+                // metrics should never break webhook delivery
             }
         }
-
-        this.processing = false;
     }
 
     async deliverWebhook(webhook, event, payload) {
         const maxRetries = this.config.WEBHOOK_MAX_RETRIES || 3;
         const baseDelayMs = this.config.WEBHOOK_RETRY_BASE_MS || 1000;
         const timeoutMs = this.config.WEBHOOK_TIMEOUT || 10000;
+        const startNs = process.hrtime.bigint();
 
         try {
             const attemptResult = await this.postWithRetry(
@@ -73,45 +188,62 @@ class WebhookService {
                 baseDelayMs
             );
 
-            this.db.webhooks.recordSuccess.run(
-                attemptResult.status,
-                attemptResult.durationMs,
-                webhook.id
-            );
+            const totalDurationSeconds = Number(process.hrtime.bigint() - startNs) / 1e9;
+            this.safeCountDelivery(event, 'success', totalDurationSeconds);
 
-            this.db.logs.add.run('info', 'webhook',
-                'Webhook triggered successfully',
-                JSON.stringify({
+            try {
+                this.db.webhooks.recordSuccess.run(
+                    attemptResult.status,
+                    attemptResult.durationMs,
+                    webhook.id
+                );
+
+                this.db.logs.add.run('info', 'webhook',
+                    'Webhook triggered successfully',
+                    JSON.stringify({
+                        webhookId: webhook.id,
+                        event,
+                        url: webhook.url,
+                        status: attemptResult.status,
+                        durationMs: attemptResult.durationMs,
+                        attempts: attemptResult.attempts
+                    })
+                );
+            } catch (error) {
+                logger.warn('Webhook delivery recorded with errors', {
+                    category: 'webhook',
                     webhookId: webhook.id,
                     event,
-                    url: webhook.url,
-                    status: attemptResult.status,
-                    durationMs: attemptResult.durationMs,
-                    attempts: attemptResult.attempts
-                })
-            );
+                    error: error?.message || String(error)
+                });
+            }
 
             return attemptResult;
         } catch (error) {
-            this.db.webhooks.recordFail.run(
-                error.message,
-                error.status || 0,
-                error.durationMs || 0,
-                webhook.id
-            );
+            const totalDurationSeconds = Number(process.hrtime.bigint() - startNs) / 1e9;
+            this.safeCountDelivery(event, 'error', totalDurationSeconds);
 
-            this.db.logs.add.run('error', 'webhook',
-                'Webhook failed',
-                JSON.stringify({
-                    webhookId: webhook.id,
-                    event,
-                    url: webhook.url,
-                    error: error.message,
-                    status: error.status || 0,
-                    durationMs: error.durationMs || 0,
-                    attempts: error.attempts || 1
-                })
-            );
+            try {
+                this.db.webhooks.recordFail.run(
+                    error.message,
+                    error.status || 0,
+                    error.durationMs || 0,
+                    webhook.id
+                );
+
+                this.db.logs.add.run('error', 'webhook',
+                    'Webhook failed',
+                    JSON.stringify({
+                        webhookId: webhook.id,
+                        event,
+                        url: webhook.url,
+                        error: error.message,
+                        status: error.status || 0,
+                        durationMs: error.durationMs || 0,
+                        attempts: error.attempts || 1
+                    })
+                );
+            } catch (e) {}
 
             logger.error('Webhook failed', {
                 category: 'webhook',
@@ -234,8 +366,8 @@ class WebhookService {
     }
 }
 
-function createWebhookService(db, config) {
-    return new WebhookService(db, config);
+function createWebhookService(db, config, metrics = null, options = {}) {
+    return new WebhookService(db, config, metrics, options);
 }
 
 module.exports = { createWebhookService };

@@ -15,18 +15,6 @@ const booleanLike = z.preprocess((value) => {
     return value;
 }, z.boolean());
 
-const intLike = (message) => z.preprocess(
-    (value) => {
-        if (value === undefined || value === null || value === '') return undefined;
-        const parsed = parseInt(String(value), 10);
-        return Number.isFinite(parsed) ? parsed : value;
-    },
-    z.number({
-        required_error: message,
-        invalid_type_error: message
-    }).int().positive(message)
-);
-
 const nullableIntLike = () => z.preprocess(
     (value) => {
         if (value === undefined || value === '') return undefined;

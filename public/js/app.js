@@ -3,6 +3,8 @@
  * Modern WhatsApp-like interface with premium features
  */
 
+/* global io, monaco */
+
 let socket;
 let currentChat = null;
 let chats = [];
@@ -2742,3 +2744,75 @@ function showToast(message, type) {
 
     setTimeout(() => toast.remove(), 4000);
 }
+
+Object.assign(window, {
+    toggleTheme,
+    updateAccentColor,
+    updateWallpaperChoice,
+    updateFontSize,
+    toggleCompactMode,
+    updateBubbleStyle,
+    updateBackgroundType,
+    updateBackgroundImage,
+    updateBackgroundColor,
+    updateBackgroundOpacity,
+    createAccount,
+    openSettings,
+    openFeatures,
+    closeFeatures,
+    toggleDropdown,
+    switchSidebarTab,
+    showTab,
+    openReports,
+    toggleSetting,
+    openChatForMessage,
+    filterChats,
+    handleInputKeydown,
+    addTagToChat,
+    removeTagFromChat,
+    addNoteToChat,
+    editNote,
+    deleteNote,
+    appendNewMessage,
+    reconnect,
+    disconnect,
+    startSync,
+    searchInChat,
+    refreshChat,
+    exportChat,
+    clearChat,
+    toggleEmojiPicker,
+    toggleAttachMenu,
+    openMediaLightbox,
+    submitAutoReply,
+    startTemplateEdit,
+    submitTemplate,
+    deleteTemplate,
+    handleScheduledTemplateChange,
+    openTemplatePicker,
+    useTemplate,
+    submitScheduled,
+    submitWebhook,
+    showWebhookDetails,
+    replayWebhookDelivery,
+    submitRole,
+    deleteRole,
+    submitUser,
+    assignUserRole,
+    deleteUser,
+    migrateToDrive,
+    saveScriptCode,
+    testScriptCode,
+    toggleAutoReply,
+    deleteAutoReply,
+    deleteScheduled,
+    deleteWebhook,
+    editScript,
+    toggleScript,
+    deleteScript,
+    logout,
+    api,
+    showToast,
+    closeModal,
+    loadScriptsData
+});

@@ -47,9 +47,20 @@ function createClient() {
         return Array.from(cookieJar.entries()).map(([k, v]) => `${k}=${v}`).join('; ');
     }
 
-    function request({ method, urlPath, body, headers }) {
+    function request({ method, urlPath, body, rawBody, headers }) {
         return new Promise((resolve, reject) => {
-            const payload = body ? JSON.stringify(body) : null;
+            const payload = rawBody !== undefined
+                ? String(rawBody)
+                : (body ? JSON.stringify(body) : null);
+            const payloadHeaders = {};
+            if (payload) {
+                const headerKeys = Object.keys(headers || {});
+                const hasContentType = headerKeys.some(key => key.toLowerCase() === 'content-type');
+                if (!hasContentType) {
+                    payloadHeaders['Content-Type'] = 'application/json';
+                }
+                payloadHeaders['Content-Length'] = Buffer.byteLength(payload);
+            }
             const req = http.request(
                 {
                     method,
@@ -58,7 +69,7 @@ function createClient() {
                     path: urlPath,
                     headers: {
                         ...(headers || {}),
-                        ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } : {}),
+                        ...payloadHeaders,
                         ...(cookieJar.size ? { Cookie: cookieHeader() } : {})
                     }
                 },
@@ -143,6 +154,15 @@ test('GET /auth/check sets CSRF cookie', async () => {
     assert.ok(client.cookies.has('XSRF-TOKEN'));
 });
 
+test('GET /auth/unknown returns JSON 404', async () => {
+    const client = createClient();
+    const res = await client.request({ method: 'GET', urlPath: '/auth/does-not-exist' });
+    assert.equal(res.status, 404);
+    const parsed = JSON.parse(res.body);
+    assert.equal(parsed.error, 'Not found');
+    assert.ok(parsed.requestId);
+});
+
 test('GET /healthz returns ok', async () => {
     const client = createClient();
     const res = await client.request({ method: 'GET', urlPath: '/healthz' });
@@ -208,6 +228,14 @@ test('GET /metrics returns prometheus text when enabled', async () => {
     assert.match(res.body, /# HELP wp_panel_http_requests_total/);
     assert.match(res.body, /# HELP wp_panel_message_pipeline_messages_total/);
     assert.match(res.body, /# HELP wp_panel_message_pipeline_task_total/);
+    assert.match(res.body, /# HELP wp_panel_message_pipeline_duration_seconds/);
+    assert.match(res.body, /# HELP wp_panel_message_pipeline_task_duration_seconds/);
+    assert.match(res.body, /# HELP wp_panel_background_job_runs_total/);
+    assert.match(res.body, /# HELP wp_panel_background_job_duration_seconds/);
+    assert.match(res.body, /# HELP wp_panel_webhook_deliveries_total/);
+    assert.match(res.body, /# HELP wp_panel_webhook_delivery_duration_seconds/);
+    assert.match(res.body, /# HELP wp_panel_webhook_queue_size/);
+    assert.match(res.body, /# HELP wp_panel_webhook_in_flight/);
     assert.match(res.body, /wp_panel_process_cpu_user_seconds_total/);
 });
 
@@ -246,6 +274,22 @@ test('POST /auth/login rejects without CSRF token', async () => {
     assert.ok(parsed.requestId);
 });
 
+test('POST /auth/login rejects invalid JSON body', async () => {
+    const client = createClient();
+
+    const res = await client.request({
+        method: 'POST',
+        urlPath: '/auth/login',
+        rawBody: '{',
+        headers: { 'Content-Type': 'application/json' }
+    });
+
+    assert.equal(res.status, 400);
+    const parsed = JSON.parse(res.body);
+    assert.equal(parsed.error, 'Invalid JSON body');
+    assert.ok(parsed.requestId);
+});
+
 test('POST /auth/login succeeds with CSRF token', async () => {
     const client = createClient();
     const res = await client.login('admin', 'test-password');
@@ -272,6 +316,42 @@ test('POST /auth/login succeeds after a failed attempt', async () => {
     assert.equal(parsed.success, true);
 });
 
+test('POST /auth/login rate limits repeated failures', async () => {
+    const client = createClient();
+    const ip = '203.0.113.10';
+    const csrfToken = await client.refreshCsrfToken();
+
+    for (let i = 0; i < 5; i += 1) {
+        const res = await client.request({
+            method: 'POST',
+            urlPath: '/auth/login',
+            headers: { 'X-XSRF-TOKEN': csrfToken, 'X-Forwarded-For': ip },
+            body: { username: 'admin', password: 'wrong-password' }
+        });
+        assert.equal(res.status, 401);
+        const parsed = JSON.parse(res.body);
+        assert.ok(parsed.requestId);
+    }
+
+    const blocked = await client.request({
+        method: 'POST',
+        urlPath: '/auth/login',
+        headers: { 'X-XSRF-TOKEN': csrfToken, 'X-Forwarded-For': ip },
+        body: { username: 'admin', password: 'wrong-password' }
+    });
+
+    assert.equal(blocked.status, 429);
+    const retryAfterRaw = blocked.headers['retry-after'];
+    assert.ok(retryAfterRaw);
+    const retryAfterSeconds = parseInt(String(retryAfterRaw), 10);
+    assert.ok(Number.isFinite(retryAfterSeconds));
+    assert.ok(retryAfterSeconds > 0);
+
+    const parsed = JSON.parse(blocked.body);
+    assert.match(parsed.error, /Too many login attempts/i);
+    assert.ok(parsed.requestId);
+});
+
 test('GET /api/status requires auth', async () => {
     const client = createClient();
     const res = await client.request({ method: 'GET', urlPath: '/api/status' });
@@ -291,6 +371,38 @@ test('GET /api/status returns whatsapp status + stats', async () => {
     assert.ok(parsed.whatsapp);
     assert.ok(parsed.stats);
     assert.equal(typeof parsed.whatsapp.status, 'string');
+});
+
+test('POST /api/settings persists WhatsApp settings', async () => {
+    const client = createClient();
+    await client.login('admin', 'test-password');
+
+    const updateRes = await client.api('POST', '/api/settings', { ghostMode: true, maxMessagesPerChat: 123 });
+    assert.equal(updateRes.status, 200);
+    const updateParsed = JSON.parse(updateRes.body);
+    assert.equal(updateParsed.success, true);
+    assert.ok(updateParsed.settings);
+    assert.equal(updateParsed.settings.ghostMode, true);
+    assert.equal(updateParsed.settings.maxMessagesPerChat, 123);
+
+    const getRes = await client.request({ method: 'GET', urlPath: '/api/settings' });
+    assert.equal(getRes.status, 200);
+    const settings = JSON.parse(getRes.body);
+    assert.equal(settings.ghostMode, true);
+    assert.equal(settings.maxMessagesPerChat, 123);
+
+    const context = accountManager.getAccountContext(accountManager.getDefaultAccountId());
+    const storedRow = context.db.whatsappSettings.get.get();
+    assert.ok(storedRow);
+    assert.ok(storedRow.settings);
+    const storedSettings = JSON.parse(storedRow.settings);
+    assert.equal(storedSettings.ghostMode, true);
+    assert.equal(storedSettings.maxMessagesPerChat, 123);
+
+    const { createWhatsAppClient } = require('../whatsapp');
+    const freshClient = createWhatsAppClient(context.config, context.db, null);
+    assert.equal(freshClient.getSettings().ghostMode, true);
+    assert.equal(freshClient.getSettings().maxMessagesPerChat, 123);
 });
 
 test('GET /api/accounts returns accounts for admin', async () => {
@@ -502,6 +614,9 @@ test('GET /api/reports/trends rejects invalid range', async () => {
     assert.equal(res.status, 400);
     const parsed = JSON.parse(res.body);
     assert.equal(parsed.error, 'Invalid date range');
+    assert.ok(parsed.requestId);
+    assert.ok(Array.isArray(parsed.issues));
+    assert.ok(parsed.issues.some(issue => issue.path === 'range.start'));
 });
 
 test('GET /api/roles and /api/users work for admin', async () => {
@@ -626,11 +741,17 @@ test('POST /api/send validates input without WhatsApp', async () => {
     assert.equal(missingRes.status, 400);
     const missingParsed = JSON.parse(missingRes.body);
     assert.equal(missingParsed.error, 'chatId and message or media required');
+    assert.ok(missingParsed.requestId);
+    assert.ok(Array.isArray(missingParsed.issues));
+    assert.ok(missingParsed.issues.some(issue => issue.path === 'chatId'));
 
     const invalidRes = await client.api('POST', '/api/send', { chatId: 'invalid space@c.us', message: 'hi' });
     assert.equal(invalidRes.status, 400);
     const invalidParsed = JSON.parse(invalidRes.body);
     assert.equal(invalidParsed.error, 'Invalid chatId format');
+    assert.ok(invalidParsed.requestId);
+    assert.ok(Array.isArray(invalidParsed.issues));
+    assert.ok(invalidParsed.issues.some(issue => issue.path === 'chatId'));
 });
 
 test('auto replies CRUD works (admin)', async () => {
@@ -679,10 +800,11 @@ test('drive and media endpoints respond safely', async () => {
     assert.equal(typeof status.authorized, 'boolean');
 
     const migrateRes = await client.api('POST', '/api/drive/migrate');
-    assert.equal(migrateRes.status, 200);
+    assert.equal(migrateRes.status, 400);
     const migrate = JSON.parse(migrateRes.body);
-    assert.equal(migrate.success, false);
     assert.ok(typeof migrate.error === 'string');
+    assert.ok(migrate.error.includes('Drive not configured'));
+    assert.ok(migrate.requestId);
 
     const invalidMediaRes = await client.request({ method: 'GET', urlPath: '/api/media/..' });
     assert.equal(invalidMediaRes.status, 400);

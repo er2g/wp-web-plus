@@ -88,3 +88,62 @@ test('message pipeline increments metrics when provided', async () => {
         { task: 'scriptRunner', outcome: 'success' }
     ]);
 });
+
+test('message pipeline observes duration metrics when provided', async () => {
+    const pipelineDurations = [];
+    const taskDurations = [];
+    const pipeline = createMessagePipeline({
+        autoReply: { processMessage: async () => {} },
+        webhook: { trigger: async () => {} },
+        scriptRunner: { processMessage: async () => {} },
+        logger: { error: () => {} },
+        metrics: {
+            messagePipelineDurationSeconds: {
+                observe: (labels, value) => pipelineDurations.push({ labels, value })
+            },
+            messagePipelineTaskDurationSeconds: {
+                observe: (labels, value) => taskDurations.push({ labels, value })
+            }
+        }
+    });
+
+    await pipeline.process({
+        msgData: { messageId: 'm1', chatId: 'c1' },
+        fromMe: false,
+        accountId: 'a1'
+    });
+
+    assert.equal(pipelineDurations.length, 1);
+    assert.deepEqual(pipelineDurations[0].labels, { direction: 'incoming' });
+    assert.equal(Number.isFinite(pipelineDurations[0].value), true);
+    assert.equal(pipelineDurations[0].value >= 0, true);
+
+    assert.equal(taskDurations.length, 3);
+    assert.deepEqual(taskDurations.map(entry => entry.labels), [
+        { task: 'autoReply', outcome: 'success' },
+        { task: 'webhook', outcome: 'success' },
+        { task: 'scriptRunner', outcome: 'success' }
+    ]);
+    assert.equal(taskDurations.every(entry => Number.isFinite(entry.value) && entry.value >= 0), true);
+});
+
+test('message pipeline passes traceId to webhook trigger', async () => {
+    let receivedMeta = null;
+    const pipeline = createMessagePipeline({
+        autoReply: { processMessage: async () => {} },
+        webhook: { trigger: async (event, data, meta) => { receivedMeta = meta; } },
+        scriptRunner: { processMessage: async () => {} },
+        logger: { error: () => {} }
+    });
+
+    await pipeline.process({
+        msgData: { messageId: 'm1', chatId: 'c1' },
+        fromMe: false,
+        accountId: 'a1'
+    });
+
+    assert.ok(receivedMeta);
+    assert.equal(receivedMeta.accountId, 'a1');
+    assert.equal(typeof receivedMeta.traceId, 'string');
+    assert.ok(receivedMeta.traceId.length > 0);
+});

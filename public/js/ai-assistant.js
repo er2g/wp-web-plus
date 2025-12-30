@@ -2,6 +2,8 @@
  * WhatsApp Web Panel - AI Assistant Frontend Logic
  */
 
+/* global closeModal, api, showToast, loadScriptsData */
+
 function openGeminiAssistant() {
     closeModal(); // Close existing modals
 
@@ -112,3 +114,10 @@ async function saveAiScript() {
         showToast('Kaydetme hatasi: ' + err.message, 'error');
     }
 }
+
+Object.assign(window, {
+    openGeminiAssistant,
+    openAiAssistant,
+    generateAiScript,
+    saveAiScript
+});

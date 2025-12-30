@@ -2,13 +2,20 @@
 
 Bu doküman, projeyi daha **stabil**, **test edilebilir** ve **ölçeklenebilir** hale getirmek için önerilen adımları öncelik sırasıyla listeler.
 
+## Durum (tamamlananlar)
+
+- **Request validation (Zod)**: `/api` endpoint’lerinde standard validation middleware + tutarlı `400` response (`{ error, requestId, issues[] }`).
+- **Error response standardı**: `/api` ve `/auth` için tutarlı `{ error, requestId }` + JSON `404`.
+- **Observability**: `/openapi.json`, `/docs` (admin), `/metrics` (token ile) + pipeline/webhook metrikleri.
+- **State persistence**: WhatsApp ayarları DB’de persist (restart sonrası stabil).
+- **Graceful shutdown**: webhook queue drain + `/readyz` shutdown state + PM2 kill_timeout uyumu.
+- **CI kalite kapısı**: `npm run lint` + `npm test` (GitHub Actions).
+
 ## Kısa vadeli (hemen katkı / düşük risk)
 
-- **Request validation standardı**: `/api` altındaki endpoint’ler için ortak bir validation middleware’ine geç (Zod/Ajv gibi). Şimdilik kritik endpoint’lerden (send/webhooks/scripts) başlayıp kademeli genişlet.
-- **Error response standardı**: Tüm hatalarda `{ error, requestId }` formatını garanti et (özellikle 4xx validation hataları).
-- **Metrics güvenliği**: `METRICS_ENABLED=true` kullanılacaksa prod’da `METRICS_TOKEN` ile koru; dış dünyaya açık ise ters proxy’den de IP allowlist uygula.
-- **OpenAPI’yi canlı tut**: `docs/openapi.json` kapsamını yeni endpoint ekledikçe güncelle; CI’da en azından JSON parse + kritik path’lerin varlığını doğrula.
-- **Test katmanları**: Var olan entegrasyon testlerini (node:test) koru; yeni feature eklerken “önce test” ile ilerle.
+- **OpenAPI’yi canlı tut**: yeni endpoint/alan ekledikçe `docs/openapi.json` güncelle.
+- **Alerting/SLO**: 5xx oranı, latency p95, webhook error rate, CPU/RAM gibi temel alarmlar.
+- **Üretim secrets**: `.env` yerine secret store (en azından PM2 env + dosya izinleri).
 
 ## Orta vadeli (ölçek / servis orkestrasyonu)
 
@@ -27,4 +34,3 @@ Bu doküman, projeyi daha **stabil**, **test edilebilir** ve **ölçeklenebilir*
 - **Tracing**: OpenTelemetry ile request → message pipeline → webhook/script chain’i izlenebilir hale getir.
 - **SLO/Alerting**: `/readyz`, `/metrics` üzerinden temel alarm setleri (5xx oranı, latency p95, queue lag, webhook hata oranı).
 - **Dağıtım standardı**: Docker/compose veya systemd + PM2 runbook; secrets yönetimi (dotenv yerine secret store).
-
