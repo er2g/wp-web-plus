@@ -94,5 +94,8 @@ Restore sonrası PM2 restart yeterlidir.
 ## Sık Sorunlar
 
 - **QR tekrar istiyor**: `session/` dizini silinmiş/bozulmuş olabilir. Backup’tan geri yükle.
+- **WhatsApp connect takılı kalıyor / Target closed**:
+  - `WHATSAPP_INIT_TIMEOUT_MS` ile init timeout koy (varsayılan `60000`).
+  - Orphan Chromium prosesleri kalmış olabilir: `pm2 stop whatsapp-panel` → `pkill -f \"user-data-dir=.*data/accounts/.*/session/session\"` → `pm2 restart whatsapp-panel`.
 - **CORS sorunları**: `CORS_ORIGINS` doğru domain(ler)i içermeli.
 - **/metrics erişimi**: `METRICS_TOKEN` set ise `Authorization: Bearer <token>` zorunlu.
