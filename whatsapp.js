@@ -42,7 +42,7 @@ class WhatsAppClient {
             syncOnConnect: true,
             maxMessagesPerChat: 1000,
             uploadToDrive: true,
-            downloadMediaOnSync: true,
+            downloadMediaOnSync: false,
             ghostMode: false
         };
         this.loadSettingsFromDb();
@@ -419,7 +419,10 @@ class WhatsAppClient {
         let url = null;
         try {
             if (typeof chat.getProfilePicUrl === 'function') {
-                url = await chat.getProfilePicUrl();
+                url = await Promise.race([
+                    chat.getProfilePicUrl(),
+                    new Promise((resolve) => setTimeout(resolve, 5000, null))
+                ]);
             }
         } catch (e) {
             url = null;
@@ -954,17 +957,35 @@ class WhatsAppClient {
     }
 
     async syncChat(chat) {
-        try {
-            const chatName = chat.name || chat.id.user;
-            const messages = await chat.fetchMessages({ limit: this.settings.maxMessagesPerChat });
+        const chatId = chat?.id?._serialized;
+        if (!chatId) return 0;
 
+        const chatName = chat.name || chat.id.user;
+        let fetchedMessages = [];
+
+        try {
+            const limit = Math.max(1, Number(this.settings.maxMessagesPerChat) || 1000);
+            fetchedMessages = await Promise.race([
+                chat.fetchMessages({ limit }),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('fetchMessages timeout')), 120000))
+            ]);
+        } catch (e) {
+            this.log('warn', 'sync', `Chat fetchMessages failed for ${chatName}: ${e.message}`);
+            fetchedMessages = [];
+        }
+
+        const messages = fetchedMessages.length
+            ? fetchedMessages
+            : (chat.lastMessage ? [chat.lastMessage] : []);
+
+        try {
             for (const msg of messages) {
                 const contact = await this.getContactCached(msg);
 
                 const body = this.getMessageBody(msg);
                 const msgData = {
                     messageId: msg.id._serialized,
-                    chatId: chat.id._serialized,
+                    chatId: chatId,
                     from: msg.from,
                     to: msg.to,
                     fromName: msg.fromMe ? (this.info ? this.info.pushname : 'Me') : this.getSenderName(contact, msg),
@@ -977,7 +998,7 @@ class WhatsAppClient {
                     mediaMimetype: msg.mimetype || msg._data?.mimetype
                 };
 
-                if (msg.hasMedia && (this.settings.downloadMediaOnSync || this.settings.downloadMedia)) {
+                if (msg.hasMedia && this.settings.downloadMedia && this.settings.downloadMediaOnSync) {
                     const media = await this.downloadMediaWithRetry(msg, CONSTANTS.SYNC_MAX_RETRIES, CONSTANTS.SYNC_DOWNLOAD_TIMEOUT_MS);
                     if (media) {
                         const mediaResult = await this.saveMedia(media, msg.id._serialized, msg.timestamp * 1000);
@@ -986,7 +1007,7 @@ class WhatsAppClient {
                         msgData.mediaMimetype = media.mimetype;
                     } else {
                         this.log('warn', 'media', 'Media download failed (sync)', {
-                            chatId: chat.id?._serialized,
+                            chatId: chatId,
                             messageId: msg.id?._serialized,
                             type: msg.type
                         });
@@ -1011,43 +1032,62 @@ class WhatsAppClient {
                 );
             }
 
-            if (messages.length > 0) {
-                // Try to get profile pic from cache first
-                let profilePic = await this.getChatProfilePic(chat);
-                
-                // If not in cache or null, try aggressive fetch with timeout
-                if (!profilePic) {
-                    try {
-                         const fetchPic = async (id) => {
-                            return Promise.race([
-                                this.client.getProfilePicUrl(id),
-                                new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000))
-                            ]);
-                        };
-                        profilePic = await fetchPic(chat.id._serialized);
-                        if (profilePic) {
-                            this.chatProfileCache.set(chat.id._serialized, profilePic);
-                        }
-                    } catch(e) {}
-                }
-
-                const lastMsg = messages[messages.length - 1];
-                const lastPreview = this.getMessageBody(lastMsg) || (lastMsg.hasMedia ? (lastMsg.type === 'document' ? '[Dosya]' : '[Medya]') : '');
-                
-                this.db.chats.upsert.run(
-                    chat.id._serialized,
-                    chatName,
-                    chat.isGroup ? 1 : 0,
-                    profilePic,
-                    lastPreview.substring(0, 100),
-                    lastMsg.timestamp * 1000,
-                    chat.unreadCount || 0
-                );
+            const existingChat = this.db.chats.getById.get(chatId);
+            let profilePic = existingChat?.profile_pic || null;
+            if (!profilePic) {
+                try {
+                    profilePic = await Promise.race([
+                        this.getChatProfilePic(chat),
+                        new Promise((resolve) => setTimeout(resolve, 5000, null))
+                    ]);
+                } catch (e) {}
             }
+
+            const lastMsg = fetchedMessages.length
+                ? fetchedMessages[fetchedMessages.length - 1]
+                : (chat.lastMessage || null);
+
+            const lastPreview = lastMsg
+                ? (this.getMessageBody(lastMsg) || (lastMsg.hasMedia ? (lastMsg.type === 'document' ? '[Dosya]' : '[Medya]') : ''))
+                : '';
+
+            const lastAt = lastMsg?.timestamp
+                ? lastMsg.timestamp * 1000
+                : (chat.timestamp ? chat.timestamp * 1000 : Date.now());
+
+            this.db.chats.upsert.run(
+                chatId,
+                chatName,
+                chat.isGroup ? 1 : 0,
+                profilePic,
+                String(lastPreview || '').substring(0, 100),
+                lastAt,
+                chat.unreadCount || 0
+            );
 
             return messages.length;
         } catch (e) {
-            this.log('warn', 'sync', 'Chat sync error: ' + (chat.name || chat.id.user));
+            this.log('warn', 'sync', `Chat sync error for ${chatName}: ${e.message}`);
+            try {
+                const lastMsg = chat.lastMessage || null;
+                const lastPreview = lastMsg
+                    ? (this.getMessageBody(lastMsg) || (lastMsg.hasMedia ? (lastMsg.type === 'document' ? '[Dosya]' : '[Medya]') : ''))
+                    : '';
+                const lastAt = lastMsg?.timestamp
+                    ? lastMsg.timestamp * 1000
+                    : (chat.timestamp ? chat.timestamp * 1000 : Date.now());
+                const existingChat = this.db.chats.getById.get(chatId);
+                const profilePic = existingChat?.profile_pic || null;
+                this.db.chats.upsert.run(
+                    chatId,
+                    chatName,
+                    chat.isGroup ? 1 : 0,
+                    profilePic,
+                    String(lastPreview || '').substring(0, 100),
+                    lastAt,
+                    chat.unreadCount || 0
+                );
+            } catch (inner) {}
             return 0;
         }
     }
