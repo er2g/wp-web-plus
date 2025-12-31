@@ -392,9 +392,23 @@ function createDatabase(config) {
     // Prepared statements
     const messages = {
         save: db.prepare(`
-        INSERT OR REPLACE INTO messages
+        INSERT INTO messages
         (message_id, chat_id, from_number, to_number, from_name, body, type, media_path, media_url, media_mimetype, is_group, is_from_me, ack, timestamp)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(message_id) DO UPDATE SET
+            chat_id = excluded.chat_id,
+            from_number = excluded.from_number,
+            to_number = excluded.to_number,
+            from_name = excluded.from_name,
+            body = excluded.body,
+            type = excluded.type,
+            media_path = COALESCE(excluded.media_path, messages.media_path),
+            media_url = COALESCE(excluded.media_url, messages.media_url),
+            media_mimetype = COALESCE(excluded.media_mimetype, messages.media_mimetype),
+            is_group = excluded.is_group,
+            is_from_me = excluded.is_from_me,
+            ack = CASE WHEN excluded.ack > messages.ack THEN excluded.ack ELSE messages.ack END,
+            timestamp = excluded.timestamp
     `),
         updateAck: db.prepare(`UPDATE messages SET ack = ? WHERE message_id = ?`),
         getByChatId: db.prepare(`SELECT * FROM messages WHERE chat_id = ? ORDER BY timestamp DESC LIMIT ? OFFSET ?`),
@@ -415,7 +429,8 @@ function createDatabase(config) {
         INSERT INTO chats (chat_id, name, is_group, profile_pic, last_message, last_message_at, unread_count, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
         ON CONFLICT(chat_id) DO UPDATE SET
-            name = excluded.name, profile_pic = excluded.profile_pic,
+            name = excluded.name,
+            profile_pic = COALESCE(excluded.profile_pic, chats.profile_pic),
             last_message = excluded.last_message, last_message_at = excluded.last_message_at,
             unread_count = excluded.unread_count, updated_at = datetime('now')
     `),

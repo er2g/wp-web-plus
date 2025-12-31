@@ -784,6 +784,15 @@ function resetSocket() {
 }
 
 // Socket.IO
+let chatsReloadTimeout = null;
+function scheduleChatsReload(delayMs = 250) {
+    if (chatsReloadTimeout) return;
+    chatsReloadTimeout = setTimeout(() => {
+        chatsReloadTimeout = null;
+        loadChats();
+    }, delayMs);
+}
+
 function initSocket() {
     const basePath = window.location.pathname.endsWith('/') ? window.location.pathname : window.location.pathname + '/';
     socket = io({ path: basePath + 'socket.io/', auth: { accountId: activeAccountId } });
@@ -814,6 +823,8 @@ function initSocket() {
     socket.on('message', handleNewMessage);
     socket.on('message_ack', handleMessageAck);
     socket.on('media_downloaded', handleMediaDownloaded);
+    socket.on('chat_updated', () => scheduleChatsReload());
+    socket.on('sync_chats_indexed', () => scheduleChatsReload());
     socket.on('sync_progress', updateSyncProgress);
     socket.on('sync_complete', (data) => {
         showToast('Senkronizasyon tamamlandi: ' + data.chats + ' sohbet, ' + data.messages + ' mesaj', 'success');
