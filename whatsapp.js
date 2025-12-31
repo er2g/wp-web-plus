@@ -732,7 +732,85 @@ class WhatsAppClient {
 
             // Clean and shorten the ID for a prettier filename
             const cleanId = msgId.split('_').pop().replace(/[^a-zA-Z0-9]/g, '').substring(0, 12);
-            const filename = timestamp + '_' + cleanId + '.' + ext;
+            const fallbackFilename = timestamp + '_' + cleanId + '.' + ext;
+
+            const sanitizeIncomingFilename = (value) => {
+                if (!value) return '';
+                const raw = String(value).replace(/\\/g, '/').split('/').pop();
+                if (!raw) return '';
+                let normalized = raw;
+                try {
+                    normalized = normalized.normalize('NFKC');
+                } catch (e) {}
+
+                normalized = normalized
+                    .replace(/\p{Cc}+/gu, '')
+                    .trim()
+                    .replace(/\s+/g, ' ')
+                    .replace(/\.+/g, '.')
+                    .replace(/\.{2,}/g, '.');
+
+                normalized = normalized.replace(/[^\p{L}\p{N} _.\-()]/gu, '');
+                normalized = normalized.trim();
+
+                if (!normalized || normalized === '.' || normalized === '..') return '';
+
+                const extFromName = path.extname(normalized);
+                const baseFromName = extFromName ? normalized.slice(0, -extFromName.length) : normalized;
+
+                let resolvedExt = extFromName;
+                if (!resolvedExt) {
+                    resolvedExt = '.' + String(ext || 'bin').replace(/[^a-z0-9]/gi, '').slice(0, 10);
+                }
+
+                if (!resolvedExt || resolvedExt === '.') {
+                    resolvedExt = '.bin';
+                }
+
+                const extClean = resolvedExt.replace('.', '');
+                if (!/^[a-z0-9]{1,10}$/i.test(extClean)) {
+                    resolvedExt = '.' + String(ext || 'bin').replace(/[^a-z0-9]/gi, '').slice(0, 10) || '.bin';
+                }
+
+                let base = baseFromName.trim();
+                if (!base) base = 'dosya';
+                // Avoid unsafe traversal marker patterns for the /api/media route.
+                base = base.replace(/\.{2,}/g, '.');
+
+                const maxLen = 160;
+                const availableBaseLen = Math.max(24, maxLen - resolvedExt.length);
+                if (base.length > availableBaseLen) {
+                    base = base.slice(0, availableBaseLen).trim();
+                }
+
+                const candidate = (base + resolvedExt).trim();
+                if (!candidate || candidate === '.' || candidate === '..') return '';
+                return candidate;
+            };
+
+            const ensureUniqueFilename = (filename) => {
+                const dir = this.config.MEDIA_DIR;
+                const baseExt = path.extname(filename);
+                const baseName = baseExt ? filename.slice(0, -baseExt.length) : filename;
+                const extName = baseExt || '';
+                const basePath = path.join(dir, filename);
+                if (!fs.existsSync(basePath)) return filename;
+
+                for (let i = 2; i <= 9999; i++) {
+                    const suffix = ` (${i})`;
+                    const maxLen = 160;
+                    const availableBaseLen = Math.max(24, maxLen - extName.length - suffix.length);
+                    const trimmedBase = baseName.length > availableBaseLen ? baseName.slice(0, availableBaseLen).trim() : baseName;
+                    const candidate = `${trimmedBase}${suffix}${extName}`;
+                    const candidatePath = path.join(dir, candidate);
+                    if (!fs.existsSync(candidatePath)) return candidate;
+                }
+
+                return fallbackFilename;
+            };
+
+            const preferredOriginal = sanitizeIncomingFilename(media.filename);
+            const filename = ensureUniqueFilename(preferredOriginal || fallbackFilename);
             const localPath = path.join(this.config.MEDIA_DIR, filename);
 
             if (media.tempFilePath) {
@@ -759,7 +837,7 @@ class WhatsAppClient {
                     }
                 } catch (e) {}
             }
-            return { mediaPath: localPath, mediaUrl: CONSTANTS.MEDIA_URL_PREFIX + filename };
+            return { mediaPath: localPath, mediaUrl: CONSTANTS.MEDIA_URL_PREFIX + encodeURIComponent(filename) };
         } catch (e) {
             this.log('error', 'media', 'Save media failed: ' + e.message);
             return { mediaPath: null, mediaUrl: null };

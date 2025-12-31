@@ -13,7 +13,7 @@ router.get('/:filename', (req, res) => {
         return sendError(req, res, 400, 'Invalid filename');
     }
 
-    if (!/^[a-zA-Z0-9_.-]+$/.test(filename)) {
+    if (!/^[\p{L}\p{N} _.\-()]+$/u.test(filename)) {
         return sendError(req, res, 400, 'Invalid filename characters');
     }
 
