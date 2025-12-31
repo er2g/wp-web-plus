@@ -38,6 +38,7 @@ class WhatsAppClient {
         this.initPromise = null;
         this.settings = {
             downloadMedia: true,
+            downloadProfilePictures: false,
             syncOnConnect: true,
             maxMessagesPerChat: 1000,
             uploadToDrive: true,
@@ -216,6 +217,7 @@ class WhatsAppClient {
         const output = {};
 
         if (typeof input.downloadMedia === 'boolean') output.downloadMedia = input.downloadMedia;
+        if (typeof input.downloadProfilePictures === 'boolean') output.downloadProfilePictures = input.downloadProfilePictures;
         if (typeof input.syncOnConnect === 'boolean') output.syncOnConnect = input.syncOnConnect;
         if (typeof input.uploadToDrive === 'boolean') output.uploadToDrive = input.uploadToDrive;
         if (typeof input.downloadMediaOnSync === 'boolean') output.downloadMediaOnSync = input.downloadMediaOnSync;
@@ -270,6 +272,124 @@ class WhatsAppClient {
         return id.split('@')[0] || 'Unknown';
     }
 
+    isLocalMediaUrl(url) {
+        return typeof url === 'string' && url.startsWith(CONSTANTS.MEDIA_URL_PREFIX);
+    }
+
+    getProfilePictureBaseName(chatId) {
+        const hash = crypto.createHash('sha1').update(String(chatId || '')).digest('hex');
+        return `profile_${hash}`;
+    }
+
+    downloadUrlToBuffer(url, { timeoutMs = 15000, maxBytes = 2 * 1024 * 1024, redirectsLeft = 3 } = {}) {
+        return new Promise((resolve, reject) => {
+            let resolved = false;
+            const cleanup = (err, data) => {
+                if (resolved) return;
+                resolved = true;
+                if (err) return reject(err);
+                return resolve(data);
+            };
+
+            let parsed;
+            try {
+                parsed = new URL(url);
+            } catch (e) {
+                return cleanup(new Error('Invalid URL'));
+            }
+
+            if (parsed.protocol !== 'https:') {
+                return cleanup(new Error('Only https URLs are allowed'));
+            }
+
+            const req = https.get(parsed, (res) => {
+                const status = res.statusCode || 0;
+                const location = res.headers.location;
+
+                if (status >= 300 && status < 400 && location && redirectsLeft > 0) {
+                    res.resume();
+                    let nextUrl = location;
+                    try {
+                        nextUrl = new URL(location, parsed).toString();
+                    } catch (e) {}
+                    this.downloadUrlToBuffer(nextUrl, { timeoutMs, maxBytes, redirectsLeft: redirectsLeft - 1 })
+                        .then((data) => cleanup(null, data))
+                        .catch((err) => cleanup(err));
+                    return;
+                }
+
+                if (status < 200 || status >= 300) {
+                    res.resume();
+                    return cleanup(new Error(`HTTP ${status}`));
+                }
+
+                const chunks = [];
+                let total = 0;
+                res.on('data', (chunk) => {
+                    total += chunk.length;
+                    if (total > maxBytes) {
+                        req.destroy(new Error('Response too large'));
+                        return;
+                    }
+                    chunks.push(chunk);
+                });
+                res.on('end', () => {
+                    const contentTypeRaw = res.headers['content-type'];
+                    const contentType = typeof contentTypeRaw === 'string' ? contentTypeRaw : '';
+                    return cleanup(null, { buffer: Buffer.concat(chunks), contentType });
+                });
+                res.on('error', (err) => cleanup(err));
+            });
+
+            req.setTimeout(timeoutMs, () => req.destroy(new Error('Request timeout')));
+            req.on('error', (err) => cleanup(err));
+        });
+    }
+
+    async downloadAndSaveProfilePicture(chatId, url) {
+        if (!url) return null;
+        const parsed = new URL(url);
+        const hostname = parsed.hostname || '';
+        if (!hostname.endsWith('whatsapp.net') && !hostname.endsWith('whatsapp.com')) {
+            throw new Error('Unexpected profile picture host');
+        }
+
+        const { buffer, contentType } = await this.downloadUrlToBuffer(url, {
+            timeoutMs: 15000,
+            maxBytes: 2 * 1024 * 1024,
+            redirectsLeft: 3
+        });
+
+        if (!buffer || buffer.length === 0) {
+            throw new Error('Empty response');
+        }
+
+        const baseName = this.getProfilePictureBaseName(chatId);
+        const contentTypeClean = (contentType || '').split(';')[0].trim().toLowerCase();
+        let ext = mime.extension(contentTypeClean) || 'jpg';
+        if (ext === 'jpeg') ext = 'jpg';
+        if (!/^[a-z0-9]+$/.test(ext)) ext = 'jpg';
+
+        fs.mkdirSync(this.config.MEDIA_DIR, { recursive: true });
+
+        const filename = `${baseName}.${ext}`;
+        const filePath = path.join(this.config.MEDIA_DIR, filename);
+        const tmpPath = filePath + '.tmp';
+
+        // Clean up older versions with different extensions.
+        ['jpg', 'png', 'webp'].forEach((candidate) => {
+            const candidatePath = path.join(this.config.MEDIA_DIR, `${baseName}.${candidate}`);
+            if (candidatePath !== filePath && fs.existsSync(candidatePath)) {
+                try { fs.unlinkSync(candidatePath); } catch (e) {}
+            }
+        });
+
+        fs.writeFileSync(tmpPath, buffer);
+        fs.renameSync(tmpPath, filePath);
+
+        return CONSTANTS.MEDIA_URL_PREFIX + filename;
+    }
+
     getMessageBody(msg) {
         let body = msg.body || '';
         if (!body && msg.type === 'document') {
@@ -282,7 +402,19 @@ class WhatsAppClient {
         if (!chat || !chat.id) return null;
         const chatId = chat.id._serialized;
         if (this.chatProfileCache.has(chatId)) {
-            return this.chatProfileCache.get(chatId);
+            const cached = this.chatProfileCache.get(chatId);
+            if (cached && this.settings.downloadProfilePictures && !this.isLocalMediaUrl(cached)) {
+                try {
+                    const localUrl = await this.downloadAndSaveProfilePicture(chatId, cached);
+                    if (localUrl) {
+                        this.chatProfileCache.set(chatId, localUrl);
+                        return localUrl;
+                    }
+                } catch (e) {
+                    // Keep cached URL if download fails
+                }
+            }
+            return cached;
         }
         let url = null;
         try {
@@ -292,6 +424,18 @@ class WhatsAppClient {
         } catch (e) {
             url = null;
         }
+        if (url && this.settings.downloadProfilePictures) {
+            try {
+                const localUrl = await this.downloadAndSaveProfilePicture(chatId, url);
+                if (localUrl) {
+                    this.chatProfileCache.set(chatId, localUrl);
+                    return localUrl;
+                }
+            } catch (e) {
+                // Fall back to remote URL
+            }
+        }
+
         this.chatProfileCache.set(chatId, url || null);
         return url || null;
     }
@@ -957,14 +1101,23 @@ class WhatsAppClient {
                 } catch (e) {}
             }
 
+            let resolvedUrl = url || null;
+            if (resolvedUrl && this.settings.downloadProfilePictures) {
+                try {
+                    resolvedUrl = await this.downloadAndSaveProfilePicture(chatId, resolvedUrl);
+                } catch (e) {
+                    // Keep remote URL if download fails
+                }
+            }
+
             // Update cache
-            this.chatProfileCache.set(chatId, url || null);
+            this.chatProfileCache.set(chatId, resolvedUrl || null);
 
             // Update Database with specific UPDATE to avoid overwriting other fields if row exists
             // We only want to update the profile picture and updated_at
-            this.db.db.prepare('UPDATE chats SET profile_pic = ?, updated_at = datetime(\'now\') WHERE chat_id = ?').run(url, chatId);
+            this.db.db.prepare('UPDATE chats SET profile_pic = ?, updated_at = datetime(\'now\') WHERE chat_id = ?').run(resolvedUrl, chatId);
 
-            return { success: true, url };
+            return { success: true, url: resolvedUrl };
         } catch (e) {
             this.log('error', 'profile_pic', 'Failed to refresh picture for ' + chatId + ': ' + e.message);
             return { success: false, error: e.message };

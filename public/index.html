@@ -177,14 +177,17 @@
                         <div class="chat-name" id="chatName">Sohbet Adi</div>
                         <div class="chat-status" id="chatStatus">son gorulme yakin zamanda</div>
                     </div>
-                    <div class="header-actions">
-                        <button class="icon-btn" onclick="searchInChat()" title="Ara">
-                            <i class="bi bi-search"></i>
-                        </button>
-                        <div class="dropdown">
-                            <button class="icon-btn" onclick="toggleDropdown('chatMenu')">
-                                <i class="bi bi-three-dots-vertical"></i>
-                            </button>
+	                    <div class="header-actions">
+	                        <button class="icon-btn" onclick="searchInChat()" title="Ara">
+	                            <i class="bi bi-search"></i>
+	                        </button>
+	                        <button class="icon-btn active" id="toggleChatMetaBtn" onclick="toggleChatMetaPanel()" title="Notlar/Etiketler">
+	                            <i class="bi bi-tags"></i>
+	                        </button>
+	                        <div class="dropdown">
+	                            <button class="icon-btn" onclick="toggleDropdown('chatMenu')">
+	                                <i class="bi bi-three-dots-vertical"></i>
+	                            </button>
                             <div class="dropdown-menu" id="chatMenu">
                                 <div class="dropdown-item" onclick="refreshChat()">
                                     <i class="bi bi-arrow-clockwise"></i> Yenile
@@ -355,20 +358,28 @@
             </div>
 
             <!-- Sync Section -->
-            <div class="settings-section">
-                <div class="settings-section-title">Senkronizasyon</div>
-                <div class="settings-item">
-                    <i class="icon bi bi-download"></i>
-                    <div class="info">
-                        <div class="title">Medyalari Indir</div>
-                        <div class="subtitle">Resim ve videolari kaydet</div>
+                <div class="settings-section">
+                    <div class="settings-section-title">Senkronizasyon</div>
+                    <div class="settings-item">
+                        <i class="icon bi bi-download"></i>
+                        <div class="info">
+                            <div class="title">Medyalari Indir</div>
+                            <div class="subtitle">Resim ve videolari kaydet</div>
+                        </div>
+                        <div class="toggle active" id="toggleDownloadMedia" onclick="toggleSetting('downloadMedia')"></div>
                     </div>
-                    <div class="toggle active" id="toggleDownloadMedia" onclick="toggleSetting('downloadMedia')"></div>
-                </div>
-                <div class="settings-item">
-                    <i class="icon bi bi-arrow-repeat"></i>
-                    <div class="info">
-                        <div class="title">Otomatik Senkronize</div>
+                    <div class="settings-item">
+                        <i class="icon bi bi-person-bounding-box"></i>
+                        <div class="info">
+                            <div class="title">Profil Fotografini Indir</div>
+                            <div class="subtitle">Sohbet profil resimlerini kaydet</div>
+                        </div>
+                        <div class="toggle" id="toggleDownloadProfilePictures" onclick="toggleSetting('downloadProfilePictures')"></div>
+                    </div>
+                    <div class="settings-item">
+                        <i class="icon bi bi-arrow-repeat"></i>
+                        <div class="info">
+                            <div class="title">Otomatik Senkronize</div>
                         <div class="subtitle">Baglandiginda mesajlari cek</div>
                     </div>
                     <div class="toggle active" id="toggleSyncOnConnect" onclick="toggleSetting('syncOnConnect')"></div>

@@ -626,6 +626,10 @@ body.compact .message-bubble .message-text {
     border-bottom: 1px solid var(--border-color);
 }
 
+#activeChatView.meta-collapsed .chat-meta-panel {
+    display: none;
+}
+
 .meta-section {
     flex: 1;
     min-width: 0;

@@ -22,6 +22,7 @@ let currentChatTags = [];
 let currentChatNotes = [];
 let settings = {
     downloadMedia: true,
+    downloadProfilePictures: false,
     syncOnConnect: true,
     uploadToDrive: false,
     notifications: true,
@@ -34,6 +35,7 @@ let uiPreferences = {
     fontSize: '14.2',
     compactMode: false,
     bubbleStyle: 'rounded',
+    chatMetaCollapsed: false,
     appSurfaceOpacity: 100,
     desktopBackgroundType: 'default',
     desktopBackgroundImage: '',
@@ -158,6 +160,7 @@ function loadLocalPreferences() {
     uiPreferences.fontSize = localStorage.getItem('uiFontSize') || uiPreferences.fontSize;
     uiPreferences.compactMode = localStorage.getItem('uiCompactMode') === 'true';
     uiPreferences.bubbleStyle = localStorage.getItem('uiBubbleStyle') || uiPreferences.bubbleStyle;
+    uiPreferences.chatMetaCollapsed = localStorage.getItem('uiChatMetaCollapsed') === 'true';
 
     // New fields
     uiPreferences.appSurfaceOpacity = localStorage.getItem('uiAppSurfaceOpacity') || uiPreferences.appSurfaceOpacity;
@@ -190,6 +193,7 @@ function applyCustomizations() {
     applyFontSize(uiPreferences.fontSize);
     applyCompactMode(uiPreferences.compactMode);
     applyBubbleStyle(uiPreferences.bubbleStyle);
+    applyChatMetaPanelSetting();
     applyBackgroundSettings();
     updateCustomizationUI();
 }
@@ -201,6 +205,7 @@ async function saveUserPreferences() {
     localStorage.setItem('uiFontSize', uiPreferences.fontSize);
     localStorage.setItem('uiCompactMode', uiPreferences.compactMode);
     localStorage.setItem('uiBubbleStyle', uiPreferences.bubbleStyle);
+    localStorage.setItem('uiChatMetaCollapsed', uiPreferences.chatMetaCollapsed);
 
     localStorage.setItem('uiAppSurfaceOpacity', uiPreferences.appSurfaceOpacity);
     localStorage.setItem('uiDesktopBackgroundType', uiPreferences.desktopBackgroundType);
@@ -415,6 +420,23 @@ function applyAppSurfaceOpacity(opacity) {
     const parsed = Number.parseInt(opacity, 10);
     const clamped = Number.isFinite(parsed) ? Math.max(0, Math.min(100, parsed)) : 100;
     document.documentElement.style.setProperty('--app-surface-opacity', String(clamped) + '%');
+}
+
+function applyChatMetaPanelSetting() {
+    const activeChatView = document.getElementById('activeChatView');
+    if (activeChatView) {
+        activeChatView.classList.toggle('meta-collapsed', Boolean(uiPreferences.chatMetaCollapsed));
+    }
+    const toggleBtn = document.getElementById('toggleChatMetaBtn');
+    if (toggleBtn) {
+        toggleBtn.classList.toggle('active', !uiPreferences.chatMetaCollapsed);
+    }
+}
+
+function toggleChatMetaPanel() {
+    uiPreferences.chatMetaCollapsed = !uiPreferences.chatMetaCollapsed;
+    applyChatMetaPanelSetting();
+    saveUserPreferences();
 }
 
 function updateDesktopBackgroundType(type) {
@@ -1174,6 +1196,11 @@ async function loadSettings() {
     try {
         const data = await api('api/settings');
         settings = { ...settings, ...data };
+        // UI-only flags
+        const localNotifications = localStorage.getItem('uiNotifications');
+        if (localNotifications !== null) settings.notifications = localNotifications === 'true';
+        const localSounds = localStorage.getItem('uiSounds');
+        if (localSounds !== null) settings.sounds = localSounds === 'true';
         updateSettingsUI();
     } catch (err) {
         console.error('Settings load error:', err);
@@ -1258,6 +1285,7 @@ function setupChatMessagesScroll() {
 function updateSettingsUI() {
     const toggles = {
         'toggleDownloadMedia': settings.downloadMedia,
+        'toggleDownloadProfilePictures': settings.downloadProfilePictures,
         'toggleSyncOnConnect': settings.syncOnConnect,
         'toggleUploadToDrive': settings.uploadToDrive,
         'toggleNotifications': settings.notifications,
@@ -1271,11 +1299,29 @@ function updateSettingsUI() {
     });
 }
 
+function getWhatsAppSettingsPayload() {
+    return {
+        downloadMedia: settings.downloadMedia,
+        downloadProfilePictures: settings.downloadProfilePictures,
+        syncOnConnect: settings.syncOnConnect,
+        uploadToDrive: settings.uploadToDrive,
+        ghostMode: settings.ghostMode
+    };
+}
+
 async function toggleSetting(key) {
     settings[key] = !settings[key];
     updateSettingsUI();
     try {
-        await api('api/settings', 'POST', settings);
+        if (key === 'notifications') {
+            localStorage.setItem('uiNotifications', String(settings.notifications));
+            return;
+        }
+        if (key === 'sounds') {
+            localStorage.setItem('uiSounds', String(settings.sounds));
+            return;
+        }
+        await api('api/settings', 'POST', getWhatsAppSettingsPayload());
     } catch (err) {
         showToast('Ayar kaydedilemedi: ' + err.message, 'error');
     }
@@ -3244,6 +3290,7 @@ Object.assign(window, {
     updateFontSize,
     toggleCompactMode,
     updateBubbleStyle,
+    toggleChatMetaPanel,
     updateAppSurfaceOpacity,
     updateDesktopBackgroundType,
     updateDesktopBackgroundImage,

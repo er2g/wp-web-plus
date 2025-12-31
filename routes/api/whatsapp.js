@@ -26,6 +26,7 @@ const optionalPositiveInt = z.preprocess(
 
 const whatsappSettingsSchema = z.object({
     downloadMedia: booleanLike.optional(),
+    downloadProfilePictures: booleanLike.optional(),
     syncOnConnect: booleanLike.optional(),
     maxMessagesPerChat: optionalPositiveInt.refine((value) => value === undefined || value <= 5000, {
         message: 'maxMessagesPerChat too large'
