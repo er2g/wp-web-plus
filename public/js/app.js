@@ -1060,9 +1060,7 @@ async function loadInitialData() {
         loadChats();
         loadAllMessages();
         loadTags();
-        if (status.whatsapp && status.whatsapp.syncProgress && status.whatsapp.syncProgress.syncing) {
-            updateSyncProgress(status.whatsapp.syncProgress);
-        }
+        await loadSyncProgress();
     } catch (err) {
         console.error('Initial load error:', err);
         showToast('Veri yuklenemedi: ' + err.message, 'error');
@@ -2001,22 +1999,55 @@ async function disconnect() {
 async function startSync() {
     try {
         showToast('Senkronizasyon baslatiliyor...', 'info');
-        const result = await api('api/sync', 'POST');
-        if (result.success) {
-            showToast('Senkronizasyon tamamlandi: ' + result.chats + ' sohbet, ' + result.messages + ' mesaj', 'success');
-            loadChats();
-            loadAllMessages();
-        } else {
+        const result = await api('api/sync/full', 'POST');
+        if (!result.success) {
             showToast('Senkronizasyon hatasi: ' + result.error, 'error');
+            return;
         }
+        scheduleSyncProgressPoll();
     } catch (err) {
         showToast('Hata: ' + err.message, 'error');
     }
 }
 
+let syncProgressPoller = null;
+
+function scheduleSyncProgressPoll() {
+    if (syncProgressPoller) {
+        clearInterval(syncProgressPoller);
+    }
+    syncProgressPoller = setInterval(loadSyncProgress, 5000);
+    loadSyncProgress();
+}
+
+async function loadSyncProgress() {
+    try {
+        const progress = await api('api/sync/progress');
+        updateSyncProgress(progress);
+    } catch (e) {
+        console.warn('Failed to load sync progress', e);
+    }
+}
+
 function updateSyncProgress(progress) {
-    // Can show a progress indicator if needed
+    if (!progress || progress.status === 'idle') return;
     console.log('Sync progress:', progress);
+
+    if (progress.status === 'done') {
+        if (syncProgressPoller) {
+            clearInterval(syncProgressPoller);
+            syncProgressPoller = null;
+        }
+        showToast('Senkronizasyon tamamlandi', 'success');
+        loadChats();
+        loadAllMessages();
+    } else if (progress.status === 'failed') {
+        if (syncProgressPoller) {
+            clearInterval(syncProgressPoller);
+            syncProgressPoller = null;
+        }
+        showToast('Senkronizasyon hatasi: ' + (progress.error || 'Bilinmeyen hata'), 'error');
+    }
 }
 
 // Chat actions
