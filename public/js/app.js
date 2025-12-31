@@ -1356,12 +1356,13 @@ function renderChatList(chatList) {
     container.innerHTML = chatList.map(c => {
         const isActive = currentChat === c.chat_id;
         const hasUnread = c.unread_count > 0;
+        const displayName = getChatTitle(c.chat_id, c.name);
 
-        return '<div class="chat-item' + (isActive ? ' active' : '') + (hasUnread ? ' unread' : '') + '" onclick="selectChat(\'' + c.chat_id + '\', \'' + escapeHtml(c.name) + '\')">' +
+        return '<div class="chat-item' + (isActive ? ' active' : '') + (hasUnread ? ' unread' : '') + '" onclick="selectChat(\'' + c.chat_id + '\')">' +
             renderChatAvatar(c) +
             '<div class="chat-info">' +
                 '<div class="top-row">' +
-                    '<div class="chat-name">' + escapeHtml(c.name) + '</div>' +
+                    '<div class="chat-name">' + escapeHtml(displayName) + '</div>' +
                     '<span class="chat-time">' + formatTime(c.last_message_time) + '</span>' +
                 '</div>' +
                 '<div class="chat-preview">' +
@@ -1404,7 +1405,7 @@ function renderMessagesList() {
 function renderMessageListItem(message) {
     const isMine = message.is_from_me === 1 || message.is_from_me === true;
     const direction = isMine ? '<i class="bi bi-arrow-up-right" style="color: var(--accent)"></i>' : '<i class="bi bi-arrow-down-left" style="color: #34b7f1"></i>';
-    const displayName = getDisplayNameFromMessage(message);
+    const displayName = isGroupChatId(message.chat_id) ? getDisplayNameFromMessage(message) : 'DM';
     const previewText = getMessagePreviewText(message);
 
     return '<div class="chat-item" onclick="openChatForMessage(\'' + (message.chat_id || '') + '\')">' +
@@ -1458,6 +1459,8 @@ function renderChatMessages(messages, options = {}) {
 
     // Sort messages chronologically
     const sorted = [...messages].sort((a, b) => a.timestamp - b.timestamp);
+
+    const showSenderNames = isGroupChatId(currentChat);
 
     container.innerHTML = sorted.map(m => {
         const isMine = m.is_from_me === 1 || m.is_from_me === true;
@@ -1525,7 +1528,7 @@ function renderChatMessages(messages, options = {}) {
         }
 
         const displayName = getDisplayNameFromMessage(m);
-        const senderHtml = (!isMine && displayName) ?
+        const senderHtml = (!isMine && displayName && showSenderNames) ?
             '<div class="sender-name">' + escapeHtml(formatSenderName(displayName)) + '</div>' : '';
 
         const checkIcon = isMine && !isSystem ? getMessageStatusIcon(m.ack) : '';
@@ -1554,7 +1557,7 @@ function renderChatMessages(messages, options = {}) {
 }
 
 // Chat Selection
-function selectChat(chatId, name) {
+function selectChat(chatId) {
     currentChat = chatId;
     currentChatTags = [];
     currentChatNotes = [];
@@ -1580,7 +1583,7 @@ function selectChat(chatId, name) {
     activeChatView.style.flexDirection = 'column';
     activeChatView.style.height = '100%';
 
-    chatName.textContent = name;
+    chatName.textContent = getChatTitle(chatId, selectedChat?.name || '');
     chatStatus.textContent = 'son gorulme yakin zamanda';
     if (chatAvatar) {
         chatAvatar.innerHTML = selectedChat ? renderAvatarContent(selectedChat) : renderAvatarContent({ chat_id: chatId });
@@ -1619,7 +1622,7 @@ function openChatForMessage(chatId) {
     if (!chatId) return;
     const chat = chats.find(c => c.chat_id === chatId);
     if (chat) {
-        selectChat(chatId, chat.name);
+        selectChat(chatId);
     }
 }
 
@@ -1819,8 +1822,13 @@ function handleNewMessage(msg) {
     console.log('New message received:', msg, 'currentChat:', currentChat, 'msg.chatId:', msg.chatId);
 
     if (settings.notifications) {
-        const displayName = getDisplayNameFromMessage(msg);
-        showToast('Yeni mesaj: ' + formatSenderName(displayName), 'info');
+        const incomingChatId = msg.chatId || msg.chat_id;
+        if (isGroupChatId(incomingChatId)) {
+            const displayName = getDisplayNameFromMessage(msg);
+            showToast('Yeni mesaj: ' + formatSenderName(displayName), 'info');
+        } else {
+            showToast('Yeni mesaj', 'info');
+        }
     }
 
     const incomingChatId = msg.chatId || msg.chat_id;
@@ -1920,7 +1928,8 @@ function appendNewMessage(msg) {
     }
 
     const displayName = getDisplayNameFromMessage(msg);
-    const senderHtml = (!isMine && displayName) ?
+    const showSenderNames = isGroupChatId(msg.chatId || msg.chat_id || currentChat);
+    const senderHtml = (!isMine && displayName && showSenderNames) ?
         '<div class="sender-name">' + escapeHtml(formatSenderName(displayName)) + '</div>' : '';
 
     const checkIcon = isMine && !isSystem ? getMessageStatusIcon(msg.ack || 0) : '';
@@ -3212,6 +3221,15 @@ function getMessagePreviewText(message) {
     if (['image', 'video', 'audio', 'ptt', 'sticker'].includes(type)) return '[Medya]';
     if (type && type !== 'chat') return '[Sistem: ' + type + ']';
     return '[Bos mesaj]';
+}
+
+function isGroupChatId(chatId) {
+    return typeof chatId === 'string' && chatId.includes('@g.us');
+}
+
+function getChatTitle(chatId, name) {
+    if (isGroupChatId(chatId)) return name || 'Grup';
+    return 'DM';
 }
 
 function escapeHtml(text) {
