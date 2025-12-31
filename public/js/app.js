@@ -1356,13 +1356,12 @@ function renderChatList(chatList) {
     container.innerHTML = chatList.map(c => {
         const isActive = currentChat === c.chat_id;
         const hasUnread = c.unread_count > 0;
-        const displayName = getChatTitle(c.chat_id, c.name);
 
-        return '<div class="chat-item' + (isActive ? ' active' : '') + (hasUnread ? ' unread' : '') + '" onclick="selectChat(\'' + c.chat_id + '\')">' +
+        return '<div class="chat-item' + (isActive ? ' active' : '') + (hasUnread ? ' unread' : '') + '" onclick="selectChat(\'' + c.chat_id + '\', \'' + escapeHtml(c.name) + '\')">' +
             renderChatAvatar(c) +
             '<div class="chat-info">' +
                 '<div class="top-row">' +
-                    '<div class="chat-name">' + escapeHtml(displayName) + '</div>' +
+                    '<div class="chat-name">' + escapeHtml(c.name) + '</div>' +
                     '<span class="chat-time">' + formatTime(c.last_message_time) + '</span>' +
                 '</div>' +
                 '<div class="chat-preview">' +
@@ -1405,7 +1404,7 @@ function renderMessagesList() {
 function renderMessageListItem(message) {
     const isMine = message.is_from_me === 1 || message.is_from_me === true;
     const direction = isMine ? '<i class="bi bi-arrow-up-right" style="color: var(--accent)"></i>' : '<i class="bi bi-arrow-down-left" style="color: #34b7f1"></i>';
-    const displayName = isGroupChatId(message.chat_id) ? getDisplayNameFromMessage(message) : 'DM';
+    const displayName = getDisplayNameFromMessage(message);
     const previewText = getMessagePreviewText(message);
 
     return '<div class="chat-item" onclick="openChatForMessage(\'' + (message.chat_id || '') + '\')">' +
@@ -1557,7 +1556,7 @@ function renderChatMessages(messages, options = {}) {
 }
 
 // Chat Selection
-function selectChat(chatId) {
+function selectChat(chatId, name) {
     currentChat = chatId;
     currentChatTags = [];
     currentChatNotes = [];
@@ -1583,7 +1582,7 @@ function selectChat(chatId) {
     activeChatView.style.flexDirection = 'column';
     activeChatView.style.height = '100%';
 
-    chatName.textContent = getChatTitle(chatId, selectedChat?.name || '');
+    chatName.textContent = name;
     chatStatus.textContent = 'son gorulme yakin zamanda';
     if (chatAvatar) {
         chatAvatar.innerHTML = selectedChat ? renderAvatarContent(selectedChat) : renderAvatarContent({ chat_id: chatId });
@@ -1622,7 +1621,7 @@ function openChatForMessage(chatId) {
     if (!chatId) return;
     const chat = chats.find(c => c.chat_id === chatId);
     if (chat) {
-        selectChat(chatId);
+        selectChat(chatId, chat.name);
     }
 }
 
@@ -1822,13 +1821,8 @@ function handleNewMessage(msg) {
     console.log('New message received:', msg, 'currentChat:', currentChat, 'msg.chatId:', msg.chatId);
 
     if (settings.notifications) {
-        const incomingChatId = msg.chatId || msg.chat_id;
-        if (isGroupChatId(incomingChatId)) {
-            const displayName = getDisplayNameFromMessage(msg);
-            showToast('Yeni mesaj: ' + formatSenderName(displayName), 'info');
-        } else {
-            showToast('Yeni mesaj', 'info');
-        }
+        const displayName = getDisplayNameFromMessage(msg);
+        showToast('Yeni mesaj: ' + formatSenderName(displayName), 'info');
     }
 
     const incomingChatId = msg.chatId || msg.chat_id;
@@ -3225,11 +3219,6 @@ function getMessagePreviewText(message) {
 
 function isGroupChatId(chatId) {
     return typeof chatId === 'string' && chatId.includes('@g.us');
-}
-
-function getChatTitle(chatId, name) {
-    if (isGroupChatId(chatId)) return name || 'Grup';
-    return 'DM';
 }
 
 function escapeHtml(text) {
