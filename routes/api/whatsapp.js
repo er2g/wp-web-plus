@@ -87,6 +87,19 @@ router.post('/disconnect', async (req, res) => {
 
 router.post('/sync', async (req, res) => {
     try {
+        const mode = req.body?.mode || req.query?.mode;
+        if (mode && mode !== 'full_all') {
+            return sendError(req, res, 400, 'Unsupported sync mode');
+        }
+        const result = await req.account.whatsapp.fullSync();
+        res.json(result);
+    } catch (error) {
+        return sendError(req, res, 500, error.message);
+    }
+});
+
+router.post('/sync/full', async (req, res) => {
+    try {
         const result = await req.account.whatsapp.fullSync();
         res.json(result);
     } catch (error) {
@@ -95,7 +108,7 @@ router.post('/sync', async (req, res) => {
 });
 
 router.get('/sync/progress', (req, res) => {
-    res.json(req.account.whatsapp.getSyncProgress());
+    res.json(req.account.whatsapp.getFullSyncProgress());
 });
 
 router.get('/settings', requireRole(['admin', 'manager']), (req, res) => {

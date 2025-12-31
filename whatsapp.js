@@ -1474,10 +1474,41 @@ class WhatsAppClient {
     }
 
     async fullSync() {
-        if (this.syncProgress.syncing) {
-            return { success: false, error: 'Sync already in progress' };
+        return this.startFullSyncAll();
+    }
+
+    async startFullSyncAll() {
+        if (this.fullSyncPromise) {
+            return { success: true, runId: this.fullSyncRunId, running: true };
         }
 
+        const existingRun = this.db.syncRuns.getRunning.get();
+        if (!this.acquireFullSyncLock()) {
+            return { success: true, runId: existingRun?.id || null, running: true };
+        }
+
+        this.startFullSyncLockRenewal();
+        let runId = existingRun?.id || null;
+        if (!runId) {
+            const totals = JSON.stringify({ chatsTotal: 0, chatsIndexed: 0, chatsBackfilled: 0 });
+            runId = this.db.syncRuns.create.run('running', 'init', null, totals).lastInsertRowid;
+        }
+
+        this.fullSyncRunId = runId;
+        this.fullSyncPromise = this.executeFullSyncRun(runId)
+            .catch((error) => {
+                this.log('error', 'sync', 'Full sync failed: ' + error.message);
+            })
+            .finally(() => {
+                this.releaseFullSyncLock();
+                this.fullSyncPromise = null;
+                this.fullSyncRunId = null;
+            });
+
+        return { success: true, runId, running: true };
+    }
+
+    async executeFullSyncRun(runId) {
         try {
             this.contactCache.clear();
             const existingState = this.loadSyncState();
@@ -1534,15 +1565,28 @@ class WhatsAppClient {
                 this.emit('sync_chats_indexed', { chats: chats.length });
             }
 
-            // Phase 2: Backfill recent messages per chat (media/profile pics download continues in background).
-            this.syncProgress.current = 0;
-            this.syncProgress.total = chats.length;
-            this.syncProgress.phase = 'messages';
-            this.syncProgress.chat = 'Syncing messages...';
-            this.emitProgress();
+                    try {
+                        await this.backfillChatHistory(chat, runId, config, cutoffMs);
+                        totals.chatsBackfilled += 1;
+                        this.db.syncRuns.updateTotals.run(JSON.stringify(totals), runId);
+                    } catch (e) {
+                        this.db.chatSyncState.upsert.run(
+                            chatId,
+                            runId,
+                            'failed',
+                            existing?.cursor_type || null,
+                            existing?.cursor_value || null,
+                            existing?.oldest_msg_id || null,
+                            existing?.newest_msg_id || null,
+                            existing?.done_history ? 1 : 0,
+                            e.message
+                        );
+                        this.log('warn', 'sync', `Chat backfill failed for ${chatId}: ${e.message}`);
+                    }
+                }
+            })());
 
-            let totalMessages = 0;
-            let processed = 0;
+            await Promise.all(workers);
 
             const processChunk = async (chunk) => {
                 const results = await Promise.all(chunk.map(chat => this.syncChat(chat)));
@@ -1559,9 +1603,7 @@ class WhatsAppClient {
                     this.syncProgress.chat = chunk[0].name || chunk[0].id.user || 'Syncing...';
                     this.emitProgress();
                 }
-                const chunkMessages = await processChunk(chunk);
-                totalMessages += chunkMessages;
-                processed += chunk.length;
+            }
 
                 const lastChunkChat = chunk[chunk.length - 1];
                 const lastChunkChatId = lastChunkChat?.id?._serialized || null;
@@ -1580,9 +1622,25 @@ class WhatsAppClient {
                 this.syncProgress.current = processed;
                 this.emitProgress();
 
-                // Yield to event loop to prevent blocking
-                await new Promise(resolve => setImmediate(resolve));
+                this.db.chats.upsert.run(
+                    chatId,
+                    chat.name || this.extractPhoneFromId(chat.id.user),
+                    chat.isGroup ? 1 : 0,
+                    profilePic,
+                    String(lastPreview || '').substring(0, 100),
+                    lastAt,
+                    chat.unreadCount || 0
+                );
+            });
+
+            syncTx();
+
+            for (const msg of filteredMessages) {
+                if (msg.hasMedia || msg.mimetype || ['image', 'video', 'audio', 'ptt', 'document', 'sticker'].includes(msg.type)) {
+                    this.db.mediaTasks.upsert.run(msg.id._serialized, chatId);
+                }
             }
+            this.db.profilePicTasks.upsert.run(chatId);
 
             this.contactCache.clear();
             this.syncProgress = { syncing: false, current: 0, total: 0, chat: '', phase: 'done' };
@@ -1591,15 +1649,147 @@ class WhatsAppClient {
             this.log('info', 'sync', 'Sync complete: ' + chats.length + ' chats, ' + totalMessages + ' messages');
             this.clearSyncState();
 
-            // Start background queues after sync completes.
-            if (this.profilePicQueue.length) {
-                this.processProfilePicQueue();
-            }
-            if (this.mediaQueue.length) {
-                this.processMediaQueue();
+            if (!cursor) {
+                break;
             }
 
-            return { success: true, chats: chats.length, messages: totalMessages };
+            await new Promise(resolve => setImmediate(resolve));
+        }
+
+        this.db.chatSyncState.upsert.run(
+            chatId,
+            runId,
+            'done',
+            state.cursor_type || null,
+            cursor,
+            oldestMsgId,
+            newestMsgId,
+            1,
+            null
+        );
+    }
+
+    async fetchMessagesWithRetry(chat, cursor, limit) {
+        let lastError = null;
+        for (let attempt = 1; attempt <= CONSTANTS.SYNC_CHAT_MAX_RETRIES; attempt++) {
+            try {
+                const options = { limit };
+                if (cursor) {
+                    options.before = cursor;
+                }
+                return await Promise.race([
+                    chat.fetchMessages(options),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('fetchMessages timeout')), 120000))
+                ]);
+            } catch (e) {
+                lastError = e;
+                const baseDelay = Math.min(
+                    CONSTANTS.SYNC_CHAT_BACKOFF_BASE_MS * (2 ** (attempt - 1)),
+                    CONSTANTS.SYNC_CHAT_BACKOFF_MAX_MS
+                );
+                const jitter = 0.7 + Math.random() * 0.6;
+                const delay = Math.round(baseDelay * jitter);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+        }
+        throw lastError || new Error('fetchMessages failed');
+    }
+
+    async processMediaTasks(config) {
+        const concurrency = Math.max(1, config.mediaConcurrency);
+        const maxAttempts = Math.max(1, config.maxMediaAttempts);
+
+        while (true) {
+            const tasks = this.db.mediaTasks.getRunnable.all(concurrency);
+            if (!tasks.length) break;
+
+            await Promise.all(tasks.map(async (task) => {
+                this.db.mediaTasks.markRunning.run(task.message_id);
+                try {
+                    const msg = await Promise.race([
+                        this.client.getMessageById(task.message_id),
+                        new Promise((_, reject) => setTimeout(() => reject(new Error('Message fetch timeout')), 20000))
+                    ]);
+                    if (!msg || !msg.hasMedia) {
+                        throw new Error('Message has no media');
+                    }
+                    const media = await this.downloadMediaWithRetry(msg, 3, CONSTANTS.DEFAULT_DOWNLOAD_TIMEOUT_MS);
+                    if (!media) {
+                        throw new Error('Media download returned null');
+                    }
+                    const timestamp = msg.timestamp ? msg.timestamp * 1000 : Date.now();
+                    const mediaResult = await this.saveMedia(media, task.message_id, timestamp);
+                    this.db.db.prepare('UPDATE messages SET media_path = ?, media_url = ?, media_mimetype = ? WHERE message_id = ?')
+                        .run(mediaResult.mediaPath, mediaResult.mediaUrl, media.mimetype, task.message_id);
+                    this.db.mediaTasks.markDone.run(task.attempts + 1, task.message_id);
+                } catch (e) {
+                    const attempts = (task.attempts || 0) + 1;
+                    if (attempts >= maxAttempts) {
+                        this.db.mediaTasks.markFailed.run(attempts, e.message, task.message_id);
+                    } else {
+                        const delay = Math.min(CONSTANTS.BACKOFF_MULTIPLIER_MS * (2 ** (attempts - 1)), 300000);
+                        const jitter = 0.7 + Math.random() * 0.6;
+                        const nextAttemptAt = new Date(Date.now() + Math.round(delay * jitter)).toISOString();
+                        this.db.mediaTasks.reschedule.run(attempts, nextAttemptAt, e.message, task.message_id);
+                    }
+                }
+            }));
+        }
+    }
+
+    async processProfilePicTasks(config) {
+        const concurrency = Math.max(1, config.profileConcurrency);
+        const maxAttempts = Math.max(1, config.maxProfileAttempts);
+
+        while (true) {
+            const tasks = this.db.profilePicTasks.getRunnable.all(concurrency);
+            if (!tasks.length) break;
+
+            await Promise.all(tasks.map(async (task) => {
+                this.db.profilePicTasks.markRunning.run(task.chat_id);
+                try {
+                    const url = await Promise.race([
+                        this.client.getProfilePicUrl(task.chat_id),
+                        new Promise((_, reject) => setTimeout(() => reject(new Error('Profile picture fetch timeout')), 15000))
+                    ]);
+                    if (!url) {
+                        throw new Error('No profile picture URL');
+                    }
+
+                    let resolvedUrl = url;
+                    if (this.settings.downloadProfilePictures) {
+                        resolvedUrl = await this.downloadAndSaveProfilePicture(task.chat_id, url);
+                    }
+
+                    this.db.db.prepare('UPDATE chats SET profile_pic = ?, updated_at = datetime(\'now\') WHERE chat_id = ?')
+                        .run(resolvedUrl, task.chat_id);
+
+                    this.profilePicQueueIds.delete(task.chat_id);
+                    this.db.profilePicTasks.markDone.run(task.attempts + 1, task.chat_id);
+                } catch (e) {
+                    const attempts = (task.attempts || 0) + 1;
+                    if (attempts >= maxAttempts) {
+                        this.db.profilePicTasks.markFailed.run(attempts, e.message, task.chat_id);
+                    } else {
+                        const delay = Math.min(CONSTANTS.BACKOFF_MULTIPLIER_MS * (2 ** (attempts - 1)), 300000);
+                        const jitter = 0.7 + Math.random() * 0.6;
+                        const nextAttemptAt = new Date(Date.now() + Math.round(delay * jitter)).toISOString();
+                        this.db.profilePicTasks.reschedule.run(attempts, nextAttemptAt, e.message, task.chat_id);
+                    }
+                }
+            }));
+        }
+    }
+
+    getFullSyncProgress() {
+        const run = this.db.syncRuns.getRunning.get() || this.db.syncRuns.getLatest.get();
+        if (!run) {
+            return { status: 'idle' };
+        }
+
+        let totals = {};
+        try {
+            totals = run.totals_json ? JSON.parse(run.totals_json) : {};
         } catch (e) {
             this.syncProgress = { syncing: false, current: 0, total: 0, chat: '', phase: 'error' };
             this.emit('sync_progress', this.syncProgress);
@@ -1613,6 +1803,34 @@ class WhatsAppClient {
             });
             return { success: false, error: e.message };
         }
+
+        const chatsTotal = totals.chatsTotal || this.db.chatSyncState.countByRun.get(run.id).total;
+        const chatsIndexed = totals.chatsIndexed || 0;
+        const chatsBackfilled = totals.chatsBackfilled || this.db.chatSyncState.countDoneHistory.get(run.id).total;
+
+        const mediaCounts = this.db.mediaTasks.countByStatus.all();
+        const profileCounts = this.db.profilePicTasks.countByStatus.all();
+
+        const formatCounts = (rows) => rows.reduce((acc, row) => {
+            acc[row.status] = row.total;
+            return acc;
+        }, {});
+
+        return {
+            runId: run.id,
+            status: run.status,
+            phase: run.phase,
+            startedAt: run.started_at,
+            updatedAt: run.updated_at,
+            error: run.error,
+            chats: {
+                total: chatsTotal,
+                indexed: chatsIndexed,
+                backfilled: chatsBackfilled
+            },
+            media: formatCounts(mediaCounts),
+            profilePics: formatCounts(profileCounts)
+        };
     }
 
     updateSettings(newSettings) {
