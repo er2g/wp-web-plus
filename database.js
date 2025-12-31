@@ -238,6 +238,16 @@ function createDatabase(config) {
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS whatsapp_sync_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        phase TEXT NOT NULL,
+        last_chat_id TEXT,
+        last_message_ts INTEGER,
+        attempt_count INTEGER DEFAULT 0,
+        last_error TEXT,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id);
     CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
     CREATE INDEX IF NOT EXISTS idx_messages_chat_timestamp ON messages(chat_id, timestamp);
@@ -363,6 +373,23 @@ function createDatabase(config) {
                 if (!columnExists('webhooks', 'last_duration_ms')) {
                     db.exec('ALTER TABLE webhooks ADD COLUMN last_duration_ms INTEGER');
                 }
+            }
+        },
+        {
+            version: 10,
+            name: 'add_whatsapp_sync_state',
+            apply: () => {
+                db.exec(`
+                    CREATE TABLE IF NOT EXISTS whatsapp_sync_state (
+                        id INTEGER PRIMARY KEY CHECK (id = 1),
+                        phase TEXT NOT NULL,
+                        last_chat_id TEXT,
+                        last_message_ts INTEGER,
+                        attempt_count INTEGER DEFAULT 0,
+                        last_error TEXT,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    );
+                `);
             }
         }
     ];
@@ -680,6 +707,23 @@ function createDatabase(config) {
         `)
     };
 
+    const whatsappSyncState = {
+        get: db.prepare('SELECT * FROM whatsapp_sync_state WHERE id = 1'),
+        upsert: db.prepare(`
+            INSERT INTO whatsapp_sync_state
+                (id, phase, last_chat_id, last_message_ts, attempt_count, last_error, updated_at)
+            VALUES (1, ?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(id) DO UPDATE SET
+                phase = excluded.phase,
+                last_chat_id = excluded.last_chat_id,
+                last_message_ts = excluded.last_message_ts,
+                attempt_count = excluded.attempt_count,
+                last_error = excluded.last_error,
+                updated_at = datetime('now')
+        `),
+        clear: db.prepare('DELETE FROM whatsapp_sync_state WHERE id = 1')
+    };
+
     const maintenance = {
         cleanupMessages: db.prepare(`DELETE FROM messages WHERE timestamp < ?`)
     };
@@ -917,6 +961,7 @@ function createDatabase(config) {
         contactTags,
         notes,
         whatsappSettings,
+        whatsappSyncState,
         maintenance,
         reports
     };
