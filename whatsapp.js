@@ -1279,50 +1279,109 @@ class WhatsAppClient {
             return await Promise.race([
                 this.client.pupPage.evaluate(async (contactId) => {
                     try {
-                        const wid = window.Store?.WidFactory?.createWid?.(contactId);
-                        if (!wid) return null;
+                        const createWid = window.Store?.WidFactory?.createWid;
+                        if (!createWid) return null;
 
-                        let contact = null;
+                        const unwrapContact = (value) => {
+                            if (!value || typeof value !== 'object') return null;
+                            if (typeof value.serialize === 'function') return value;
+                            if (value.contact && typeof value.contact.serialize === 'function') return value.contact;
+                            return null;
+                        };
+
+                        const primaryWid = createWid(contactId);
+                        if (!primaryWid) return null;
+
+                        const candidates = [];
+                        const seen = new Set();
+                        const pushWid = (wid) => {
+                            if (!wid) return;
+                            const serialized = typeof wid === 'string' ? wid : (wid._serialized || null);
+                            if (!serialized || seen.has(serialized)) return;
+                            seen.add(serialized);
+                            candidates.push(wid);
+                        };
+
+                        pushWid(primaryWid);
+
                         try {
-                            contact = window.Store?.Contact?.get?.(wid) || null;
+                            if (window.WWebJS?.enforceLidAndPnRetrieval) {
+                                const resolved = await window.WWebJS.enforceLidAndPnRetrieval(contactId);
+                                pushWid(resolved?.phone?._serialized || resolved?.phone);
+                                pushWid(resolved?.lid?._serialized || resolved?.lid);
+                                pushWid(resolved?.phone);
+                                pushWid(resolved?.lid);
+                            } else if (window.Store?.LidUtils) {
+                                if (primaryWid.server === 'lid') {
+                                    pushWid(window.Store.LidUtils.getPhoneNumber(primaryWid));
+                                } else {
+                                    pushWid(window.Store.LidUtils.getCurrentLid(primaryWid));
+                                }
+                            }
                         } catch (e) {}
 
-                        if (!contact) {
-                            try {
-                                contact = await window.Store?.Contact?.find?.(wid);
-                            } catch (e) {
-                                contact = null;
+                        const stores = [];
+                        if (window.Store?.Contact) stores.push(window.Store.Contact);
+                        if (window.Store?.ContactCollection) stores.push(window.Store.ContactCollection);
+
+                        let contact = null;
+                        for (const store of stores) {
+                            for (const wid of candidates) {
+                                try {
+                                    contact = unwrapContact(store.get?.(wid));
+                                } catch (e) {
+                                    contact = null;
+                                }
+                                if (contact) break;
+
+                                try {
+                                    contact = unwrapContact(store.get?.(typeof wid === 'string' ? createWid(wid) : wid?._serialized ? createWid(wid._serialized) : null));
+                                } catch (e) {
+                                    contact = null;
+                                }
+                                if (contact) break;
+
+                                try {
+                                    contact = unwrapContact(await store.find?.(typeof wid === 'string' ? createWid(wid) : wid));
+                                } catch (e) {
+                                    contact = null;
+                                }
+                                if (contact) break;
                             }
+                            if (contact) break;
                         }
 
                         if (!contact) {
-                            try {
-                                const models = window.Store?.Contact?.getModelsArray?.() || [];
-                                const matchesWid = (value) => {
-                                    if (!value) return false;
-                                    if (typeof value === 'string') return value === contactId;
-                                    if (typeof value._serialized === 'string') return value._serialized === contactId;
-                                    if (value.id && typeof value.id._serialized === 'string') return value.id._serialized === contactId;
-                                    return false;
-                                };
-                                contact = models.find((c) => {
-                                    if (!c || typeof c !== 'object') return false;
-                                    if (c?.id?._serialized === contactId) return true;
-                                    if (matchesWid(c?.lid)) return true;
-                                    if (matchesWid(c?._lid)) return true;
-                                    if (matchesWid(c?.phoneNumber)) return true;
-                                    if (matchesWid(c?.wid)) return true;
-                                    try {
-                                        const entries = Object.entries(c);
-                                        for (let i = 0; i < entries.length && i < 25; i++) {
-                                            const [, value] = entries[i];
-                                            if (matchesWid(value)) return true;
-                                        }
-                                    } catch (e) {}
-                                    return false;
-                                }) || null;
-                            } catch (e) {
-                                contact = null;
+                            const wanted = new Set([contactId]);
+                            candidates.forEach((wid) => {
+                                const serialized = typeof wid === 'string' ? wid : (wid?._serialized || null);
+                                if (serialized) wanted.add(serialized);
+                            });
+
+                            for (const store of stores) {
+                                try {
+                                    const models = store.getModelsArray?.() || [];
+                                    contact = unwrapContact(models.find((c) => {
+                                        const model = unwrapContact(c);
+                                        if (!model) return false;
+                                        if (model?.id?._serialized && wanted.has(model.id._serialized)) return true;
+                                        if (model?.phoneNumber?._serialized && wanted.has(model.phoneNumber._serialized)) return true;
+                                        if (model?.wid?._serialized && wanted.has(model.wid._serialized)) return true;
+                                        try {
+                                            const entries = Object.entries(model);
+                                            for (let i = 0; i < entries.length && i < 25; i++) {
+                                                const [, value] = entries[i];
+                                                if (value && typeof value === 'object' && typeof value._serialized === 'string' && wanted.has(value._serialized)) {
+                                                    return true;
+                                                }
+                                            }
+                                        } catch (e) {}
+                                        return false;
+                                    }) || null);
+                                } catch (e) {
+                                    contact = null;
+                                }
+                                if (contact) break;
                             }
                         }
 
