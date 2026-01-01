@@ -59,6 +59,7 @@ const GRADIENT_PRESETS = {
 };
 
 let selectedAttachment = null;
+let chatAutoScrollSeq = 0;
 
 // Sender profile pictures (for group message UI)
 const senderProfilePicCache = new Map(); // contactId -> { url: string|null, fetchedAt: number }
@@ -1598,9 +1599,7 @@ function renderChatMessages(messages, options = {}) {
     }
 
     if (options.scrollToBottom !== false) {
-        setTimeout(() => {
-            container.scrollTop = container.scrollHeight;
-        }, 100);
+        ensureChatScrolledToBottom(container);
     }
 }
 
@@ -1870,8 +1869,11 @@ function handleNewMessage(msg) {
     console.log('New message received:', msg, 'currentChat:', currentChat, 'msg.chatId:', msg.chatId);
 
     if (settings.notifications) {
-        const displayName = getDisplayNameFromMessage(msg);
-        showToast('Yeni mesaj: ' + formatSenderName(displayName), 'info');
+        const isMine = msg?.isFromMe === true || msg?.isFromMe === 1 || msg?.is_from_me === 1 || msg?.is_from_me === true || msg?.fromMe === true;
+        if (!isMine) {
+            const displayName = getDisplayNameFromMessage(msg);
+            showToast('Yeni mesaj: ' + formatSenderName(displayName), 'info');
+        }
     }
 
     const incomingChatId = msg.chatId || msg.chat_id;
@@ -2239,6 +2241,8 @@ function handleMediaDownloaded(payload) {
     
     const messageId = payload.messageId;
     const mediaUrl = payload.mediaUrl;
+    const container = document.getElementById('messagesContainer');
+    const shouldStickToBottom = container ? isChatNearBottom(container, 160) : false;
     
     // Update data model
     const item = chatMessagesPagination.items.find(m => (m.message_id || m.messageId) === messageId);
@@ -2302,11 +2306,13 @@ function handleMediaDownloaded(payload) {
                 // If there was a text placeholder, replace it
                 if (mutedText) {
                     mutedText.outerHTML = mediaHtml;
+                    if (container && shouldStickToBottom) ensureChatScrolledToBottom(container);
                     return; // Done
                 }
                 // If there was a loading placeholder, replace it
                 if (loadingEl) {
                     loadingEl.outerHTML = mediaHtml;
+                    if (container && shouldStickToBottom) ensureChatScrolledToBottom(container);
                     return;
                 }
             }
@@ -2323,6 +2329,19 @@ function handleMediaDownloaded(payload) {
                     bubble.insertAdjacentHTML('afterbegin', mediaHtml);
                 }
             }
+        }
+    }
+
+    if (container && shouldStickToBottom) {
+        ensureChatScrolledToBottom(container);
+        const img = row.querySelector('.message-media img');
+        if (img && img.dataset.stickToBottomBound !== '1') {
+            img.dataset.stickToBottomBound = '1';
+            img.addEventListener('load', () => {
+                if (shouldKeepChatAutoScrolled(container)) {
+                    scrollMessagesToBottom(container);
+                }
+            }, { once: true });
         }
     }
 }
@@ -3324,6 +3343,44 @@ function sanitizeUrl(url) {
         return escapeHtml(url);
     }
     return '';
+}
+
+function scrollMessagesToBottom(container) {
+    if (!container) return;
+    container.scrollTop = container.scrollHeight;
+    container.dataset.autoScrollTop = String(container.scrollTop);
+}
+
+function isChatNearBottom(container, thresholdPx = 120) {
+    if (!container) return false;
+    const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
+    return distance <= thresholdPx;
+}
+
+function shouldKeepChatAutoScrolled(container) {
+    if (!container) return false;
+    const lastTop = Number(container.dataset.autoScrollTop || NaN);
+    if (!Number.isFinite(lastTop)) return true;
+    return container.scrollTop >= (lastTop - 32);
+}
+
+function ensureChatScrolledToBottom(container, options = {}) {
+    if (!container) return;
+    const attempts = Number.isFinite(options.attempts) ? options.attempts : 10;
+    const intervalMs = Number.isFinite(options.intervalMs) ? options.intervalMs : 150;
+    const seq = String(++chatAutoScrollSeq);
+    container.dataset.autoScrollSeq = seq;
+
+    const step = (remaining) => {
+        if (!container || container.dataset.autoScrollSeq !== seq) return;
+        if (!shouldKeepChatAutoScrolled(container)) return;
+        scrollMessagesToBottom(container);
+        if (remaining <= 1) return;
+        setTimeout(() => step(remaining - 1), intervalMs);
+    };
+
+    const raf = (window.requestAnimationFrame || ((cb) => setTimeout(cb, 0)));
+    raf(() => step(attempts));
 }
 
 function formatSenderName(name) {

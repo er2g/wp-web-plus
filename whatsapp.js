@@ -1362,11 +1362,11 @@ class WhatsAppClient {
         const lastMsg = chat.lastMessage || null;
         const lastPreview = lastMsg
             ? (this.getMessageBody(lastMsg) || (lastMsg.hasMedia ? (lastMsg.type === 'document' ? '[Dosya]' : '[Medya]') : ''))
-            : '';
+            : (existingChat?.last_message || '');
 
         const lastAt = lastMsg?.timestamp
             ? lastMsg.timestamp * 1000
-            : (chat.timestamp ? chat.timestamp * 1000 : Date.now());
+            : (Number(existingChat?.last_message_at) || 0);
 
         this.db.chats.upsert.run(
             chatId,
@@ -1467,11 +1467,11 @@ class WhatsAppClient {
 
             const lastPreview = lastMsg
                 ? (this.getMessageBody(lastMsg) || (lastMsg.hasMedia ? (lastMsg.type === 'document' ? '[Dosya]' : '[Medya]') : ''))
-                : '';
+                : (existingChat?.last_message || '');
 
             const lastAt = lastMsg?.timestamp
                 ? lastMsg.timestamp * 1000
-                : (chat.timestamp ? chat.timestamp * 1000 : Date.now());
+                : (Number(existingChat?.last_message_at) || 0);
 
             const syncTx = this.db.db.transaction(() => {
                 for (const row of msgRows) {
@@ -1516,14 +1516,14 @@ class WhatsAppClient {
         } catch (e) {
             this.log('warn', 'sync', `Chat sync error for ${chatName}: ${e.message}`);
             try {
+                const existingChat = this.db.chats.getById.get(chatId);
                 const lastMsg = chat.lastMessage || null;
                 const lastPreview = lastMsg
                     ? (this.getMessageBody(lastMsg) || (lastMsg.hasMedia ? (lastMsg.type === 'document' ? '[Dosya]' : '[Medya]') : ''))
-                    : '';
+                    : (existingChat?.last_message || '');
                 const lastAt = lastMsg?.timestamp
                     ? lastMsg.timestamp * 1000
-                    : (chat.timestamp ? chat.timestamp * 1000 : Date.now());
-                const existingChat = this.db.chats.getById.get(chatId);
+                    : (Number(existingChat?.last_message_at) || 0);
                 const profilePic = existingChat?.profile_pic || null;
                 this.db.chats.upsert.run(
                     chatId,
