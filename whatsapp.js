@@ -1388,11 +1388,53 @@ class WhatsAppClient {
                             }
                         } catch (e) {}
 
-                        try {
-                            return window.WWebJS?.getContactModel?.(contact) || null;
-                        } catch (e) {
-                            return null;
-                        }
+                        const safeContactModel = (contact) => {
+                            const model = {};
+                            try {
+                                const serialized = contact && typeof contact.serialize === 'function' ? contact.serialize() : null;
+                                if (serialized && typeof serialized === 'object') {
+                                    Object.assign(model, serialized);
+                                }
+                            } catch (e) {}
+
+                            const idObj = contact && typeof contact.id === 'object' ? contact.id : null;
+                            const serializedId = idObj?._serialized
+                                || (model.id && typeof model.id === 'object' ? model.id._serialized : null)
+                                || (typeof model.id === 'string' ? model.id : null)
+                                || null;
+                            const userid = model.userid
+                                || model.user
+                                || (model.id && typeof model.id === 'object' ? model.id.user : null)
+                                || idObj?.user
+                                || null;
+
+                            if (!model.id && serializedId) {
+                                model.id = { _serialized: serializedId, user: idObj?.user || null, server: idObj?.server || null };
+                            }
+
+                            if (!model.userid && userid) {
+                                model.userid = userid;
+                            }
+
+                            if (model.isBusiness === undefined) {
+                                model.isBusiness = contact?.isBusiness === undefined ? false : Boolean(contact.isBusiness);
+                            }
+                            if (model.isWAContact === undefined) {
+                                model.isWAContact = contact?.isWAContact === undefined ? false : Boolean(contact.isWAContact);
+                            }
+                            if (model.isMyContact === undefined) {
+                                model.isMyContact = contact?.isMyContact === undefined ? false : Boolean(contact.isMyContact);
+                            }
+
+                            if (model.verifiedName === undefined) model.verifiedName = contact?.verifiedName || null;
+                            if (model.name === undefined) model.name = contact?.name || null;
+                            if (model.shortName === undefined) model.shortName = contact?.shortName || null;
+                            if (model.pushname === undefined) model.pushname = contact?.pushname || null;
+
+                            return model;
+                        };
+
+                        return safeContactModel(contact);
                     } catch (e) {
                         return null;
                     }
