@@ -1292,30 +1292,28 @@ class WhatsAppClient {
                         const primaryWid = createWid(contactId);
                         if (!primaryWid) return null;
 
-                        const candidates = [];
+                        const candidateIds = [];
                         const seen = new Set();
-                        const pushWid = (wid) => {
-                            if (!wid) return;
-                            const serialized = typeof wid === 'string' ? wid : (wid._serialized || null);
+                        const pushId = (value) => {
+                            if (!value) return;
+                            const serialized = typeof value === 'string' ? value : (value._serialized || null);
                             if (!serialized || seen.has(serialized)) return;
                             seen.add(serialized);
-                            candidates.push(wid);
+                            candidateIds.push(serialized);
                         };
 
-                        pushWid(primaryWid);
+                        pushId(contactId);
 
                         try {
                             if (window.WWebJS?.enforceLidAndPnRetrieval) {
                                 const resolved = await window.WWebJS.enforceLidAndPnRetrieval(contactId);
-                                pushWid(resolved?.phone?._serialized || resolved?.phone);
-                                pushWid(resolved?.lid?._serialized || resolved?.lid);
-                                pushWid(resolved?.phone);
-                                pushWid(resolved?.lid);
+                                pushId(resolved?.phone);
+                                pushId(resolved?.lid);
                             } else if (window.Store?.LidUtils) {
                                 if (primaryWid.server === 'lid') {
-                                    pushWid(window.Store.LidUtils.getPhoneNumber(primaryWid));
+                                    pushId(window.Store.LidUtils.getPhoneNumber(primaryWid));
                                 } else {
-                                    pushWid(window.Store.LidUtils.getCurrentLid(primaryWid));
+                                    pushId(window.Store.LidUtils.getCurrentLid(primaryWid));
                                 }
                             }
                         } catch (e) {}
@@ -1326,23 +1324,23 @@ class WhatsAppClient {
 
                         let contact = null;
                         for (const store of stores) {
-                            for (const wid of candidates) {
+                            for (const id of candidateIds) {
                                 try {
-                                    contact = unwrapContact(store.get?.(wid));
+                                    contact = unwrapContact(store.get?.(id));
                                 } catch (e) {
                                     contact = null;
                                 }
                                 if (contact) break;
 
                                 try {
-                                    contact = unwrapContact(store.get?.(typeof wid === 'string' ? createWid(wid) : wid?._serialized ? createWid(wid._serialized) : null));
+                                    contact = unwrapContact(store.get?.(createWid(id)));
                                 } catch (e) {
                                     contact = null;
                                 }
                                 if (contact) break;
 
                                 try {
-                                    contact = unwrapContact(await store.find?.(typeof wid === 'string' ? createWid(wid) : wid));
+                                    contact = unwrapContact(await store.find?.(id));
                                 } catch (e) {
                                     contact = null;
                                 }
@@ -1353,10 +1351,7 @@ class WhatsAppClient {
 
                         if (!contact) {
                             const wanted = new Set([contactId]);
-                            candidates.forEach((wid) => {
-                                const serialized = typeof wid === 'string' ? wid : (wid?._serialized || null);
-                                if (serialized) wanted.add(serialized);
-                            });
+                            candidateIds.forEach((cid) => wanted.add(cid));
 
                             for (const store of stores) {
                                 try {
