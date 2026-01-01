@@ -1726,8 +1726,8 @@ function renderChatList(chatList, options = {}) {
     container.innerHTML = chatList.map(c => {
         const isActive = currentChat === c.chat_id;
         const hasUnread = c.unread_count > 0;
-        const chatIdArg = JSON.stringify(String(c.chat_id || ''));
-        const nameArg = JSON.stringify(String(c.name || ''));
+        const chatIdArg = escapeHtmlAttribute(JSON.stringify(String(c.chat_id || '')));
+        const nameArg = escapeHtmlAttribute(JSON.stringify(String(c.name || '')));
         const timeValue = c.last_message_at ?? c.last_message_time;
         const actionBtn = isArchiveView
             ? '<button class="chat-action-btn" title="Arsivden cikar" onclick="toggleChatArchive(event, ' + chatIdArg + ', false)"><i class="bi bi-inbox"></i></button>'
@@ -4226,6 +4226,15 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+function escapeHtmlAttribute(text) {
+    return String(text || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }
 
 function normalizeTimestamp(value) {
