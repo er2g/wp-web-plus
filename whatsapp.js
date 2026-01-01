@@ -1582,6 +1582,13 @@ class WhatsAppClient {
                 } catch (e) {}
             }
 
+            try {
+                const row = this.db.chats.getById.get(chat.id._serialized);
+                msgData.isArchived = row && row.is_archived === 1 ? 1 : 0;
+            } catch (e) {
+                msgData.isArchived = chat.archived ? 1 : 0;
+            }
+
             this.emit('message', msgData);
 
             // 2. Download Media in Background

@@ -2840,15 +2840,23 @@ async function refreshChatNotes() {
 // Handle new incoming message
 function handleNewMessage(msg) {
     const isMine = msg?.isFromMe === true || msg?.isFromMe === 1 || msg?.is_from_me === 1 || msg?.is_from_me === true || msg?.fromMe === true;
-    if (!isMine) {
+    const incomingChatId = msg.chatId || msg.chat_id;
+    const isArchivedFromPayload = msg?.isArchived === true || msg?.isArchived === 1
+        || msg?.is_archived === 1 || msg?.is_archived === true;
+    const isArchivedFromLists = Boolean(incomingChatId) && (
+        (archivedChatsLoaded && Array.isArray(archivedChats) && archivedChats.some(c => c && c.chat_id === incomingChatId))
+        || (Array.isArray(chats) && chats.some(c => c && c.chat_id === incomingChatId && (c.is_archived === 1 || c.is_archived === true)))
+    );
+    const isArchived = isArchivedFromPayload || isArchivedFromLists;
+
+    if (!isMine && !isArchived) {
         playNotificationSound();
     }
-    if (settings.notifications && !isMine) {
+    if (settings.notifications && !isMine && !isArchived) {
         const displayName = getDisplayNameFromMessage(msg);
         showToast('Yeni mesaj: ' + formatSenderName(displayName), 'info');
     }
 
-    const incomingChatId = msg.chatId || msg.chat_id;
     if (currentChat && incomingChatId && currentChat === incomingChatId) {
         const normalized = {
             message_id: msg.messageId || msg.message_id,
@@ -4501,14 +4509,16 @@ function scriptEditorRenderChatPicker() {
         const chatId = chat.chat_id || '';
         const isChecked = selected.has(chatId);
         const isGroup = typeof chatId === 'string' && chatId.includes('@g.us');
+        const isArchived = chat?.is_archived === 1 || chat?.isArchived === 1 || chat?.isArchived === true || chat?.is_archived === true;
         const name = chat.name || chatId || 'Sohbet';
         const avatar = '<div class="chat-scope-avatar' + (isGroup ? ' group' : '') + '">' + renderAvatarContent(chat) + '</div>';
+        const metaText = String(chatId || '') + (isArchived ? ' • Arşiv' : '');
         return '<label class="chat-scope-item">' +
             '<input class="chat-scope-checkbox" type="checkbox" data-chat-id="' + escapeHtml(chatId) + '"' + (isChecked ? ' checked' : '') + '>' +
             avatar +
             '<div class="chat-scope-info">' +
                 '<div class="chat-scope-name">' + escapeHtml(name) + '</div>' +
-                '<div class="chat-scope-meta">' + escapeHtml(chatId) + '</div>' +
+                '<div class="chat-scope-meta">' + escapeHtml(metaText) + '</div>' +
             '</div>' +
         '</label>';
     }).join('');
@@ -5056,11 +5066,32 @@ function showScriptEditor(id) {
         });
     }
 
-    // Load chats for picker
+    // Load chats for picker (active + archived)
     (async () => {
         try {
-            const list = (Array.isArray(chats) && chats.length) ? chats : await api('api/chats');
-            scriptEditorState.chats = Array.isArray(list) ? list : [];
+            const activePromise = (Array.isArray(chats) && chats.length) ? Promise.resolve(chats) : api('api/chats');
+            const archivedPromise = (archivedChatsLoaded && Array.isArray(archivedChats))
+                ? Promise.resolve(archivedChats)
+                : api('api/chats?archived=1').catch(() => []);
+
+            const [activeRaw, archivedRaw] = await Promise.all([activePromise, archivedPromise]);
+            const activeList = Array.isArray(activeRaw) ? activeRaw : [];
+            const archivedList = Array.isArray(archivedRaw) ? archivedRaw : [];
+
+            const merged = [];
+            const seen = new Set();
+            const pushUnique = (item) => {
+                if (!item || !item.chat_id) return;
+                const id = String(item.chat_id);
+                if (seen.has(id)) return;
+                seen.add(id);
+                merged.push(item);
+            };
+
+            activeList.forEach(pushUnique);
+            archivedList.forEach(pushUnique);
+
+            scriptEditorState.chats = merged;
         } catch (e) {
             scriptEditorState.chats = [];
         }
