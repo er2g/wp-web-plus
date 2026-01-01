@@ -24,6 +24,7 @@ let settings = {
     downloadMedia: true,
     downloadProfilePictures: false,
     syncOnConnect: true,
+    downloadMediaOnSync: true,
     uploadToDrive: false,
     notifications: true,
     sounds: true,
@@ -60,8 +61,10 @@ const GRADIENT_PRESETS = {
 let selectedAttachment = null;
 
 // Sender profile pictures (for group message UI)
-const senderProfilePicCache = new Map(); // contactId -> url|null
+const senderProfilePicCache = new Map(); // contactId -> { url: string|null, fetchedAt: number }
 const senderProfilePicPending = new Set(); // contactId currently fetching
+const SENDER_PROFILE_PIC_TTL_MS = 6 * 60 * 60 * 1000;
+const SENDER_PROFILE_PIC_NULL_TTL_MS = 5 * 60 * 1000;
 const MESSAGE_PAGE_SIZE = 50;
 const CHAT_MESSAGE_PAGE_SIZE = 50;
 const CHAT_SEARCH_PAGE_SIZE = 50;
@@ -1298,6 +1301,7 @@ function setupChatMessagesScroll() {
 function updateSettingsUI() {
     const toggles = {
         'toggleDownloadMedia': settings.downloadMedia,
+        'toggleDownloadMediaOnSync': settings.downloadMediaOnSync,
         'toggleDownloadProfilePictures': settings.downloadProfilePictures,
         'toggleSyncOnConnect': settings.syncOnConnect,
         'toggleUploadToDrive': settings.uploadToDrive,
@@ -1315,6 +1319,7 @@ function updateSettingsUI() {
 function getWhatsAppSettingsPayload() {
     return {
         downloadMedia: settings.downloadMedia,
+        downloadMediaOnSync: settings.downloadMediaOnSync,
         downloadProfilePictures: settings.downloadProfilePictures,
         syncOnConnect: settings.syncOnConnect,
         uploadToDrive: settings.uploadToDrive,
@@ -1553,8 +1558,9 @@ function renderChatMessages(messages, options = {}) {
         const isStacked = (canShowGroupSender && prevCanStack && prevSenderKey && prevSenderKey === senderKey && timeGapMs < (5 * 60 * 1000));
         const showSenderMeta = (canShowGroupSender && !isStacked);
 
+        const senderIdAttr = senderContactId ? ' data-sender-id="' + escapeHtml(senderContactId) + '"' : '';
         const senderHtml = (showSenderMeta && displayName) ?
-            '<div class="sender-name">' + escapeHtml(formatSenderName(displayName)) + '</div>' : '';
+            '<div class="sender-name"' + senderIdAttr + '>' + escapeHtml(formatSenderName(displayName)) + '</div>' : '';
 
         const avatarHtml = canShowGroupSender
             ? renderSenderAvatar(senderContactId, displayName, showSenderMeta)
@@ -3383,18 +3389,66 @@ function getInitials(value) {
     return (parts[0][0] + parts[1][0]).toUpperCase();
 }
 
+function isSenderProfilePicCacheFresh(contactId) {
+    const entry = senderProfilePicCache.get(contactId);
+    if (!entry || typeof entry !== 'object') return false;
+    const ageMs = Date.now() - (entry.fetchedAt || 0);
+    const ttlMs = entry.url ? SENDER_PROFILE_PIC_TTL_MS : SENDER_PROFILE_PIC_NULL_TTL_MS;
+    if (ageMs > ttlMs) {
+        senderProfilePicCache.delete(contactId);
+        return false;
+    }
+    return true;
+}
+
+function getCachedSenderProfilePicUrl(contactId) {
+    if (!isSenderProfilePicCacheFresh(contactId)) return null;
+    const entry = senderProfilePicCache.get(contactId);
+    return (entry && entry.url) ? entry.url : null;
+}
+
+function updateSenderNameElements(contactId, displayName) {
+    const name = String(displayName || '').trim();
+    if (!contactId || !name) return;
+    const escaped = (window.CSS && CSS.escape) ? CSS.escape(contactId) : contactId;
+    document.querySelectorAll('.sender-name[data-sender-id="' + escaped + '"]').forEach((node) => {
+        node.textContent = formatSenderName(name);
+    });
+}
+
+function updateSenderAvatarNameAttributes(contactId, displayName) {
+    const name = String(displayName || '').trim();
+    if (!contactId || !name) return;
+    const escaped = (window.CSS && CSS.escape) ? CSS.escape(contactId) : contactId;
+    document.querySelectorAll('.sender-avatar[data-sender-id="' + escaped + '"]').forEach((node) => {
+        node.setAttribute('data-sender-name', name);
+    });
+}
+
 function updateSenderAvatarElements(contactId) {
     if (!contactId) return;
     const escaped = (window.CSS && CSS.escape) ? CSS.escape(contactId) : contactId;
     const nodes = document.querySelectorAll('.sender-avatar[data-sender-id="' + escaped + '"]');
     if (!nodes.length) return;
 
-    const cached = senderProfilePicCache.get(contactId) || null;
+    const cached = getCachedSenderProfilePicUrl(contactId);
     nodes.forEach((node) => {
         if (node.classList.contains('spacer')) return;
         const safeUrl = cached ? sanitizeUrl(cached) : '';
         if (safeUrl) {
-            node.innerHTML = '<img src="' + safeUrl + '" alt="">';
+            node.innerHTML = '<img src="' + safeUrl + '" alt="" loading="lazy">';
+            const img = node.querySelector('img');
+            if (img) {
+                img.onerror = () => {
+                    if (node.getAttribute('data-avatar-download-tried') !== '1') {
+                        node.setAttribute('data-avatar-download-tried', '1');
+                        fetchSenderProfilePic(contactId, { download: true, bypassCache: true });
+                        return;
+                    }
+                    const name = node.getAttribute('data-sender-name') || '';
+                    node.innerHTML = '<span class="sender-avatar-initials">' + escapeHtml(getInitials(name || contactId)) + '</span>';
+                };
+            }
             return;
         }
         const name = node.getAttribute('data-sender-name') || '';
@@ -3402,15 +3456,25 @@ function updateSenderAvatarElements(contactId) {
     });
 }
 
-async function fetchSenderProfilePic(contactId) {
+async function fetchSenderProfilePic(contactId, options = {}) {
     if (!contactId) return;
-    if (senderProfilePicCache.has(contactId) || senderProfilePicPending.has(contactId)) return;
+    if (senderProfilePicPending.has(contactId) || (!options.bypassCache && isSenderProfilePicCacheFresh(contactId))) return;
     senderProfilePicPending.add(contactId);
     try {
-        const result = await api('api/contacts/' + encodeURIComponent(contactId) + '/profile-picture');
-        senderProfilePicCache.set(contactId, result && result.success ? (result.url || null) : null);
+        const qs = [];
+        if (options.download) qs.push('download=1');
+        if (options.bypassCache) qs.push('bypassCache=1');
+        const urlPath = 'api/contacts/' + encodeURIComponent(contactId) + '/profile-picture' + (qs.length ? ('?' + qs.join('&')) : '');
+        const result = await api(urlPath);
+        const url = result && result.success ? (result.url || null) : null;
+        const displayName = result && result.displayName ? String(result.displayName) : '';
+        senderProfilePicCache.set(contactId, { url, fetchedAt: Date.now() });
+        if (displayName) {
+            updateSenderAvatarNameAttributes(contactId, displayName);
+            updateSenderNameElements(contactId, displayName);
+        }
     } catch (e) {
-        senderProfilePicCache.set(contactId, null);
+        senderProfilePicCache.set(contactId, { url: null, fetchedAt: Date.now() });
     } finally {
         senderProfilePicPending.delete(contactId);
         updateSenderAvatarElements(contactId);
@@ -3424,7 +3488,7 @@ function renderSenderAvatar(contactId, displayName, showSenderMeta) {
 
     let inner = '';
     if (showSenderMeta) {
-        const cached = id && senderProfilePicCache.has(id) ? senderProfilePicCache.get(id) : null;
+        const cached = id ? getCachedSenderProfilePicUrl(id) : null;
         const safeUrl = cached ? sanitizeUrl(cached) : '';
         if (safeUrl) {
             inner = '<img src="' + safeUrl + '" alt="">';
@@ -3432,7 +3496,7 @@ function renderSenderAvatar(contactId, displayName, showSenderMeta) {
             inner = '<span class="sender-avatar-initials">' + escapeHtml(getInitials(name || id)) + '</span>';
         }
 
-        if (id && !senderProfilePicCache.has(id) && !senderProfilePicPending.has(id)) {
+        if (id && !isSenderProfilePicCacheFresh(id) && !senderProfilePicPending.has(id)) {
             fetchSenderProfilePic(id);
         }
     }

@@ -59,6 +59,7 @@ class WhatsAppClient {
         this.loadSettingsFromDb();
         this.contactCache = new Map();
         this.chatProfileCache = new Map();
+        this.contactProfilePicCache = new Map(); // contactId -> { url, fetchedAt }
         this.lastProgressEmit = 0;
         this.fullSyncPromise = null;
         this.fullSyncRunId = null;
@@ -279,7 +280,7 @@ class WhatsAppClient {
     getSenderName(contact, msg) {
         const fallbackId = msg?.author || msg?.from;
         if (contact) {
-            return contact.pushname || contact.name || contact.number || this.extractPhoneFromId(fallbackId);
+            return contact.name || contact.pushname || contact.shortName || contact.number || this.extractPhoneFromId(fallbackId);
         }
         return this.extractPhoneFromId(fallbackId);
     }
@@ -288,7 +289,17 @@ class WhatsAppClient {
         if (contact && contact.number) {
             return contact.number;
         }
-        return this.extractPhoneFromId(msg.author || msg.from);
+        const fallbackId = msg?.author || msg?.from;
+        if (typeof fallbackId === 'string') {
+            const server = fallbackId.split('@')[1];
+            if (server === 'g.us') {
+                return 'Unknown';
+            }
+            if (server && server !== 'c.us') {
+                return fallbackId;
+            }
+        }
+        return this.extractPhoneFromId(fallbackId);
     }
 
     extractPhoneFromId(id) {
@@ -1229,6 +1240,20 @@ class WhatsAppClient {
         }
     }
 
+    async getContactByIdCached(id) {
+        if (!this.isReady()) throw new Error('WhatsApp not connected');
+        const chatId = typeof id === 'string' ? id.trim() : '';
+        if (!chatId) return null;
+        if (this.contactCache.has(chatId)) return this.contactCache.get(chatId);
+        try {
+            const contact = await this.client.getContactById(chatId);
+            this.contactCache.set(chatId, contact);
+            return contact;
+        } catch (e) {
+            return null;
+        }
+    }
+
     async handleMessage(msg, fromMe) {
         try {
             const chat = await msg.getChat();
@@ -1711,24 +1736,51 @@ class WhatsAppClient {
             const existingChat = this.db.chats.getById.get(chatId);
             const profilePic = existingChat?.profile_pic || this.chatProfileCache.get(chatId) || null;
 
+            const msgRows = [];
+            for (const msg of filteredMessages) {
+                let contact = null;
+                if (!msg.fromMe) {
+                    contact = await this.getContactCached(msg);
+                }
+
+                const body = this.getMessageBody(msg);
+                msgRows.push({
+                    messageId: msg.id._serialized,
+                    chatId,
+                    fromNumber: msg.fromMe
+                        ? (this.info?.wid?.user || this.extractPhoneFromId(msg.from))
+                        : this.getSenderNumber(contact, msg),
+                    toNumber: msg.to,
+                    fromName: msg.fromMe
+                        ? (this.info ? this.info.pushname : 'Me')
+                        : this.getSenderName(contact, msg),
+                    body,
+                    type: msg.type,
+                    mediaMimetype: msg.mimetype || msg._data?.mimetype,
+                    isGroup: chat.isGroup,
+                    isFromMe: msg.fromMe,
+                    ack: msg.ack || 0,
+                    timestamp: msg.timestamp * 1000
+                });
+            }
+
             const syncTx = this.db.db.transaction(() => {
-                for (const msg of filteredMessages) {
-                    const body = this.getMessageBody(msg);
+                for (const row of msgRows) {
                     this.db.messages.save.run(
-                        msg.id._serialized,
-                        chatId,
-                        msg.fromMe ? (this.info?.wid?.user || this.extractPhoneFromId(msg.from)) : this.getSenderNumber(null, msg),
-                        msg.to,
-                        msg.fromMe ? (this.info ? this.info.pushname : 'Me') : this.getSenderName(null, msg),
-                        body,
-                        msg.type,
+                        row.messageId,
+                        row.chatId,
+                        row.fromNumber,
+                        row.toNumber,
+                        row.fromName,
+                        row.body,
+                        row.type,
                         null,
                         null,
-                        msg.mimetype || msg._data?.mimetype,
-                        chat.isGroup ? 1 : 0,
-                        msg.fromMe ? 1 : 0,
-                        msg.ack || 0,
-                        msg.timestamp * 1000
+                        row.mediaMimetype,
+                        row.isGroup ? 1 : 0,
+                        row.isFromMe ? 1 : 0,
+                        row.ack,
+                        row.timestamp
                     );
                 }
 
@@ -1987,36 +2039,48 @@ class WhatsAppClient {
         };
     }
 
-    async getProfilePictureUrl(id) {
+    async getProfilePictureUrl(id, options = {}) {
         if (!this.isReady()) throw new Error('WhatsApp not connected');
         const chatId = typeof id === 'string' ? id.trim() : '';
         if (!chatId) return null;
 
-        if (this.chatProfileCache.has(chatId)) {
-            return this.chatProfileCache.get(chatId);
+        const now = Date.now();
+        const cached = this.contactProfilePicCache.get(chatId);
+        if (cached && !options.bypassCache) {
+            const ttlMs = cached.url ? (6 * 60 * 60 * 1000) : (5 * 60 * 1000);
+            if ((now - (cached.fetchedAt || 0)) < ttlMs) {
+                return cached.url || null;
+            }
         }
 
         let url = null;
         try {
-            url = await Promise.race([
+            const timeout = Symbol('profile_pic_timeout');
+            const result = await Promise.race([
                 this.client.getProfilePicUrl(chatId),
-                new Promise((resolve) => setTimeout(resolve, 10000, null))
+                new Promise((resolve) => setTimeout(resolve, 20000, timeout))
             ]);
+            url = result === timeout ? null : result;
         } catch (e) {
             url = null;
         }
 
         let resolvedUrl = url || null;
-        if (resolvedUrl && this.settings.downloadProfilePictures) {
+        const shouldDownload = options.download === true || this.settings.downloadProfilePictures;
+        if (resolvedUrl && shouldDownload && !this.isLocalMediaUrl(resolvedUrl)) {
             try {
-                resolvedUrl = await Promise.race([
+                const timeout = Symbol('profile_pic_download_timeout');
+                const downloaded = await Promise.race([
                     this.downloadAndSaveProfilePicture(chatId, resolvedUrl),
-                    new Promise((resolve) => setTimeout(resolve, 20000, null))
-                ]) || resolvedUrl;
+                    new Promise((resolve) => setTimeout(resolve, 30000, timeout))
+                ]);
+                if (downloaded && downloaded !== timeout) {
+                    resolvedUrl = downloaded;
+                }
             } catch (e) {}
         }
 
-        this.chatProfileCache.set(chatId, resolvedUrl || null);
+        this.contactProfilePicCache.set(chatId, { url: resolvedUrl || null, fetchedAt: now });
         return resolvedUrl || null;
     }
 

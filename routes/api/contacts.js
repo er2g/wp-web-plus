@@ -28,6 +28,19 @@ const chatIdParamSchema = z.object({
     )
 }).strict();
 
+const booleanLike = z.preprocess((value) => {
+    if (value === undefined) return undefined;
+    if (value === true || value === false) return value;
+    if (value === 1 || value === '1' || value === 'true') return true;
+    if (value === 0 || value === '0' || value === 'false') return false;
+    return value;
+}, z.boolean());
+
+const profilePictureQuerySchema = z.object({
+    download: booleanLike.optional(),
+    bypassCache: booleanLike.optional()
+}).strict();
+
 const tagIdBodySchema = z.object({
     tag_id: intLike('tag_id required')
 }).strict();
@@ -61,10 +74,19 @@ router.delete('/:id/tags/:tagId', validate({ params: tagParamsSchema }), (req, r
     return res.json({ success: true });
 });
 
-router.get('/:id/profile-picture', validate({ params: chatIdParamSchema }), async (req, res) => {
+router.get('/:id/profile-picture', validate({ params: chatIdParamSchema, query: profilePictureQuerySchema }), async (req, res) => {
     try {
-        const url = await req.account.whatsapp.getProfilePictureUrl(req.validatedParams.id);
-        return res.json({ success: true, url: url || null });
+        const contactId = req.validatedParams.id;
+        const [url, contact] = await Promise.all([
+            req.account.whatsapp.getProfilePictureUrl(contactId, {
+                download: req.validatedQuery.download === true,
+                bypassCache: req.validatedQuery.bypassCache === true
+            }),
+            req.account.whatsapp.getContactByIdCached(contactId).catch(() => null)
+        ]);
+        const displayName = contact ? req.account.whatsapp.getSenderName(contact, { author: contactId }) : null;
+        const number = contact && contact.number ? String(contact.number) : null;
+        return res.json({ success: true, url: url || null, displayName: displayName || null, number });
     } catch (error) {
         return sendError(req, res, 500, error.message);
     }
