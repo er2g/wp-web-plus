@@ -1438,6 +1438,99 @@ class WhatsAppClient {
         }
     }
 
+    async debugContactLookup(id) {
+        if (!this.isReady()) throw new Error('WhatsApp not connected');
+        const contactId = typeof id === 'string' ? id.trim() : '';
+        if (!contactId) throw new Error('Invalid contact id');
+        if (!this.client?.pupPage) throw new Error('WhatsApp page not available');
+
+        return await this.client.pupPage.evaluate(async (contactId) => {
+            const out = {
+                hasWWebJS: Boolean(window.WWebJS),
+                hasStore: Boolean(window.Store),
+                hasWidFactory: Boolean(window.Store?.WidFactory?.createWid),
+                wwebjs: {
+                    getContact: typeof window.WWebJS?.getContact,
+                    getContactModel: typeof window.WWebJS?.getContactModel,
+                    enforceLidAndPnRetrieval: typeof window.WWebJS?.enforceLidAndPnRetrieval
+                },
+                store: {
+                    contact: {
+                        exists: Boolean(window.Store?.Contact),
+                        get: typeof window.Store?.Contact?.get,
+                        find: typeof window.Store?.Contact?.find,
+                        getModelsArray: typeof window.Store?.Contact?.getModelsArray,
+                        gadd: typeof window.Store?.Contact?.gadd
+                    },
+                    contactCollection: {
+                        exists: Boolean(window.Store?.ContactCollection),
+                        get: typeof window.Store?.ContactCollection?.get,
+                        find: typeof window.Store?.ContactCollection?.find,
+                        getModelsArray: typeof window.Store?.ContactCollection?.getModelsArray,
+                        getMeContact: typeof window.Store?.ContactCollection?.getMeContact
+                    },
+                    lidUtils: {
+                        exists: Boolean(window.Store?.LidUtils),
+                        getPhoneNumber: typeof window.Store?.LidUtils?.getPhoneNumber,
+                        getCurrentLid: typeof window.Store?.LidUtils?.getCurrentLid
+                    }
+                },
+                resolved: null,
+                probes: {}
+            };
+
+            try {
+                const wid = window.Store?.WidFactory?.createWid?.(contactId);
+                out.probes.wid = wid ? { serialized: wid._serialized || null, server: wid.server || null } : null;
+            } catch (e) {
+                out.probes.widError = e?.message || String(e);
+            }
+
+            if (window.WWebJS?.enforceLidAndPnRetrieval) {
+                try {
+                    const resolved = await window.WWebJS.enforceLidAndPnRetrieval(contactId);
+                    out.resolved = {
+                        lid: resolved?.lid?._serialized || null,
+                        phone: resolved?.phone?._serialized || null
+                    };
+                } catch (e) {
+                    out.probes.resolveError = e?.message || String(e);
+                }
+            }
+
+            const hasSerialize = (value) => Boolean(value && typeof value.serialize === 'function');
+
+            if (window.Store?.Contact?.get) {
+                try {
+                    const value = window.Store.Contact.get(contactId);
+                    out.probes.storeContactGet = { type: typeof value, hasSerialize: hasSerialize(value) };
+                } catch (e) {
+                    out.probes.storeContactGetError = e?.message || String(e);
+                }
+            }
+
+            if (window.Store?.Contact?.find) {
+                try {
+                    const value = await window.Store.Contact.find(contactId);
+                    out.probes.storeContactFind = { type: typeof value, hasSerialize: hasSerialize(value) };
+                } catch (e) {
+                    out.probes.storeContactFindError = e?.message || String(e);
+                }
+            }
+
+            if (window.WWebJS?.getContact) {
+                try {
+                    const value = await window.WWebJS.getContact(contactId);
+                    out.probes.wwebjsGetContact = { type: typeof value, hasId: Boolean(value && value.id), hasUserid: Boolean(value && value.userid) };
+                } catch (e) {
+                    out.probes.wwebjsGetContactError = e?.message || String(e);
+                }
+            }
+
+            return out;
+        }, contactId);
+    }
+
     async handleMessage(msg, fromMe) {
         try {
             const chat = await msg.getChat();
