@@ -1112,6 +1112,12 @@ async function loadChatMessages(chatId, options = {}) {
             hasMore: true,
             loading: false
         };
+        const container = document.getElementById('messagesContainer');
+        if (container) {
+            // New chat load should always auto-scroll; clear previous chat's scroll memory.
+            container.dataset.autoScrollTop = '';
+            container.dataset.autoScrollSeq = '';
+        }
     }
 
     if (chatMessagesPagination.loading || !chatMessagesPagination.hasMore) return;
