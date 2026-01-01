@@ -468,14 +468,24 @@ function createApp() {
         const requestedAccount = socket.handshake.auth?.accountId;
         const accountId = requestedAccount || session.accountId || accountManager.getDefaultAccountId();
         const context = accountManager.getAccountContext(accountId);
-        session.accountId = accountId;
+        const resolvedAccountId = context?.account?.id || accountId;
+        session.accountId = resolvedAccountId;
 
-        socket.join(accountId);
-        logger.info('Client connected', { socketId: socket.id, accountId });
+        socket.join(resolvedAccountId);
+        logger.info('Client connected', { socketId: socket.id, accountId: resolvedAccountId });
         socket.emit('status', context.whatsapp.getStatus());
 
+        // Auto-connect WhatsApp when the UI connects (covers account switch + page refresh).
+        Promise.resolve(context.whatsapp.initialize()).catch((error) => {
+            logger.error('WhatsApp init error', {
+                category: 'whatsapp',
+                accountId: resolvedAccountId,
+                error: error?.message || String(error)
+            });
+        });
+
         socket.on('disconnect', () => {
-            logger.info('Client disconnected', { socketId: socket.id, accountId });
+            logger.info('Client disconnected', { socketId: socket.id, accountId: resolvedAccountId });
         });
     });
 
