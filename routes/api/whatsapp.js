@@ -120,15 +120,6 @@ router.post('/settings', requireRole(['admin', 'manager']), validate({ body: wha
     res.json({ success: true, settings });
 });
 
-router.get('/debug/contact/:id', requireRole(['admin']), validate({ params: chatIdParamSchema }), async (req, res) => {
-    try {
-        const result = await req.account.whatsapp.debugContactLookup(req.validatedParams.id);
-        return res.json(result);
-    } catch (error) {
-        return sendError(req, res, 500, error.message);
-    }
-});
-
 router.post('/chats/:id/mark-read', validate({ params: chatIdParamSchema }), async (req, res) => {
     try {
         const result = await req.account.whatsapp.markAsRead(req.validatedParams.id);
