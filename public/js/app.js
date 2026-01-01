@@ -24,6 +24,9 @@ let webhooksCache = [];
 let availableTags = [];
 let currentChatTags = [];
 let currentChatNotes = [];
+let mediaHubState = null;
+let mediaHubChats = [];
+let mediaHubSearchDebounce = null;
 let currentSettingsCategory = localStorage.getItem('uiSettingsCategory') || 'appearance';
 let settings = {
     downloadMedia: true,
@@ -100,6 +103,7 @@ const CHAT_MESSAGE_PAGE_SIZE = 50;
 const CHAT_SEARCH_PAGE_SIZE = 50;
 const VIRTUAL_MESSAGE_ITEM_HEIGHT = 78;
 const VIRTUAL_MESSAGE_OVERSCAN = 6;
+const MEDIA_HUB_PAGE_SIZE = 90;
 
 let messagesPagination = {
     items: [],
@@ -3477,6 +3481,26 @@ function handleMediaDownloaded(payload) {
         item.media_url = mediaUrl;
         item.mediaUrl = mediaUrl;
     }
+
+    try {
+        if (mediaHubState && Array.isArray(mediaHubState.items)) {
+            const hubItem = mediaHubState.items.find(m => (m.message_id || m.messageId) === messageId);
+            if (hubItem) {
+                hubItem.media_url = mediaUrl;
+                hubItem.mediaUrl = mediaUrl;
+                hubItem.media_mimetype = payload.mediaMimetype || hubItem.media_mimetype;
+                hubItem.mediaMimeType = payload.mediaMimetype || hubItem.mediaMimeType;
+                hubItem.is_downloaded = 1;
+                hubItem.isDownloaded = 1;
+            }
+            if (mediaHubState.enqueuedIds && typeof mediaHubState.enqueuedIds.delete === 'function') {
+                mediaHubState.enqueuedIds.delete(messageId);
+            }
+            if (document.getElementById('mediaHubList')) {
+                mediaHubRender();
+            }
+        }
+    } catch (e) {}
     
     // Update DOM
     const row = document.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
@@ -3578,6 +3602,7 @@ function showModal(feature) {
     const container = document.getElementById('modalContainer');
     let content = '';
     let title = '';
+    let maxWidth = '700px';
 
     switch (feature) {
         case 'dashboard':
@@ -3604,6 +3629,12 @@ function showModal(feature) {
             content = getTemplatesContent();
             loadTemplatesData();
             break;
+        case 'media':
+            maxWidth = '1100px';
+            title = 'Medyalar';
+            content = getMediaHubContent();
+            loadMediaHubData();
+            break;
         case 'template-picker':
             title = 'Sablon Sec';
             content = getTemplatePickerContent();
@@ -3629,7 +3660,7 @@ function showModal(feature) {
     }
 
     container.innerHTML = '<div class="modal-overlay show" onclick="if(event.target===this)closeModal()">' +
-        '<div class="modal" style="max-width: 700px;">' +
+        '<div class="modal" style="max-width: ' + maxWidth + ';">' +
         '<div class="modal-header"><h3>' + title + '</h3><i class="bi bi-x-lg close-btn" onclick="closeModal()"></i></div>' +
         '<div class="modal-body">' + content + '</div>' +
         '</div></div>';
@@ -4307,6 +4338,408 @@ async function deleteUser(userId) {
     } catch (err) {
         showToast('Hata: ' + err.message, 'error');
     }
+}
+
+// Media Hub
+function getMediaHubContent() {
+    return '' +
+        '<div class="media-hub">' +
+            '<div class="media-hub-toolbar">' +
+                '<div class="media-hub-row">' +
+                    '<input type="text" class="form-input media-hub-search" id="mediaHubSearch" placeholder="Sohbet veya aciklama ara..." oninput="mediaHubDebouncedSearch()">' +
+                    '<select class="select-input media-hub-select" id="mediaHubKind" onchange="mediaHubReload(true)">' +
+                        '<option value="all">Tum turler</option>' +
+                        '<option value="image">Fotograf</option>' +
+                        '<option value="video">Video</option>' +
+                        '<option value="document">Belge</option>' +
+                        '<option value="audio">Ses</option>' +
+                        '<option value="sticker">Sticker</option>' +
+                        '<option value="other">Diger</option>' +
+                    '</select>' +
+                    '<select class="select-input media-hub-select" id="mediaHubDownloaded" onchange="mediaHubReload(true)">' +
+                        '<option value="all">Indirilmis + Indirilmemis</option>' +
+                        '<option value="downloaded">Sadece indirilenler</option>' +
+                        '<option value="missing">Sadece eksikler</option>' +
+                    '</select>' +
+                '</div>' +
+                '<div class="media-hub-row">' +
+                    '<select class="select-input media-hub-select media-hub-chat" id="mediaHubChat" onchange="mediaHubReload(true)">' +
+                        '<option value="">Sohbetler yukleniyor...</option>' +
+                    '</select>' +
+                    '<select class="select-input media-hub-select" id="mediaHubGroupBy" onchange="mediaHubRender()">' +
+                        '<option value="type">Ture gore</option>' +
+                        '<option value="chat">Sohbete gore</option>' +
+                        '<option value="none">Liste</option>' +
+                    '</select>' +
+                    '<button class="btn btn-secondary btn-sm" type="button" onclick="mediaHubReload(true)"><i class="bi bi-arrow-clockwise"></i> Yenile</button>' +
+                    '<button class="btn btn-primary btn-sm" type="button" onclick="downloadAllMedia()"><i class="bi bi-cloud-download-fill"></i> Eksikleri indir</button>' +
+                '</div>' +
+                '<div class="media-hub-summary" id="mediaHubSummary"></div>' +
+            '</div>' +
+            '<div id="mediaHubList"></div>' +
+            '<div class="media-hub-footer">' +
+                '<button class="btn btn-secondary" id="mediaHubLoadMoreBtn" type="button" onclick="mediaHubLoadMore()" style="display:none;">Daha fazla yukle</button>' +
+                '<div class="spinner" id="mediaHubSpinner" style="display:none;"></div>' +
+            '</div>' +
+        '</div>';
+}
+
+function ensureMediaHubState() {
+    if (mediaHubState && typeof mediaHubState === 'object') return;
+    mediaHubState = {
+        items: [],
+        offset: 0,
+        hasMore: true,
+        loading: false,
+        enqueuedIds: new Set(),
+        lastFiltersKey: '',
+        lastKind: 'all',
+        lastDownloaded: 'all',
+        lastChatId: '',
+        lastGroupBy: 'type',
+        lastQuery: ''
+    };
+}
+
+async function loadMediaHubData() {
+    ensureMediaHubState();
+    await mediaHubLoadChats();
+    mediaHubApplyStateToControls();
+    mediaHubReload(true);
+}
+
+function mediaHubApplyStateToControls() {
+    if (!mediaHubState) return;
+    const kindEl = document.getElementById('mediaHubKind');
+    if (kindEl) kindEl.value = mediaHubState.lastKind || 'all';
+    const downloadedEl = document.getElementById('mediaHubDownloaded');
+    if (downloadedEl) downloadedEl.value = mediaHubState.lastDownloaded || 'all';
+    const groupByEl = document.getElementById('mediaHubGroupBy');
+    if (groupByEl) groupByEl.value = mediaHubState.lastGroupBy || 'type';
+    const searchEl = document.getElementById('mediaHubSearch');
+    if (searchEl) searchEl.value = mediaHubState.lastQuery || '';
+    const chatEl = document.getElementById('mediaHubChat');
+    if (chatEl) chatEl.value = mediaHubState.lastChatId || '';
+}
+
+async function mediaHubLoadChats() {
+    try {
+        const activePromise = (Array.isArray(chats) && chats.length) ? Promise.resolve(chats) : api('api/chats');
+        const archivedPromise = (archivedChatsLoaded && Array.isArray(archivedChats))
+            ? Promise.resolve(archivedChats)
+            : api('api/chats?archived=1').catch(() => []);
+
+        const [activeRaw, archivedRaw] = await Promise.all([activePromise, archivedPromise]);
+        const activeList = Array.isArray(activeRaw) ? activeRaw : [];
+        const archivedList = Array.isArray(archivedRaw) ? archivedRaw : [];
+
+        const merged = [];
+        const seen = new Set();
+        const pushUnique = (item) => {
+            if (!item || !item.chat_id) return;
+            const id = String(item.chat_id);
+            if (seen.has(id)) return;
+            seen.add(id);
+            merged.push(item);
+        };
+
+        activeList.forEach(pushUnique);
+        archivedList.forEach(pushUnique);
+        mediaHubChats = merged;
+    } catch (e) {
+        mediaHubChats = [];
+    }
+
+    const chatSelect = document.getElementById('mediaHubChat');
+    if (!chatSelect) return;
+
+    const previous = chatSelect.value;
+    const options = ['<option value="">Tum sohbetler</option>'];
+    mediaHubChats.forEach((chat) => {
+        const chatId = String(chat.chat_id || '').trim();
+        if (!chatId) return;
+        const name = chat.name || chatId;
+        const isArchived = chat.is_archived === 1 || chat.is_archived === true;
+        const label = name + (isArchived ? ' (Arsiv)' : '');
+        options.push('<option value="' + escapeHtmlAttribute(chatId) + '">' + escapeHtml(label) + '</option>');
+    });
+    chatSelect.innerHTML = options.join('');
+    if (previous) {
+        chatSelect.value = previous;
+    }
+}
+
+function mediaHubDebouncedSearch() {
+    if (mediaHubSearchDebounce) {
+        clearTimeout(mediaHubSearchDebounce);
+    }
+    mediaHubSearchDebounce = setTimeout(() => {
+        mediaHubReload(true);
+    }, 300);
+}
+
+function mediaHubReadControls() {
+    const kind = document.getElementById('mediaHubKind')?.value || 'all';
+    const downloaded = document.getElementById('mediaHubDownloaded')?.value || 'all';
+    const groupBy = document.getElementById('mediaHubGroupBy')?.value || 'type';
+    const chatId = document.getElementById('mediaHubChat')?.value || '';
+    const q = document.getElementById('mediaHubSearch')?.value?.trim() || '';
+    return { kind, downloaded, groupBy, chatId, q };
+}
+
+function mediaHubSetLoading(isLoading) {
+    ensureMediaHubState();
+    mediaHubState.loading = Boolean(isLoading);
+    const spinner = document.getElementById('mediaHubSpinner');
+    if (spinner) spinner.style.display = mediaHubState.loading ? 'block' : 'none';
+    const loadMoreBtn = document.getElementById('mediaHubLoadMoreBtn');
+    if (loadMoreBtn) loadMoreBtn.disabled = mediaHubState.loading;
+}
+
+async function mediaHubReload(reset) {
+    ensureMediaHubState();
+    const doReset = reset === true;
+    const { kind, downloaded, groupBy, chatId, q } = mediaHubReadControls();
+
+    mediaHubState.lastKind = kind;
+    mediaHubState.lastDownloaded = downloaded;
+    mediaHubState.lastGroupBy = groupBy;
+    mediaHubState.lastChatId = chatId;
+    mediaHubState.lastQuery = q;
+
+    const filtersKey = JSON.stringify({ kind, downloaded, chatId, q });
+    if (!doReset && filtersKey !== mediaHubState.lastFiltersKey) {
+        reset = true;
+    }
+
+    if (doReset || filtersKey !== mediaHubState.lastFiltersKey) {
+        mediaHubState.items = [];
+        mediaHubState.offset = 0;
+        mediaHubState.hasMore = true;
+        mediaHubState.enqueuedIds = new Set();
+        mediaHubState.lastFiltersKey = filtersKey;
+    }
+
+    if (mediaHubState.loading) return;
+    if (!mediaHubState.hasMore && !doReset) return;
+
+    mediaHubSetLoading(true);
+    try {
+        const params = new URLSearchParams();
+        params.set('limit', String(MEDIA_HUB_PAGE_SIZE));
+        params.set('offset', String(mediaHubState.offset));
+        if (chatId) params.set('chatId', chatId);
+        if (kind && kind !== 'all') params.set('kind', kind);
+        if (downloaded === 'downloaded') params.set('downloaded', '1');
+        else if (downloaded === 'missing') params.set('downloaded', '0');
+        if (q) params.set('q', q);
+
+        const data = await api('api/media/items?' + params.toString());
+        const items = Array.isArray(data?.items) ? data.items : [];
+        mediaHubState.items = mediaHubState.items.concat(items);
+        mediaHubState.offset += items.length;
+        mediaHubState.hasMore = Boolean(data?.hasMore);
+    } catch (e) {
+        showToast('Medya listesi yuklenemedi: ' + e.message, 'error');
+    } finally {
+        mediaHubSetLoading(false);
+    }
+
+    mediaHubRender();
+}
+
+function mediaHubLoadMore() {
+    mediaHubReload(false);
+}
+
+function mediaHubKindLabel(kind) {
+    const k = String(kind || '').toLowerCase();
+    if (k === 'image') return 'Fotograf';
+    if (k === 'video') return 'Video';
+    if (k === 'document') return 'Belge';
+    if (k === 'audio') return 'Ses';
+    if (k === 'sticker') return 'Sticker';
+    return 'Diger';
+}
+
+function mediaHubKindIcon(kind) {
+    const k = String(kind || '').toLowerCase();
+    if (k === 'image') return 'bi-image';
+    if (k === 'video') return 'bi-camera-video';
+    if (k === 'document') return 'bi-file-earmark';
+    if (k === 'audio') return 'bi-volume-up';
+    if (k === 'sticker') return 'bi-sticky';
+    return 'bi-file-earmark';
+}
+
+function mediaHubRender() {
+    ensureMediaHubState();
+    const listEl = document.getElementById('mediaHubList');
+    if (!listEl) return;
+
+    const { groupBy } = mediaHubReadControls();
+    const items = Array.isArray(mediaHubState.items) ? mediaHubState.items : [];
+
+    const downloadedCount = items.filter(i => i && (i.is_downloaded === 1 || i.is_downloaded === true)).length;
+    const missingCount = items.length - downloadedCount;
+
+    const summaryEl = document.getElementById('mediaHubSummary');
+    if (summaryEl) {
+        summaryEl.textContent = items.length + ' oge • ' + downloadedCount + ' indirildi • ' + missingCount + ' eksik';
+    }
+
+    const loadMoreBtn = document.getElementById('mediaHubLoadMoreBtn');
+    if (loadMoreBtn) {
+        loadMoreBtn.style.display = mediaHubState.hasMore ? 'inline-flex' : 'none';
+    }
+
+    if (!items.length) {
+        listEl.innerHTML = '<div style="padding: 12px; color: var(--text-secondary);">Medya bulunamadi</div>';
+        return;
+    }
+
+    const groups = new Map();
+    const pushToGroup = (key, label, item) => {
+        if (!groups.has(key)) {
+            groups.set(key, { key, label, items: [] });
+        }
+        groups.get(key).items.push(item);
+    };
+
+    if (groupBy === 'chat') {
+        items.forEach((item) => {
+            const chatId = String(item.chat_id || '');
+            const name = item.chat_name || chatId || 'Sohbet';
+            const archived = item.chat_is_archived === 1 ? ' (Arsiv)' : '';
+            pushToGroup(chatId || 'unknown', name + archived, item);
+        });
+    } else if (groupBy === 'none') {
+        pushToGroup('all', 'Tum Medyalar', null);
+        groups.get('all').items = items;
+    } else {
+        const order = ['image', 'video', 'document', 'audio', 'sticker', 'other'];
+        const labelMap = new Map(order.map(k => [k, mediaHubKindLabel(k)]));
+        items.forEach((item) => {
+            const kind = String(item.kind || 'other');
+            const key = labelMap.has(kind) ? kind : 'other';
+            pushToGroup(key, labelMap.get(key) || mediaHubKindLabel(key), item);
+        });
+        const orderedGroups = new Map();
+        order.forEach((key) => {
+            if (groups.has(key)) orderedGroups.set(key, groups.get(key));
+        });
+        for (const [key, value] of groups.entries()) {
+            if (!orderedGroups.has(key)) orderedGroups.set(key, value);
+        }
+        groups.clear();
+        for (const [key, value] of orderedGroups.entries()) {
+            groups.set(key, value);
+        }
+    }
+
+    const html = [];
+    for (const group of groups.values()) {
+        const groupItems = Array.isArray(group.items) ? group.items : [];
+        const header = escapeHtml(group.label || '');
+        html.push('<div class="media-group">');
+        if (groupBy !== 'none') {
+            html.push('<div class="media-group-header">' + header + ' <span class="media-group-count">(' + groupItems.length + ')</span></div>');
+        }
+        html.push('<div class="media-grid">');
+        groupItems.forEach((item) => {
+            html.push(mediaHubRenderCard(item));
+        });
+        html.push('</div></div>');
+    }
+
+    listEl.innerHTML = html.join('');
+}
+
+function mediaHubRenderCard(item) {
+    const messageId = String(item?.message_id || item?.messageId || '').trim();
+    const chatId = String(item?.chat_id || item?.chatId || '').trim();
+    const chatName = String(item?.chat_name || '').trim() || chatId || 'Sohbet';
+    const kind = String(item?.kind || 'other').toLowerCase();
+    const typeLabel = mediaHubKindLabel(kind);
+    const icon = mediaHubKindIcon(kind);
+    const isDownloaded = item?.is_downloaded === 1 || item?.is_downloaded === true;
+    const isArchived = item?.chat_is_archived === 1 || item?.chat_is_archived === true;
+
+    const safeMediaUrl = sanitizeUrl(item?.media_url || '');
+    const canPreviewImage = isDownloaded && safeMediaUrl && (kind === 'image' || kind === 'sticker') && !safeMediaUrl.toLowerCase().endsWith('.svg');
+    const canPreviewVideo = isDownloaded && safeMediaUrl && kind === 'video';
+
+    const caption = String(item?.body || '').trim();
+    const captionText = caption ? caption.slice(0, 120) : '';
+
+    const ts = normalizeTimestamp(item?.timestamp);
+    const timeText = ts ? formatDateTime(ts) : '';
+
+    const statusBadge = isDownloaded
+        ? '<span class="media-badge ok">Indirildi</span>'
+        : '<span class="media-badge warn">Eksik</span>';
+
+    const archiveBadge = isArchived ? '<span class="media-badge subtle">Arsiv</span>' : '';
+
+    const enqueueDisabled = Boolean(messageId && mediaHubState?.enqueuedIds?.has(messageId));
+    const downloadBtn = isDownloaded
+        ? ('<a class="btn btn-primary btn-sm" href="' + escapeHtmlAttribute(safeMediaUrl) + '" target="_blank" rel="noopener noreferrer">Ac</a>')
+        : ('<button class="btn btn-primary btn-sm" type="button" data-message-id="' + escapeHtmlAttribute(messageId) + '" onclick="mediaHubEnqueueFromButton(this)"' + (enqueueDisabled ? ' disabled' : '') + '>' +
+            (enqueueDisabled ? 'Kuyrukta' : 'Indir') +
+          '</button>');
+
+    const thumb = (() => {
+        if (canPreviewImage) {
+            return '<img loading="lazy" src="' + escapeHtmlAttribute(safeMediaUrl) + '" alt="" data-src="' + escapeHtmlAttribute(safeMediaUrl) + '" onclick="openMediaLightbox(this.dataset.src); event.stopPropagation();">';
+        }
+        if (canPreviewVideo) {
+            return '<video class="media-thumb-video" src="' + escapeHtmlAttribute(safeMediaUrl) + '" preload="metadata" muted playsinline onclick="window.open(this.src, \'_blank\'); event.stopPropagation();"></video>';
+        }
+        return '<div class="media-thumb-placeholder"><i class="bi ' + icon + '"></i></div>';
+    })();
+
+    return '' +
+        '<div class="media-card" data-message-id="' + escapeHtmlAttribute(messageId) + '">' +
+            '<div class="media-thumb">' + thumb + '</div>' +
+            '<div class="media-card-body">' +
+                '<div class="media-card-title">' + escapeHtml(chatName) + '</div>' +
+                '<div class="media-card-sub">' + escapeHtml(typeLabel) + (timeText ? (' • ' + escapeHtml(timeText)) : '') + '</div>' +
+                (captionText ? ('<div class="media-card-caption">' + escapeHtml(captionText) + '</div>') : '') +
+                '<div class="media-card-badges">' + statusBadge + archiveBadge + '</div>' +
+                '<div class="media-card-actions">' +
+                    '<button class="btn btn-secondary btn-sm" type="button" data-chat-id="' + escapeHtmlAttribute(chatId) + '" onclick="mediaHubOpenChatFromButton(this)">Sohbete git</button>' +
+                    downloadBtn +
+                '</div>' +
+            '</div>' +
+        '</div>';
+}
+
+function mediaHubOpenChatFromButton(btn) {
+    const chatId = btn?.dataset?.chatId ? String(btn.dataset.chatId).trim() : '';
+    if (!chatId) return;
+    closeModal();
+    const match = Array.isArray(mediaHubChats) ? mediaHubChats.find(c => c && c.chat_id === chatId) : null;
+    selectChat(chatId, match?.name || chatId);
+}
+
+async function mediaHubEnqueueFromButton(btn) {
+    const messageId = btn?.dataset?.messageId ? String(btn.dataset.messageId).trim() : '';
+    if (!messageId) return;
+    ensureMediaHubState();
+    if (mediaHubState.enqueuedIds.has(messageId)) return;
+    mediaHubState.enqueuedIds.add(messageId);
+    try {
+        const result = await api('api/media/enqueue', 'POST', { messageId });
+        if (result && result.enqueued) {
+            showToast('Medya kuyruga eklendi', 'success');
+        } else {
+            showToast('Medya zaten indirildi veya kuyrukta', 'info');
+        }
+    } catch (e) {
+        mediaHubState.enqueuedIds.delete(messageId);
+        showToast('Islem basarisiz: ' + e.message, 'error');
+    }
+    mediaHubRender();
 }
 
 // Drive Content
@@ -5847,6 +6280,12 @@ Object.assign(window, {
     searchInChat,
     refreshChat,
     downloadAllMedia,
+    mediaHubReload,
+    mediaHubLoadMore,
+    mediaHubDebouncedSearch,
+    mediaHubRender,
+    mediaHubOpenChatFromButton,
+    mediaHubEnqueueFromButton,
     recoverMedia,
     exportChat,
     clearChat,
