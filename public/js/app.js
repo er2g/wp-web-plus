@@ -23,6 +23,7 @@ let webhooksCache = [];
 let availableTags = [];
 let currentChatTags = [];
 let currentChatNotes = [];
+let currentSettingsCategory = localStorage.getItem('uiSettingsCategory') || 'appearance';
 let settings = {
     downloadMedia: true,
     downloadProfilePictures: false,
@@ -36,6 +37,10 @@ let settings = {
 let uiPreferences = {
     accentColor: '',
     wallpaper: 'default',
+    fontFamily: 'system',
+    fontFamilyCustom: '',
+    textPrimaryColor: '',
+    textSecondaryColor: '',
     fontSize: '14.2',
     interfaceScale: 100,
     messageBubbleScale: 100,
@@ -66,6 +71,12 @@ const GRADIENT_PRESETS = {
     forest: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)',
     fire: 'linear-gradient(135deg, #f12711 0%, #f5af19 100%)',
     midnight: 'linear-gradient(135deg, #232526 0%, #414345 100%)'
+};
+
+const FONT_FAMILY_PRESETS = {
+    arial: 'Arial, Helvetica, sans-serif',
+    serif: "Georgia, 'Times New Roman', Times, serif",
+    mono: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace"
 };
 
 let selectedAttachment = null;
@@ -194,6 +205,10 @@ async function fetchUserPreferences() {
 function loadLocalPreferences() {
     uiPreferences.accentColor = localStorage.getItem('uiAccent') || uiPreferences.accentColor;
     uiPreferences.wallpaper = localStorage.getItem('uiWallpaper') || uiPreferences.wallpaper;
+    uiPreferences.fontFamily = localStorage.getItem('uiFontFamily') || uiPreferences.fontFamily;
+    uiPreferences.fontFamilyCustom = localStorage.getItem('uiFontFamilyCustom') || uiPreferences.fontFamilyCustom;
+    uiPreferences.textPrimaryColor = localStorage.getItem('uiTextPrimaryColor') || uiPreferences.textPrimaryColor;
+    uiPreferences.textSecondaryColor = localStorage.getItem('uiTextSecondaryColor') || uiPreferences.textSecondaryColor;
     uiPreferences.fontSize = localStorage.getItem('uiFontSize') || uiPreferences.fontSize;
     const interfaceScale = localStorage.getItem('uiInterfaceScale');
     if (interfaceScale !== null) {
@@ -244,6 +259,8 @@ function loadCustomizations() {
 
 function applyCustomizations() {
     if (uiPreferences.accentColor) applyAccentColor(uiPreferences.accentColor);
+    applyFontFamily();
+    applyTextColors();
     applyInterfaceScale(uiPreferences.interfaceScale);
     applyMessageBubbleScale(uiPreferences.messageBubbleScale);
     applyEdgeToEdgeLayout(uiPreferences.edgeToEdgeLayout);
@@ -263,6 +280,10 @@ async function saveUserPreferences() {
     try {
         localStorage.setItem('uiAccent', uiPreferences.accentColor);
         localStorage.setItem('uiWallpaper', uiPreferences.wallpaper);
+        localStorage.setItem('uiFontFamily', uiPreferences.fontFamily);
+        localStorage.setItem('uiFontFamilyCustom', uiPreferences.fontFamilyCustom);
+        localStorage.setItem('uiTextPrimaryColor', uiPreferences.textPrimaryColor);
+        localStorage.setItem('uiTextSecondaryColor', uiPreferences.textSecondaryColor);
         localStorage.setItem('uiFontSize', uiPreferences.fontSize);
         localStorage.setItem('uiInterfaceScale', String(uiPreferences.interfaceScale));
         localStorage.setItem('uiMessageBubbleScale', String(uiPreferences.messageBubbleScale));
@@ -311,6 +332,30 @@ function updateCustomizationUI() {
     const fontSizeRange = document.getElementById('fontSizeRange');
     if (fontSizeRange) {
         fontSizeRange.value = uiPreferences.fontSize;
+    }
+
+    const fontFamilySelect = document.getElementById('fontFamilySelect');
+    if (fontFamilySelect) {
+        fontFamilySelect.value = uiPreferences.fontFamily || 'system';
+    }
+    const fontFamilyCustomControl = document.getElementById('fontFamilyCustomControl');
+    if (fontFamilyCustomControl) {
+        fontFamilyCustomControl.style.display = (uiPreferences.fontFamily === 'custom') ? 'block' : 'none';
+    }
+    const fontFamilyCustomInput = document.getElementById('fontFamilyCustomInput');
+    if (fontFamilyCustomInput) {
+        fontFamilyCustomInput.value = String(uiPreferences.fontFamilyCustom || '');
+    }
+
+    const textPrimaryPicker = document.getElementById('textPrimaryColorPicker');
+    if (textPrimaryPicker) {
+        const fallback = cssColorToHex(getComputedStyle(document.documentElement).getPropertyValue('--text-primary')) || '#111b21';
+        textPrimaryPicker.value = uiPreferences.textPrimaryColor || fallback;
+    }
+    const textSecondaryPicker = document.getElementById('textSecondaryColorPicker');
+    if (textSecondaryPicker) {
+        const fallback = cssColorToHex(getComputedStyle(document.documentElement).getPropertyValue('--text-secondary')) || '#667781';
+        textSecondaryPicker.value = uiPreferences.textSecondaryColor || fallback;
     }
     const interfaceScaleRange = document.getElementById('interfaceScaleRange');
     const interfaceScaleValue = document.getElementById('interfaceScaleValue');
@@ -484,6 +529,99 @@ function applyWallpaper(value) {
     const root = document.documentElement;
     const wallpaperKey = value || 'default';
     root.style.setProperty('--chat-wallpaper', `var(--wallpaper-${wallpaperKey})`);
+}
+
+function updateFontFamily(value) {
+    uiPreferences.fontFamily = String(value || 'system');
+    applyFontFamily();
+    updateCustomizationUI();
+    saveUserPreferences();
+}
+
+function updateFontFamilyCustom(value) {
+    uiPreferences.fontFamily = 'custom';
+    uiPreferences.fontFamilyCustom = String(value || '').trim();
+    applyFontFamily();
+    updateCustomizationUI();
+    saveUserPreferences();
+}
+
+function applyFontFamily() {
+    const root = document.documentElement;
+    const mode = String(uiPreferences.fontFamily || 'system').trim();
+
+    if (mode === 'custom') {
+        const custom = String(uiPreferences.fontFamilyCustom || '').trim();
+        if (custom) {
+            root.style.setProperty('--ui-font-family', custom);
+        } else {
+            root.style.removeProperty('--ui-font-family');
+        }
+        return;
+    }
+
+    const preset = FONT_FAMILY_PRESETS[mode];
+    if (preset) {
+        root.style.setProperty('--ui-font-family', preset);
+        return;
+    }
+
+    root.style.removeProperty('--ui-font-family');
+}
+
+function updateTextPrimaryColor(color) {
+    uiPreferences.textPrimaryColor = normalizeHexColor(color);
+    applyTextColors();
+    updateCustomizationUI();
+    saveUserPreferences();
+}
+
+function updateTextSecondaryColor(color) {
+    uiPreferences.textSecondaryColor = normalizeHexColor(color);
+    applyTextColors();
+    updateCustomizationUI();
+    saveUserPreferences();
+}
+
+function resetTextColors() {
+    uiPreferences.textPrimaryColor = '';
+    uiPreferences.textSecondaryColor = '';
+    applyTextColors();
+    updateCustomizationUI();
+    saveUserPreferences();
+}
+
+function applyTextColors() {
+    const root = document.documentElement;
+    const primary = normalizeHexColor(uiPreferences.textPrimaryColor);
+    const secondary = normalizeHexColor(uiPreferences.textSecondaryColor);
+
+    if (primary) {
+        root.style.setProperty('--text-primary', primary);
+    } else {
+        root.style.removeProperty('--text-primary');
+    }
+
+    if (secondary) {
+        root.style.setProperty('--text-secondary', secondary);
+        root.style.setProperty('--text-muted', secondary);
+        root.style.setProperty('--text-light', secondary);
+        root.style.setProperty('--icon-color', secondary);
+        return;
+    }
+
+    if (primary) {
+        root.style.setProperty('--text-secondary', hexToRgba(primary, 0.7));
+        root.style.setProperty('--text-muted', hexToRgba(primary, 0.55));
+        root.style.setProperty('--text-light', hexToRgba(primary, 0.55));
+        root.style.setProperty('--icon-color', hexToRgba(primary, 0.7));
+        return;
+    }
+
+    root.style.removeProperty('--text-secondary');
+    root.style.removeProperty('--text-muted');
+    root.style.removeProperty('--text-light');
+    root.style.removeProperty('--icon-color');
 }
 
 function updateFontSize(size) {
@@ -825,6 +963,46 @@ function applyBackgroundSettings() {
     root.style.setProperty('--chat-bg-opacity', uiPreferences.backgroundOpacity / 100);
 }
 
+function normalizeHexColor(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    if (/^#[0-9a-fA-F]{6}$/.test(raw)) return raw.toLowerCase();
+    if (/^#[0-9a-fA-F]{3}$/.test(raw)) {
+        const hex = raw.slice(1).split('').map(ch => ch + ch).join('');
+        return ('#' + hex).toLowerCase();
+    }
+    return '';
+}
+
+function cssColorToHex(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+
+    const normalized = normalizeHexColor(raw);
+    if (normalized) return normalized;
+
+    const match = raw.match(/^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})/i);
+    if (!match) return '';
+
+    const r = Math.max(0, Math.min(255, parseInt(match[1], 10)));
+    const g = Math.max(0, Math.min(255, parseInt(match[2], 10)));
+    const b = Math.max(0, Math.min(255, parseInt(match[3], 10)));
+
+    return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
+}
+
+function hexToRgba(hex, alpha) {
+    const normalized = normalizeHexColor(hex);
+    if (!normalized) return hex;
+    const value = normalized.replace('#', '');
+    const num = parseInt(value, 16);
+    const r = (num >> 16) & 255;
+    const g = (num >> 8) & 255;
+    const b = num & 255;
+    const a = Math.max(0, Math.min(1, Number(alpha)));
+    return `rgba(${r}, ${g}, ${b}, ${a})`;
+}
+
 function adjustColor(hex, amount) {
     const value = hex.replace('#', '');
     if (value.length !== 6) return hex;
@@ -1059,10 +1237,12 @@ async function api(url, method, body, fetchOptions) {
 }
 
 // Panel Management
-function openSettings() {
+function openSettings(category) {
     closeAllPanels();
-    document.getElementById('settingsPanel').classList.add('open');
+    const panel = document.getElementById('settingsPanel');
+    panel.classList.add('open');
     document.getElementById('overlay').classList.add('show');
+    selectSettingsCategory(category || currentSettingsCategory);
 }
 
 function closeSettings() {
@@ -1086,6 +1266,22 @@ function closeAllPanels() {
     document.getElementById('featuresPanel').classList.remove('open');
     document.getElementById('overlay').classList.remove('show');
     document.querySelectorAll('.dropdown-menu.show').forEach(m => m.classList.remove('show'));
+}
+
+function selectSettingsCategory(category) {
+    const allowed = new Set(['connection', 'sync', 'appearance', 'notifications', 'about']);
+    const next = allowed.has(String(category || '').trim()) ? String(category).trim() : 'appearance';
+    currentSettingsCategory = next;
+    try {
+        localStorage.setItem('uiSettingsCategory', next);
+    } catch (e) {}
+
+    document.querySelectorAll('#settingsPanel [data-settings-nav="true"]').forEach((btn) => {
+        btn.classList.toggle('active', btn.dataset.settingsCategory === next);
+    });
+    document.querySelectorAll('#settingsPanel [data-settings-page="true"]').forEach((page) => {
+        page.classList.toggle('active', page.dataset.settingsCategory === next);
+    });
 }
 
 function toggleDropdown(id) {

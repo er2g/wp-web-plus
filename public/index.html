@@ -347,12 +347,37 @@
     <!-- Settings Panel (Right) -->
     <div class="settings-panel" id="settingsPanel">
         <div class="settings-header">
-            <button class="icon-btn back-btn" onclick="closeSettings()">
-                <i class="bi bi-arrow-left"></i>
+            <button class="icon-btn back-btn" onclick="closeSettings()" aria-label="Kapat">
+                <i class="bi bi-x-lg"></i>
             </button>
             <h3>Ayarlar</h3>
         </div>
         <div class="settings-content">
+            <div class="settings-layout">
+                <div class="settings-nav" aria-label="Ayar kategorileri">
+                    <button type="button" class="settings-nav-item" data-settings-nav="true" data-settings-category="connection" onclick="selectSettingsCategory('connection')">
+                        <i class="bi bi-wifi"></i>
+                        <span>Baglanti</span>
+                    </button>
+                    <button type="button" class="settings-nav-item" data-settings-nav="true" data-settings-category="sync" onclick="selectSettingsCategory('sync')">
+                        <i class="bi bi-arrow-repeat"></i>
+                        <span>Senkronizasyon</span>
+                    </button>
+                    <button type="button" class="settings-nav-item" data-settings-nav="true" data-settings-category="appearance" onclick="selectSettingsCategory('appearance')">
+                        <i class="bi bi-palette-fill"></i>
+                        <span>Gorunum</span>
+                    </button>
+                    <button type="button" class="settings-nav-item" data-settings-nav="true" data-settings-category="notifications" onclick="selectSettingsCategory('notifications')">
+                        <i class="bi bi-bell-fill"></i>
+                        <span>Bildirimler</span>
+                    </button>
+                    <button type="button" class="settings-nav-item" data-settings-nav="true" data-settings-category="about" onclick="selectSettingsCategory('about')">
+                        <i class="bi bi-info-circle"></i>
+                        <span>Hakkinda</span>
+                    </button>
+                </div>
+                <div class="settings-pages">
+                    <div class="settings-page" data-settings-page="true" data-settings-category="connection">
             <!-- Connection Section -->
             <div class="settings-section">
                 <div class="settings-section-title">Baglanti</div>
@@ -373,6 +398,8 @@
             </div>
 
             <!-- Sync Section -->
+                    </div>
+                    <div class="settings-page" data-settings-page="true" data-settings-category="sync">
                 <div class="settings-section">
                     <div class="settings-section-title">Senkronizasyon</div>
                     <div class="settings-item">
@@ -413,10 +440,12 @@
 	                        <div class="title">Tum Sohbetlerde Eksik Medyalari Indir</div>
 	                        <div class="subtitle">Tum sohbetler icin medya indirmeyi tetikle</div>
 	                    </div>
-	                </div>
-	            </div>
+                    </div>
+                </div>
 
 	            <!-- Appearance Section -->
+                    </div>
+                    <div class="settings-page" data-settings-page="true" data-settings-category="appearance">
             <div class="settings-section">
                 <div class="settings-section-title">Gorunum</div>
                 <div class="settings-item" onclick="toggleTheme()">
@@ -434,6 +463,37 @@
                         <div class="subtitle">Arayuz ana rengini degistir</div>
                     </div>
                     <input type="color" id="accentColorPicker" class="color-picker" onchange="updateAccentColor(this.value)">
+                </div>
+                <div class="settings-item">
+                    <i class="icon bi bi-fonts"></i>
+                    <div class="info">
+                        <div class="title">Yazi Tipi</div>
+                        <div class="subtitle">Tum arayuz yazı tipi</div>
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 8px; width: 50%;">
+                        <select id="fontFamilySelect" class="select-input" onchange="updateFontFamily(this.value)">
+                            <option value="system">Varsayilan</option>
+                            <option value="arial">Arial</option>
+                            <option value="serif">Serif (Georgia)</option>
+                            <option value="mono">Monospace</option>
+                            <option value="custom">Ozel</option>
+                        </select>
+                        <div id="fontFamilyCustomControl" style="display: none;">
+                            <input type="text" id="fontFamilyCustomInput" class="form-input" placeholder="Inter, system-ui, sans-serif" onchange="updateFontFamilyCustom(this.value)" style="padding: 4px 8px; font-size: 12px;">
+                        </div>
+                    </div>
+                </div>
+                <div class="settings-item">
+                    <i class="icon bi bi-paint-bucket"></i>
+                    <div class="info">
+                        <div class="title">Yazi Rengi</div>
+                        <div class="subtitle">Ana ve ikincil metin rengi</div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <input type="color" id="textPrimaryColorPicker" class="color-picker" onchange="updateTextPrimaryColor(this.value)" title="Ana renk">
+                        <input type="color" id="textSecondaryColorPicker" class="color-picker" onchange="updateTextSecondaryColor(this.value)" title="Ikincil renk">
+                        <button class="btn btn-secondary btn-sm" type="button" onclick="resetTextColors()">Sifirla</button>
+                    </div>
                 </div>
                 <div class="settings-item">
                     <i class="icon bi bi-image"></i>
@@ -585,6 +645,8 @@
             </div>
 
             <!-- Notifications Section -->
+                    </div>
+                    <div class="settings-page" data-settings-page="true" data-settings-category="notifications">
             <div class="settings-section">
                 <div class="settings-section-title">Bildirimler</div>
                 <div class="settings-item">
@@ -638,6 +700,8 @@
             </div>
 
             <!-- About Section -->
+                    </div>
+                    <div class="settings-page" data-settings-page="true" data-settings-category="about">
             <div class="settings-section">
                 <div class="settings-section-title">Hakkinda</div>
                 <div class="settings-item">
@@ -645,6 +709,9 @@
                     <div class="info">
                         <div class="title">WhatsApp Premium Plus</div>
                         <div class="subtitle">Surum 2.0.0</div>
+                    </div>
+                </div>
+            </div>
                     </div>
                 </div>
             </div>
