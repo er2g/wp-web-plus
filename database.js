@@ -53,6 +53,8 @@ function createDatabase(config) {
         is_group INTEGER DEFAULT 0,
         is_from_me INTEGER DEFAULT 0,
         ack INTEGER DEFAULT 0,
+        is_deleted_for_everyone INTEGER DEFAULT 0,
+        deleted_for_everyone_at INTEGER,
         timestamp INTEGER,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -505,6 +507,18 @@ function createDatabase(config) {
                 }
                 db.exec('CREATE INDEX IF NOT EXISTS idx_chats_archived_last_message_at ON chats(is_archived, last_message_at)');
             }
+        },
+        {
+            version: 14,
+            name: 'add_message_deleted_for_everyone_flags',
+            apply: () => {
+                if (!columnExists('messages', 'is_deleted_for_everyone')) {
+                    db.exec('ALTER TABLE messages ADD COLUMN is_deleted_for_everyone INTEGER DEFAULT 0');
+                }
+                if (!columnExists('messages', 'deleted_for_everyone_at')) {
+                    db.exec('ALTER TABLE messages ADD COLUMN deleted_for_everyone_at INTEGER');
+                }
+            }
         }
     ];
 
@@ -555,6 +569,7 @@ function createDatabase(config) {
             timestamp = excluded.timestamp
     `),
         updateAck: db.prepare(`UPDATE messages SET ack = ? WHERE message_id = ?`),
+        markDeletedForEveryone: db.prepare(`UPDATE messages SET is_deleted_for_everyone = 1, deleted_for_everyone_at = ? WHERE message_id = ?`),
         getByChatId: db.prepare(`SELECT * FROM messages WHERE chat_id = ? ORDER BY timestamp DESC LIMIT ? OFFSET ?`),
         getAll: db.prepare(`SELECT * FROM messages ORDER BY timestamp DESC LIMIT ? OFFSET ?`),
         search: db.prepare(`SELECT * FROM messages WHERE body LIKE ? ORDER BY timestamp DESC LIMIT 100`),

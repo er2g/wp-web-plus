@@ -994,6 +994,16 @@ class WhatsAppClient {
                 // Ignore errors if message not found
             }
         });
+
+        this.client.on('message_revoke_everyone', async (msg, revokedMsg) => {
+            try {
+                await this.handleMessageRevokeEveryone(msg, revokedMsg);
+            } catch (error) {
+                this.log('warn', 'message', 'Failed to handle message revoke: ' + error.message, {
+                    messageId: msg?.id?._serialized || null
+                });
+            }
+        });
     }
 
     async downloadMediaWithRetry(msg, maxRetries = CONSTANTS.DEFAULT_MAX_RETRIES, timeoutMs = CONSTANTS.DEFAULT_DOWNLOAD_TIMEOUT_MS) {
@@ -1611,6 +1621,181 @@ class WhatsAppClient {
             this.log('error', 'message', 'Failed to process message: ' + e.message);
             return null;
         }
+    }
+
+    async storeMessageSnapshot(msg, options = {}) {
+        const messageId = msg?.id?._serialized;
+        if (!messageId) return { stored: false };
+
+        try {
+            const existing = this.db.db.prepare('SELECT message_id FROM messages WHERE message_id = ?').get(messageId);
+            if (existing) {
+                return { stored: false, existed: true, messageId };
+            }
+        } catch (e) {}
+
+        const timeoutMs = Math.max(3000, Number(options.timeoutMs) || 15000);
+
+        let chat = null;
+        try {
+            chat = await Promise.race([
+                msg.getChat(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('getChat timeout')), timeoutMs))
+            ]);
+        } catch (e) {
+            chat = null;
+        }
+
+        const chatId = chat?.id?._serialized || (msg.fromMe ? msg.to : msg.from) || null;
+        if (!chatId) return { stored: false };
+
+        let contact = null;
+        if (!msg.fromMe) {
+            try {
+                contact = await this.getContactCached(msg);
+            } catch (e) {
+                contact = null;
+            }
+        }
+
+        const body = this.getMessageBody(msg);
+        const fromName = msg.fromMe
+            ? (this.info ? this.info.pushname : 'Me')
+            : this.getSenderName(contact, msg);
+        const fromNumber = msg.fromMe
+            ? (this.info?.wid?.user || this.extractPhoneFromId(msg.from))
+            : this.getSenderNumber(contact, msg);
+        const isGroup = chat ? Boolean(chat.isGroup) : String(chatId).endsWith('@g.us');
+
+        const timestampMs = msg.timestamp ? (msg.timestamp * 1000) : Date.now();
+        const messageType = msg.type || 'chat';
+        const mediaMimetype = msg.mimetype || msg._data?.mimetype || null;
+
+        try {
+            this.db.messages.save.run(
+                messageId,
+                chatId,
+                fromNumber || null,
+                msg.to || null,
+                fromName || null,
+                body || null,
+                messageType,
+                null,
+                null,
+                mediaMimetype,
+                null,
+                null,
+                null,
+                isGroup ? 1 : 0,
+                msg.fromMe ? 1 : 0,
+                msg.ack || 0,
+                timestampMs
+            );
+        } catch (e) {}
+
+        return { stored: true, messageId, chatId };
+    }
+
+    async handleMessageRevokeEveryone(msg, revokedMsg) {
+        const messageId = msg?.id?._serialized || revokedMsg?.id?._serialized || null;
+        if (!messageId) return { success: false, reason: 'missing_message_id' };
+
+        let chatId = null;
+        try {
+            const chat = await Promise.race([
+                msg.getChat(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('getChat timeout')), 15000))
+            ]);
+            chatId = chat?.id?._serialized || null;
+        } catch (e) {
+            chatId = null;
+        }
+
+        if (!chatId && revokedMsg) {
+            try {
+                const chat = await Promise.race([
+                    revokedMsg.getChat(),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('getChat timeout')), 15000))
+                ]);
+                chatId = chat?.id?._serialized || null;
+            } catch (e) {
+                chatId = null;
+            }
+        }
+
+        if (!chatId) {
+            chatId = msg?.fromMe ? msg?.to : msg?.from;
+        }
+
+        if (revokedMsg) {
+            try {
+                await this.storeMessageSnapshot(revokedMsg, { timeoutMs: 15000 });
+            } catch (e) {}
+        }
+
+        const deletedAt = Date.now();
+        try {
+            this.db.messages.markDeletedForEveryone.run(deletedAt, messageId);
+        } catch (e) {}
+
+        this.emit('message_revoked', { messageId, chatId: chatId || null, deletedAt, scope: 'everyone' });
+        return { success: true, messageId, chatId: chatId || null, deletedAt };
+    }
+
+    async revokeMessageForEveryone(messageId, options = {}) {
+        if (!this.isReady()) throw new Error('WhatsApp not connected');
+        const id = typeof messageId === 'string' ? messageId.trim() : '';
+        if (!id) throw new Error('Invalid message id');
+
+        const timeoutMs = Math.max(5000, Number(options.timeoutMs) || 30000);
+
+        const msg = await Promise.race([
+            this.client.getMessageById(id),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('getMessageById timeout')), timeoutMs))
+        ]);
+        if (!msg) throw new Error('Message not found');
+
+        const canRevoke = await Promise.race([
+            this.client.pupPage.evaluate(async (msgId) => {
+                const msg = window.Store.Msg.get(msgId) || (await window.Store.Msg.getMessagesById([msgId]))?.messages?.[0];
+                if (!msg) return false;
+                return Boolean(window.Store.MsgActionChecks.canSenderRevokeMsg(msg) || window.Store.MsgActionChecks.canAdminRevokeMsg(msg));
+            }, id),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('revoke permission check timeout')), 15000))
+        ]);
+        if (!canRevoke) throw new Error('Bu mesaj herkesten silinemiyor');
+
+        let chatId = null;
+        try {
+            const chat = await Promise.race([
+                msg.getChat(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('getChat timeout')), 15000))
+            ]);
+            chatId = chat?.id?._serialized || null;
+        } catch (e) {
+            chatId = null;
+        }
+
+        if (!chatId) {
+            chatId = msg.fromMe ? msg.to : msg.from;
+        }
+
+        try {
+            await this.storeMessageSnapshot(msg, { timeoutMs: 15000 });
+        } catch (e) {}
+
+        await Promise.race([
+            msg.delete(true, false),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('delete timeout')), timeoutMs))
+        ]);
+
+        const deletedAt = Date.now();
+        try {
+            this.db.messages.markDeletedForEveryone.run(deletedAt, id);
+        } catch (e) {}
+
+        this.emit('message_revoked', { messageId: id, chatId: chatId || null, deletedAt, scope: 'everyone' });
+        return { success: true, messageId: id, chatId: chatId || null, deletedAt };
     }
 
     indexChat(chat) {

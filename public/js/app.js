@@ -1174,6 +1174,7 @@ function initSocket() {
     });
     socket.on('message', handleNewMessage);
     socket.on('message_ack', handleMessageAck);
+    socket.on('message_revoked', handleMessageRevoked);
     socket.on('media_downloaded', handleMediaDownloaded);
     socket.on('chat_updated', () => scheduleChatsReload());
     socket.on('sync_chats_indexed', () => scheduleChatsReload());
@@ -2180,12 +2181,17 @@ function buildChatMessageRow(message, context = {}, options = {}) {
     const messageId = getChatMessageId(message);
     const messageIdAttr = escapeHtml(messageId);
     const isPending = Boolean(message.client_pending) || (messageId && String(messageId).startsWith('pending-'));
+    const isDeletedForEveryone = message.is_deleted_for_everyone === 1
+        || message.is_deleted_for_everyone === true
+        || message.deleted_for_everyone_at
+        || message.type === 'revoked';
 
     const rowClass = 'message-row ' + (isMine ? 'sent' : 'received') +
         (isSystem ? ' system' : '') +
         (canShowGroupSender ? ' group' : '') +
         (isStacked ? ' stacked' : '') +
         (isPending ? ' pending' : '') +
+        (isDeletedForEveryone ? ' deleted-for-everyone' : '') +
         (options.animate ? ' animate-in' : '');
 
     const dataSenderKeyAttr = escapeHtml(senderKey);
@@ -2194,14 +2200,20 @@ function buildChatMessageRow(message, context = {}, options = {}) {
 
     const bubbleClass = isSystem
         ? 'message-bubble system'
-        : ('message-bubble ' + (isMine ? 'sent' : 'received'));
+        : ('message-bubble ' + (isMine ? 'sent' : 'received') + (isDeletedForEveryone ? ' deleted-for-everyone' : ''));
     const replyBtn = (!isSystem && messageId && !isPending)
         ? '<button class="message-action reply-btn" type="button" onclick="setReplyTargetFromButton(this); event.stopPropagation();" title="Yanıtla">' +
             '<i class="bi bi-reply"></i>' +
           '</button>'
         : '';
+    const canRevokeForEveryone = (!isSystem && messageId && !isPending && !isDeletedForEveryone && (isMine || isGroupChatId(chatId)));
+    const revokeBtn = canRevokeForEveryone
+        ? '<button class="message-action delete-btn" type="button" onclick="revokeMessageForEveryoneFromButton(this); event.stopPropagation();" title="Herkesten sil">' +
+            '<i class="bi bi-trash3"></i>' +
+          '</button>'
+        : '';
     const bubbleContent = senderHtml + quotedHtml + mediaHtml + textHtml +
-        '<div class="message-footer">' + replyBtn + '<span class="message-time">' + formatTime(message.timestamp) + '</span>' + checkIcon + '</div>';
+        '<div class="message-footer">' + replyBtn + revokeBtn + '<span class="message-time">' + formatTime(message.timestamp) + '</span>' + checkIcon + '</div>';
 
     const html = '<div class="' + rowClass + '"' +
         ' data-message-id="' + messageIdAttr + '"' +
@@ -2966,6 +2978,61 @@ function handleMessageAck(payload) {
     });
 }
 
+function markMessageDeletedForEveryone(messageId, deletedAt) {
+    const id = typeof messageId === 'string' ? messageId : String(messageId || '');
+    if (!id) return;
+    const at = Number(deletedAt) || Date.now();
+
+    // Update in-memory (chat view)
+    if (Array.isArray(chatMessagesPagination?.items) && chatMessagesPagination.items.length) {
+        for (const item of chatMessagesPagination.items) {
+            const itemId = item.message_id || item.messageId;
+            if (itemId === id) {
+                item.is_deleted_for_everyone = 1;
+                item.deleted_for_everyone_at = at;
+            }
+        }
+    }
+
+    // Update DOM (any rendered rows)
+    const rows = document.querySelectorAll('[data-message-id="' + CSS.escape(id) + '"]');
+    rows.forEach((row) => {
+        row.classList.add('deleted-for-everyone');
+        const bubble = row.querySelector('.message-bubble');
+        if (bubble) bubble.classList.add('deleted-for-everyone');
+    });
+}
+
+function handleMessageRevoked(payload) {
+    const messageId = payload?.messageId || payload?.message_id;
+    if (!messageId) return;
+    const deletedAt = payload?.deletedAt || payload?.deleted_at || payload?.deletedForEveryoneAt || payload?.deleted_for_everyone_at || Date.now();
+    markMessageDeletedForEveryone(String(messageId), deletedAt);
+}
+
+async function revokeMessageForEveryoneFromButton(btn) {
+    const row = btn?.closest?.('.message-row');
+    const messageId = row?.dataset?.messageId || '';
+    if (!messageId) return;
+
+    const bubble = row?.querySelector?.('.message-bubble');
+    if (bubble && bubble.classList.contains('deleted-for-everyone')) return;
+
+    const ok = confirm('Bu mesaji herkesten silmek istiyor musun?');
+    if (!ok) return;
+
+    try {
+        if (btn) btn.disabled = true;
+        const result = await api('api/messages/' + encodeURIComponent(messageId) + '/revoke', 'POST');
+        markMessageDeletedForEveryone(messageId, result?.deletedAt || Date.now());
+        showToast('Mesaj herkesten silindi', 'success');
+    } catch (err) {
+        showToast('Silme hatasi: ' + err.message, 'error');
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
 // Actions
 async function reconnect() {
     try {
@@ -3347,6 +3414,7 @@ function toggleStickerMode() {
 window.setReplyTargetFromButton = setReplyTargetFromButton;
 window.scrollToMessage = scrollToMessage;
 window.toggleStickerMode = toggleStickerMode;
+window.revokeMessageForEveryoneFromButton = revokeMessageForEveryoneFromButton;
 
 // Media Lightbox
 function openMediaLightbox(src) {

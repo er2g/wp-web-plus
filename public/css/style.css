@@ -953,6 +953,28 @@ body.compact .message-row.stacked {
     word-break: break-word;
 }
 
+.message-bubble.deleted-for-everyone {
+    outline: 1px dashed color-mix(in srgb, var(--text-secondary) 55%, transparent);
+    outline-offset: 1px;
+}
+
+.message-bubble.deleted-for-everyone::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 160px 70px;
+    opacity: 0.22;
+    pointer-events: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='80' viewBox='0 0 180 80'%3E%3Crect x='2' y='2' width='176' height='76' rx='12' ry='12' fill='none' stroke='%23000' stroke-width='3' stroke-dasharray='6 6'/%3E%3Cg fill='none' stroke='%23000' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M40 26h20'/%3E%3Cpath d='M46 26v-6h8v6'/%3E%3Cpath d='M44 26l2 34h12l2-34'/%3E%3Cpath d='M48 34v18'/%3E%3Cpath d='M56 34v18'/%3E%3C/g%3E%3Ctext x='118' y='52' font-family='Arial, sans-serif' font-size='18' font-weight='700' text-anchor='middle' fill='%23000'%3ESILINDI%3C/text%3E%3C/svg%3E");
+}
+
+[data-theme="dark"] .message-bubble.deleted-for-everyone::after {
+    filter: invert(1);
+    opacity: 0.18;
+}
+
 .message-bubble.sent {
     background-color: var(--bubble-out);
     border-top-right-radius: 0;
@@ -1094,6 +1116,33 @@ body.compact .message-row.stacked {
 
 .message-bubble .message-action.reply-btn:hover {
     color: var(--text-secondary);
+}
+
+.message-bubble .message-action.delete-btn {
+    width: 18px;
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    padding: 0;
+    margin: 0;
+    color: var(--text-light);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms ease, color 120ms ease;
+}
+
+.message-row:hover .message-bubble .message-action.delete-btn,
+.message-row.selected .message-bubble .message-action.delete-btn,
+.message-row:focus-within .message-bubble .message-action.delete-btn {
+    opacity: 0.9;
+    pointer-events: auto;
+}
+
+.message-bubble .message-action.delete-btn:hover {
+    color: #d9534f;
 }
 
 .message-bubble .message-time {
