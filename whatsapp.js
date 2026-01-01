@@ -1261,6 +1261,30 @@ class WhatsAppClient {
             const contact = await this.getContactCached(msg);
 
             const body = this.getMessageBody(msg);
+            let quotedMessageId = null;
+            let quotedBody = null;
+            let quotedFromName = null;
+            if (msg.hasQuotedMsg) {
+                try {
+                    const quotedMsg = await msg.getQuotedMessage();
+                    if (quotedMsg) {
+                        quotedMessageId = quotedMsg.id?._serialized || null;
+                        quotedBody = this.getMessageBody(quotedMsg);
+                        if (quotedBody) {
+                            quotedBody = String(quotedBody).slice(0, 1000);
+                        }
+                        let quotedContact = null;
+                        if (!quotedMsg.fromMe) {
+                            quotedContact = await this.getContactCached(quotedMsg);
+                        }
+                        quotedFromName = quotedMsg.fromMe
+                            ? (this.info ? this.info.pushname : 'Me')
+                            : this.getSenderName(quotedContact, quotedMsg);
+                    }
+                } catch (e) {
+                    // Ignore quote errors, keep message flowing
+                }
+            }
             const msgData = {
                 messageId: msg.id._serialized,
                 chatId: chat.id._serialized,
@@ -1273,6 +1297,9 @@ class WhatsAppClient {
                 timestamp: msg.timestamp * 1000,
                 isGroup: chat.isGroup,
                 isFromMe: fromMe,
+                quotedMessageId,
+                quotedBody,
+                quotedFromName,
                 mediaMimetype: msg.mimetype || msg._data?.mimetype,
                 mediaPath: null,
                 mediaUrl: null
@@ -1290,6 +1317,9 @@ class WhatsAppClient {
                 null, // No media yet
                 null, // No url yet
                 msgData.mediaMimetype,
+                msgData.quotedMessageId,
+                msgData.quotedBody,
+                msgData.quotedFromName,
                 msgData.isGroup ? 1 : 0,
                 msgData.isFromMe ? 1 : 0,
                 msg.ack || 0,
@@ -1487,6 +1517,9 @@ class WhatsAppClient {
                         row.mediaPath,
                         row.mediaUrl,
                         row.mediaMimetype,
+                        null,
+                        null,
+                        null,
                         row.isGroup ? 1 : 0,
                         row.isFromMe ? 1 : 0,
                         row.ack,
@@ -1778,6 +1811,9 @@ class WhatsAppClient {
                         null,
                         null,
                         row.mediaMimetype,
+                        null,
+                        null,
+                        null,
                         row.isGroup ? 1 : 0,
                         row.isFromMe ? 1 : 0,
                         row.ack,
@@ -2006,11 +2042,20 @@ class WhatsAppClient {
     async sendMessage(chatId, message, options = {}) {
         if (!this.isReady()) throw new Error('WhatsApp not connected');
         let result;
+        const sendOptions = {};
+        if (options.quotedMessageId) {
+            sendOptions.quotedMessageId = options.quotedMessageId;
+        }
         if (options.mediaPath) {
             const media = MessageMedia.fromFilePath(options.mediaPath);
-            result = await this.client.sendMessage(chatId, media, { caption: message });
+            if (options.sendAsSticker) {
+                sendOptions.sendMediaAsSticker = true;
+            } else if (message) {
+                sendOptions.caption = message;
+            }
+            result = await this.client.sendMessage(chatId, media, sendOptions);
         } else {
-            result = await this.client.sendMessage(chatId, message);
+            result = await this.client.sendMessage(chatId, message, sendOptions);
         }
         this.log('info', 'message', 'Message sent to ' + chatId);
         return result;

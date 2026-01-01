@@ -47,6 +47,9 @@ function createDatabase(config) {
         media_path TEXT,
         media_url TEXT,
         media_mimetype TEXT,
+        quoted_message_id TEXT,
+        quoted_body TEXT,
+        quoted_from_name TEXT,
         is_group INTEGER DEFAULT 0,
         is_from_me INTEGER DEFAULT 0,
         ack INTEGER DEFAULT 0,
@@ -476,6 +479,21 @@ function createDatabase(config) {
                     );
                 `);
             }
+        },
+        {
+            version: 12,
+            name: 'add_quoted_message_fields',
+            apply: () => {
+                if (!columnExists('messages', 'quoted_message_id')) {
+                    db.exec('ALTER TABLE messages ADD COLUMN quoted_message_id TEXT');
+                }
+                if (!columnExists('messages', 'quoted_body')) {
+                    db.exec('ALTER TABLE messages ADD COLUMN quoted_body TEXT');
+                }
+                if (!columnExists('messages', 'quoted_from_name')) {
+                    db.exec('ALTER TABLE messages ADD COLUMN quoted_from_name TEXT');
+                }
+            }
         }
     ];
 
@@ -505,8 +523,8 @@ function createDatabase(config) {
     const messages = {
         save: db.prepare(`
         INSERT INTO messages
-        (message_id, chat_id, from_number, to_number, from_name, body, type, media_path, media_url, media_mimetype, is_group, is_from_me, ack, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (message_id, chat_id, from_number, to_number, from_name, body, type, media_path, media_url, media_mimetype, quoted_message_id, quoted_body, quoted_from_name, is_group, is_from_me, ack, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(message_id) DO UPDATE SET
             chat_id = excluded.chat_id,
             from_number = excluded.from_number,
@@ -517,6 +535,9 @@ function createDatabase(config) {
             media_path = COALESCE(excluded.media_path, messages.media_path),
             media_url = COALESCE(excluded.media_url, messages.media_url),
             media_mimetype = COALESCE(excluded.media_mimetype, messages.media_mimetype),
+            quoted_message_id = COALESCE(excluded.quoted_message_id, messages.quoted_message_id),
+            quoted_body = COALESCE(excluded.quoted_body, messages.quoted_body),
+            quoted_from_name = COALESCE(excluded.quoted_from_name, messages.quoted_from_name),
             is_group = excluded.is_group,
             is_from_me = excluded.is_from_me,
             ack = CASE WHEN excluded.ack > messages.ack THEN excluded.ack ELSE messages.ack END,

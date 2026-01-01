@@ -237,24 +237,30 @@
                 </div>
                 <div class="list-status" id="chatMessagesStatus" aria-live="polite"></div>
 
-            <!-- Quick Replies -->
-            <div class="quick-replies" id="quickReplies" style="display:none;">
-                <!-- Quick reply chips -->
-            </div>
+	            <!-- Quick Replies -->
+	            <div class="quick-replies" id="quickReplies" style="display:none;">
+	                <!-- Quick reply chips -->
+	            </div>
 
-            <!-- Attachment Preview -->
-            <div class="attachment-preview" id="attachmentPreview" style="display:none;"></div>
+	            <!-- Reply Preview -->
+	            <div class="reply-preview" id="replyPreview" style="display:none;"></div>
 
-            <!-- Chat Input -->
-            <div class="chat-input-area">
-                <button class="icon-btn emoji-btn" onclick="toggleEmojiPicker()">
-                    <i class="bi bi-emoji-smile"></i>
-                </button>
-                <button class="icon-btn" onclick="openTemplatePicker()" title="Sablon Sec">
-                    <i class="bi bi-card-text"></i>
-                </button>
-                <button class="icon-btn attach-btn" onclick="toggleAttachMenu()">
-                    <i class="bi bi-paperclip"></i>
+	            <!-- Attachment Preview -->
+	            <div class="attachment-preview" id="attachmentPreview" style="display:none;"></div>
+
+	            <!-- Chat Input -->
+	            <div class="chat-input-area">
+	                <button class="icon-btn emoji-btn" onclick="toggleEmojiPicker()">
+	                    <i class="bi bi-emoji-smile"></i>
+	                </button>
+	                <button class="icon-btn sticker-btn" type="button" onclick="toggleStickerMode()" title="Sticker">
+	                    <i class="bi bi-sticky-fill"></i>
+	                </button>
+	                <button class="icon-btn" onclick="openTemplatePicker()" title="Sablon Sec">
+	                    <i class="bi bi-card-text"></i>
+	                </button>
+	                <button class="icon-btn attach-btn" onclick="toggleAttachMenu()">
+	                    <i class="bi bi-paperclip"></i>
                 </button>
                 <input type="file" id="mediaInput" class="file-input" />
                 <div class="chat-input-container">
@@ -585,11 +591,14 @@
     <!-- Overlay -->
     <div class="overlay" id="overlay" onclick="closeAllPanels()"></div>
 
-    <!-- Toast Container -->
-    <div class="toast-container" id="toastContainer"></div>
+	    <!-- Toast Container -->
+	    <div class="toast-container" id="toastContainer"></div>
 
-    <!-- Feature Modals will be injected here -->
-    <div id="modalContainer"></div>
+	    <!-- Emoji Picker -->
+	    <div class="emoji-picker" id="emojiPicker" style="display:none;" aria-label="Emoji secici"></div>
+
+	    <!-- Feature Modals will be injected here -->
+	    <div id="modalContainer"></div>
 
     <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js"></script>

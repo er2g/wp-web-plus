@@ -59,6 +59,9 @@ const GRADIENT_PRESETS = {
 };
 
 let selectedAttachment = null;
+let attachmentSendMode = 'media'; // 'media' | 'sticker'
+let replyTarget = null; // { messageId, fromName, previewText }
+const pendingOutgoing = new Map(); // tempId -> { tempId, chatId, body, timestamp, serverMessageId }
 let chatAutoScrollSeq = 0;
 
 // Sender profile pictures (for group message UI)
@@ -93,6 +96,8 @@ document.addEventListener('DOMContentLoaded', () => {
     loadCustomizations();
     initMonaco();
     setupAttachmentPicker();
+    initEmojiPicker();
+    updateStickerButtonUI();
     setupMessagesListScroll();
     setupChatMessagesScroll();
     initializeApp();
@@ -101,6 +106,15 @@ document.addEventListener('DOMContentLoaded', () => {
     document.addEventListener('click', (e) => {
         if (!e.target.closest('.dropdown')) {
             document.querySelectorAll('.dropdown-menu.show').forEach(m => m.classList.remove('show'));
+        }
+        if (!e.target.closest('#emojiPicker') && !e.target.closest('.emoji-btn')) {
+            closeEmojiPicker();
+        }
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            closeEmojiPicker();
         }
     });
 });
@@ -1468,6 +1482,199 @@ function renderLogsList(logs) {
     }).join('');
 }
 
+function getChatMessageId(message) {
+    const raw = message?.message_id || message?.messageId || '';
+    return typeof raw === 'string' ? raw : String(raw || '');
+}
+
+function buildChatMessageRow(message, context = {}, options = {}) {
+    const chatId = context.chatId || currentChat;
+    const isMine = message.is_from_me === 1 || message.is_from_me === true;
+    let mediaHtml = '';
+    const type = message.type || 'chat';
+    const mediaUrl = message.media_url || message.mediaUrl;
+    const mediaTypes = ['image', 'video', 'audio', 'ptt', 'document', 'sticker'];
+    const hasMediaType = mediaTypes.includes(type);
+
+    if (mediaUrl) {
+        const safeMediaUrl = sanitizeUrl(mediaUrl);
+        if (safeMediaUrl) {
+            if (type === 'image' || type === 'sticker') {
+                mediaHtml = '<div class="message-media"><img src="' + safeMediaUrl + '" onclick="openMediaLightbox(this.src)" loading="lazy" alt=""></div>';
+            } else if (type === 'video') {
+                mediaHtml = '<div class="message-media"><video src="' + safeMediaUrl + '" controls></video></div>';
+            } else if (type === 'audio' || type === 'ptt') {
+                mediaHtml = '<div class="message-media"><audio src="' + safeMediaUrl + '" controls></audio></div>';
+            } else if (type === 'document') {
+                const fileName = message.body || 'Belge';
+                mediaHtml = '<div class="document-bubble" onclick="window.open(\'' + safeMediaUrl + '\')">' +
+                    '<div class="doc-icon pdf"><i class="bi bi-file-earmark-pdf"></i></div>' +
+                    '<div class="doc-info"><div class="doc-name">' + escapeHtml(fileName) + '</div>' +
+                    '<div class="doc-size">Indir</div></div></div>';
+            }
+        }
+    }
+
+    const isSystem = !mediaHtml && !message.body && !hasMediaType && type !== 'chat';
+    let textHtml = '';
+
+    if (message.body && (type === 'chat' || (mediaUrl && message.body && type !== 'document'))) {
+        textHtml = '<div class="message-text">' + linkifyTextToHtml(message.body) + '</div>';
+    } else if (type === 'document' && mediaUrl) {
+        const fileName = message.body || 'Belge';
+        textHtml = '<div class="message-text muted">[Dosya] ' + escapeHtml(fileName) + '</div>';
+    } else if (hasMediaType && !mediaUrl) {
+        // Loading State
+        let iconClass = 'bi-file-earmark';
+        let label = 'Dosya';
+        if (type === 'image') { iconClass = 'bi-image'; label = 'Fotograf'; }
+        else if (type === 'sticker') { iconClass = 'bi-sticky-fill'; label = 'Sticker'; }
+        else if (type === 'video') { iconClass = 'bi-camera-video'; label = 'Video'; }
+        else if (type === 'audio' || type === 'ptt') { iconClass = 'bi-mic'; label = 'Ses'; }
+
+        const fileName = message.body || label;
+
+        textHtml = `<div class="media-loading">
+            <div class="loading-info">
+                <i class="bi ${iconClass} file-icon"></i>
+                <div class="loading-text">
+                    <div>${escapeHtml(fileName)}</div>
+                    <div style="font-size: 10px; opacity: 0.8;">Sunucuya indiriliyor...</div>
+                </div>
+            </div>
+            <div class="progress-track">
+                <div class="progress-bar"></div>
+            </div>
+        </div>`;
+    } else if (hasMediaType) {
+        textHtml = '<div class="message-text muted">[Medya]</div>';
+    } else if (isSystem) {
+        textHtml = '<div class="message-text muted">[Sistem: ' + escapeHtml(type) + ']</div>';
+    } else if (!mediaHtml) {
+        textHtml = '<div class="message-text muted">[Bos mesaj]</div>';
+    }
+
+    const showSenderNames = isGroupChatId(chatId);
+    const canShowGroupSender = showSenderNames && !isMine && !isSystem;
+    const displayName = canShowGroupSender ? getDisplayNameFromMessage(message, chatId) : '';
+    const senderContactId = canShowGroupSender ? getSenderContactIdFromMessage(message, chatId) : '';
+    const senderKey = senderContactId || displayName || '';
+
+    const prevSenderKey = context.prevSenderKey || null;
+    const prevCanStack = context.prevCanStack === true;
+    const prevTs = context.prevTs || null;
+    const timeGapMs = (prevTs && message.timestamp) ? (message.timestamp - prevTs) : Number.POSITIVE_INFINITY;
+    const isStacked = (canShowGroupSender && prevCanStack && prevSenderKey && prevSenderKey === senderKey && timeGapMs < (5 * 60 * 1000));
+    const showSenderMeta = (canShowGroupSender && !isStacked);
+
+    const senderIdAttr = senderContactId ? ' data-sender-id="' + escapeHtml(senderContactId) + '"' : '';
+    const senderHtml = (showSenderMeta && displayName)
+        ? '<div class="sender-name"' + senderIdAttr + '>' + escapeHtml(formatSenderName(displayName)) + '</div>'
+        : '';
+
+    const avatarHtml = canShowGroupSender
+        ? renderSenderAvatar(senderContactId, displayName, showSenderMeta)
+        : '';
+
+    let quotedHtml = '';
+    if (!isSystem) {
+        const quotedMessageId = message.quoted_message_id || message.quotedMessageId;
+        const quotedBodyRaw = message.quoted_body || message.quotedBody;
+        const quotedFromNameRaw = message.quoted_from_name || message.quotedFromName;
+
+        if (quotedMessageId || quotedBodyRaw || quotedFromNameRaw) {
+            const quotedSender = quotedFromNameRaw
+                ? formatSenderName(String(quotedFromNameRaw))
+                : 'Yanıt';
+            const quotedText = quotedBodyRaw
+                ? String(quotedBodyRaw).slice(0, 180)
+                : '[Mesaj]';
+            const quotedId = quotedMessageId ? String(quotedMessageId) : '';
+            const quotedClick = quotedId
+                ? ' onclick="scrollToMessage(\'' + escapeHtml(quotedId) + '\'); event.stopPropagation();"'
+                : '';
+
+            quotedHtml = '<div class="reply-quote"' + quotedClick + '>' +
+                '<div class="reply-quote-sender">' + escapeHtml(quotedSender) + '</div>' +
+                '<div class="reply-quote-text">' + escapeHtml(quotedText) + '</div>' +
+            '</div>';
+        }
+    }
+
+    const checkIcon = isMine && !isSystem ? getMessageStatusIcon(message.ack) : '';
+    const messageId = getChatMessageId(message);
+    const messageIdAttr = escapeHtml(messageId);
+    const isPending = Boolean(message.client_pending) || (messageId && String(messageId).startsWith('pending-'));
+
+    const rowClass = 'message-row ' + (isMine ? 'sent' : 'received') +
+        (isSystem ? ' system' : '') +
+        (canShowGroupSender ? ' group' : '') +
+        (isStacked ? ' stacked' : '') +
+        (isPending ? ' pending' : '') +
+        (options.animate ? ' animate-in' : '');
+
+    const dataSenderKeyAttr = escapeHtml(senderKey);
+    const dataTsAttr = message.timestamp ? String(message.timestamp) : '';
+    const dataCanStackAttr = canShowGroupSender ? '1' : '0';
+
+    const bubbleClass = isSystem
+        ? 'message-bubble system'
+        : ('message-bubble ' + (isMine ? 'sent' : 'received'));
+    const replyBtn = (!isSystem && messageId && !isPending)
+        ? '<button class="message-action reply-btn" type="button" onclick="setReplyTargetFromButton(this); event.stopPropagation();" title="Yanıtla">' +
+            '<i class="bi bi-reply"></i>' +
+          '</button>'
+        : '';
+    const bubbleContent = senderHtml + quotedHtml + mediaHtml + textHtml +
+        '<div class="message-footer">' + replyBtn + '<span class="message-time">' + formatTime(message.timestamp) + '</span>' + checkIcon + '</div>';
+
+    const html = '<div class="' + rowClass + '"' +
+        ' data-message-id="' + messageIdAttr + '"' +
+        ' data-sender-key="' + dataSenderKeyAttr + '"' +
+        ' data-can-stack="' + dataCanStackAttr + '"' +
+        ' data-ts="' + escapeHtml(dataTsAttr) + '"' +
+        '>' +
+        avatarHtml +
+        '<div class="' + bubbleClass + '">' +
+        bubbleContent +
+        '</div></div>';
+
+    return {
+        html,
+        meta: {
+            senderKey,
+            canStack: canShowGroupSender,
+            timestamp: message.timestamp || null
+        }
+    };
+}
+
+function upsertChatMessageRow(message, options = {}) {
+    const container = document.getElementById('messagesContainer');
+    if (!container) return;
+
+    const messageId = getChatMessageId(message);
+    if (messageId) {
+        const existing = container.querySelector('[data-message-id="' + CSS.escape(messageId) + '"]');
+        if (existing) {
+            return;
+        }
+    }
+
+    const shouldStickToBottom = isChatNearBottom(container, 160);
+    const lastRow = container.lastElementChild;
+    const prevSenderKey = lastRow?.dataset?.senderKey || null;
+    const prevCanStack = lastRow?.dataset?.canStack === '1';
+    const prevTs = lastRow?.dataset?.ts ? parseInt(lastRow.dataset.ts, 10) : null;
+
+    const { html } = buildChatMessageRow(message, { chatId: currentChat, prevSenderKey, prevCanStack, prevTs }, options);
+    container.insertAdjacentHTML('beforeend', html);
+
+    if (shouldStickToBottom) {
+        ensureChatScrolledToBottom(container);
+    }
+}
+
 function renderChatMessages(messages, options = {}) {
     const container = document.getElementById('messagesContainer');
     if (!container) return;
@@ -1478,116 +1685,17 @@ function renderChatMessages(messages, options = {}) {
     // Sort messages chronologically
     const sorted = [...messages].sort((a, b) => a.timestamp - b.timestamp);
 
-    const showSenderNames = isGroupChatId(currentChat);
-
     const rows = [];
     let prevSenderKey = null;
     let prevCanStack = false;
     let prevTs = null;
 
     for (const m of sorted) {
-        const isMine = m.is_from_me === 1 || m.is_from_me === true;
-        let mediaHtml = '';
-        const type = m.type || 'chat';
-        const mediaUrl = m.media_url || m.mediaUrl;
-        const mediaTypes = ['image', 'video', 'audio', 'ptt', 'document', 'sticker'];
-        const hasMediaType = mediaTypes.includes(type);
-
-        if (mediaUrl) {
-            const safeMediaUrl = sanitizeUrl(mediaUrl);
-            if (safeMediaUrl) {
-                if (type === 'image' || type === 'sticker') {
-                    mediaHtml = '<div class="message-media"><img src="' + safeMediaUrl + '" onclick="openMediaLightbox(this.src)" loading="lazy" alt=""></div>';
-                } else if (type === 'video') {
-                    mediaHtml = '<div class="message-media"><video src="' + safeMediaUrl + '" controls></video></div>';
-                } else if (type === 'audio' || type === 'ptt') {
-                    mediaHtml = '<div class="message-media"><audio src="' + safeMediaUrl + '" controls></audio></div>';
-                } else if (type === 'document') {
-                    const fileName = m.body || 'Belge';
-                    mediaHtml = '<div class="document-bubble" onclick="window.open(\'' + safeMediaUrl + '\')">' +
-                        '<div class="doc-icon pdf"><i class="bi bi-file-earmark-pdf"></i></div>' +
-                        '<div class="doc-info"><div class="doc-name">' + escapeHtml(fileName) + '</div>' +
-                        '<div class="doc-size">Indir</div></div></div>';
-                }
-            }
-        }
-
-        const isSystem = !mediaHtml && !m.body && !hasMediaType && type !== 'chat';
-        let textHtml = '';
-        
-        if (m.body && (type === 'chat' || (mediaUrl && m.body && type !== 'document'))) {
-            textHtml = '<div class="message-text">' + escapeHtml(m.body) + '</div>';
-        } else if (type === 'document' && mediaUrl) {
-            const fileName = m.body || 'Belge';
-            textHtml = '<div class="message-text muted">[Dosya] ' + escapeHtml(fileName) + '</div>';
-        } else if (hasMediaType && !mediaUrl) {
-            // Loading State
-            let iconClass = 'bi-file-earmark';
-            let label = 'Dosya';
-            if (type === 'image') { iconClass = 'bi-image'; label = 'Fotograf'; }
-            else if (type === 'video') { iconClass = 'bi-camera-video'; label = 'Video'; }
-            else if (type === 'audio' || type === 'ptt') { iconClass = 'bi-mic'; label = 'Ses'; }
-            
-            const fileName = m.body || label;
-            
-            textHtml = `<div class="media-loading">
-                <div class="loading-info">
-                    <i class="bi ${iconClass} file-icon"></i>
-                    <div class="loading-text">
-                        <div>${escapeHtml(fileName)}</div>
-                        <div style="font-size: 10px; opacity: 0.8;">Sunucuya indiriliyor...</div>
-                    </div>
-                </div>
-                <div class="progress-track">
-                    <div class="progress-bar"></div>
-                </div>
-            </div>`;
-        } else if (hasMediaType) {
-            textHtml = '<div class="message-text muted">[Medya]</div>';
-        } else if (isSystem) {
-            textHtml = '<div class="message-text muted">[Sistem: ' + escapeHtml(type) + ']</div>';
-        } else if (!mediaHtml) {
-            textHtml = '<div class="message-text muted">[Bos mesaj]</div>';
-        }
-
-        const canShowGroupSender = showSenderNames && !isMine && !isSystem;
-        const displayName = canShowGroupSender ? getDisplayNameFromMessage(m, currentChat) : '';
-        const senderContactId = canShowGroupSender ? getSenderContactIdFromMessage(m, currentChat) : '';
-        const senderKey = senderContactId || displayName || '';
-
-        const timeGapMs = (prevTs && m.timestamp) ? (m.timestamp - prevTs) : Number.POSITIVE_INFINITY;
-        const isStacked = (canShowGroupSender && prevCanStack && prevSenderKey && prevSenderKey === senderKey && timeGapMs < (5 * 60 * 1000));
-        const showSenderMeta = (canShowGroupSender && !isStacked);
-
-        const senderIdAttr = senderContactId ? ' data-sender-id="' + escapeHtml(senderContactId) + '"' : '';
-        const senderHtml = (showSenderMeta && displayName) ?
-            '<div class="sender-name"' + senderIdAttr + '>' + escapeHtml(formatSenderName(displayName)) + '</div>' : '';
-
-        const avatarHtml = canShowGroupSender
-            ? renderSenderAvatar(senderContactId, displayName, showSenderMeta)
-            : '';
-
-        const checkIcon = isMine && !isSystem ? getMessageStatusIcon(m.ack) : '';
-        const messageIdAttr = escapeHtml(m.message_id || m.messageId || '');
-
-        const rowClass = 'message-row ' + (isMine ? 'sent' : 'received') +
-            (canShowGroupSender ? ' group' : '') +
-            (isStacked ? ' stacked' : '');
-
-        rows.push(
-            '<div class="' + rowClass + '" data-message-id="' + messageIdAttr + '">' +
-            avatarHtml +
-            '<div class="message-bubble ' + (isMine ? 'sent' : 'received') + '">' +
-            senderHtml +
-            mediaHtml +
-            textHtml +
-            '<div class="message-footer"><span class="message-time">' + formatTime(m.timestamp) + '</span>' + checkIcon + '</div>' +
-            '</div></div>'
-        );
-
-        prevSenderKey = senderKey;
-        prevCanStack = canShowGroupSender;
-        prevTs = m.timestamp;
+        const rendered = buildChatMessageRow(m, { chatId: currentChat, prevSenderKey, prevCanStack, prevTs });
+        rows.push(rendered.html);
+        prevSenderKey = rendered.meta.senderKey;
+        prevCanStack = rendered.meta.canStack;
+        prevTs = rendered.meta.timestamp;
     }
 
     container.innerHTML = rows.join('');
@@ -1706,6 +1814,209 @@ async function performChatSearch(query, tagFilter, noteQuery) {
 }
 
 // Send Message
+function selectMessageRow(messageId) {
+    const container = document.getElementById('messagesContainer');
+    if (!container) return;
+    container.querySelectorAll('.message-row.selected').forEach((row) => row.classList.remove('selected'));
+    if (!messageId) return;
+    const row = container.querySelector('[data-message-id="' + CSS.escape(messageId) + '"]');
+    if (row) {
+        row.classList.add('selected');
+    }
+}
+
+function setReplyTarget(messageId) {
+    const id = typeof messageId === 'string' ? messageId.trim() : String(messageId || '').trim();
+    if (!id) return;
+    if (!currentChat) return;
+    if (id.startsWith('pending-')) {
+        showToast('Mesaj gonderiliyor; yanitlamak icin biraz bekleyin', 'info');
+        return;
+    }
+
+    const msg = chatMessagesPagination.items.find(item => (item.message_id || item.messageId) === id) || null;
+    const isMine = msg ? (msg.is_from_me === 1 || msg.is_from_me === true) : false;
+    const fromName = msg
+        ? (isMine ? 'Sen' : (msg.from_name || msg.fromName || msg.from_number || msg.fromNumber || ''))
+        : '';
+
+    let previewText = '[Mesaj]';
+    if (msg) {
+        if (msg.body) {
+            previewText = String(msg.body);
+        } else {
+            const type = msg.type || 'chat';
+            if (type === 'document') previewText = '[Dosya]';
+            else if (['image', 'video', 'audio', 'ptt', 'sticker'].includes(type)) previewText = '[Medya]';
+        }
+    }
+
+    replyTarget = { messageId: id, fromName, previewText };
+    renderReplyPreview();
+    selectMessageRow(id);
+
+    const input = document.getElementById('messageInput');
+    if (input) input.focus();
+}
+
+function setReplyTargetFromButton(button) {
+    const row = button?.closest?.('.message-row');
+    const messageId = row?.getAttribute?.('data-message-id') || '';
+    if (!messageId) return;
+    setReplyTarget(messageId);
+}
+
+function clearReplyTarget() {
+    replyTarget = null;
+    renderReplyPreview();
+    selectMessageRow(null);
+}
+
+function renderReplyPreview() {
+    const container = document.getElementById('replyPreview');
+    if (!container) return;
+
+    if (!replyTarget) {
+        container.style.display = 'none';
+        container.innerHTML = '';
+        return;
+    }
+
+    const sender = replyTarget.fromName ? escapeHtml(replyTarget.fromName) : 'Yanıt';
+    const text = escapeHtml(String(replyTarget.previewText || '').slice(0, 180));
+
+    container.style.display = 'flex';
+    container.innerHTML =
+        '<div class="reply-preview-content">' +
+            '<div class="reply-preview-title">Yanıt: ' + sender + '</div>' +
+            '<div class="reply-preview-text">' + text + '</div>' +
+        '</div>' +
+        '<button class="icon-btn" type="button" onclick="clearReplyTarget()" title="Iptal">' +
+            '<i class="bi bi-x"></i>' +
+        '</button>';
+}
+
+function scrollToMessage(messageId) {
+    const id = typeof messageId === 'string' ? messageId.trim() : String(messageId || '').trim();
+    if (!id) return;
+    const container = document.getElementById('messagesContainer');
+    if (!container) return;
+    const row = container.querySelector('[data-message-id="' + CSS.escape(id) + '"]');
+    if (!row) {
+        showToast('Mesaj bulunamadi', 'info');
+        return;
+    }
+
+    row.classList.add('highlight');
+    try {
+        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } catch (e) {
+        row.scrollIntoView();
+    }
+
+    setTimeout(() => row.classList.remove('highlight'), 1800);
+}
+
+function createPendingMessage({ body, type, mediaMimetype, attachmentName }) {
+    const now = Date.now();
+    const tempId = 'pending-' + now.toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+    const message = {
+        message_id: tempId,
+        chat_id: currentChat,
+        is_from_me: 1,
+        ack: 0,
+        timestamp: now,
+        body: body || (attachmentName || ''),
+        type: type || 'chat',
+        media_url: null,
+        media_mimetype: mediaMimetype || null,
+        quoted_message_id: replyTarget?.messageId || null,
+        quoted_body: replyTarget?.previewText || null,
+        quoted_from_name: replyTarget?.fromName || null,
+        client_pending: true
+    };
+
+    pendingOutgoing.set(tempId, {
+        tempId,
+        chatId: currentChat,
+        body: message.body || '',
+        timestamp: now,
+        serverMessageId: null
+    });
+
+    chatMessagesPagination.items.push(message);
+    upsertChatMessageRow(message, { animate: true });
+
+    return tempId;
+}
+
+function resolvePendingMessage(tempId, serverMessageId, serverTimestamp) {
+    const record = pendingOutgoing.get(tempId);
+    if (!record) return;
+    if (!serverMessageId) return;
+    if (record.serverMessageId && record.serverMessageId !== serverMessageId) return;
+    record.serverMessageId = serverMessageId;
+
+    // Update in-memory message id
+    const item = chatMessagesPagination.items.find(m => (m.message_id || m.messageId) === tempId);
+    if (item) {
+        item.message_id = serverMessageId;
+        if (serverTimestamp) item.timestamp = serverTimestamp;
+        item.client_pending = false;
+    }
+
+    // Update DOM
+    const container = document.getElementById('messagesContainer');
+    if (!container) return;
+    const row = container.querySelector('[data-message-id="' + CSS.escape(tempId) + '"]');
+    if (!row) return;
+    row.setAttribute('data-message-id', String(serverMessageId));
+    if (serverTimestamp) {
+        row.setAttribute('data-ts', String(serverTimestamp));
+        const timeEl = row.querySelector('.message-time');
+        if (timeEl) timeEl.textContent = formatTime(serverTimestamp);
+    }
+    row.classList.remove('pending');
+    pendingOutgoing.delete(tempId);
+}
+
+function maybeResolvePendingFromSocketMessage(normalized) {
+    const isMine = normalized?.is_from_me === 1 || normalized?.is_from_me === true;
+    if (!isMine) return;
+    const serverId = normalized?.message_id || '';
+    if (!serverId) return;
+
+    // Already rendered with real id
+    const container = document.getElementById('messagesContainer');
+    if (container && container.querySelector('[data-message-id="' + CSS.escape(serverId) + '"]')) {
+        return;
+    }
+
+    const candidates = Array.from(pendingOutgoing.values())
+        .filter(p => p.chatId === normalized.chat_id && !p.serverMessageId);
+
+    if (!candidates.length) return;
+
+    const body = String(normalized.body || '').trim();
+    const ts = Number(normalized.timestamp) || Date.now();
+
+    let best = null;
+    let bestScore = Number.POSITIVE_INFINITY;
+    for (const cand of candidates) {
+        const delta = Math.abs(ts - (cand.timestamp || 0));
+        if (delta > 2 * 60 * 1000) continue;
+        const bodyMatch = !body || !cand.body || body === String(cand.body).trim();
+        if (!bodyMatch) continue;
+        if (delta < bestScore) {
+            best = cand;
+            bestScore = delta;
+        }
+    }
+
+    if (!best) return;
+    resolvePendingMessage(best.tempId, serverId, ts);
+}
+
 async function sendMessage() {
     const input = document.getElementById('messageInput');
     const message = input.value.trim();
@@ -1714,18 +2025,45 @@ async function sendMessage() {
 
     input.value = '';
     autoResizeInput(input);
+    closeEmojiPicker();
 
-    // Add temporary message
-    appendTempMessage(message, selectedAttachment ? selectedAttachment.name : null);
+    const file = selectedAttachment;
+    const sendAsSticker = Boolean(
+        file &&
+        attachmentSendMode === 'sticker' &&
+        typeof file.type === 'string' &&
+        file.type.startsWith('image/')
+    );
+    const mediaType = file
+        ? (file.type.startsWith('image/') ? (sendAsSticker ? 'sticker' : 'image')
+            : (file.type.startsWith('video/') ? 'video'
+                : (file.type.startsWith('audio/') ? 'audio' : 'document')))
+        : 'chat';
+
+    const tempId = createPendingMessage({
+        body: message,
+        type: file ? mediaType : 'chat',
+        mediaMimetype: file ? file.type : null,
+        attachmentName: file ? file.name : null
+    });
 
     try {
-        if (selectedAttachment) {
-            await sendMessageWithAttachment(message, selectedAttachment);
+        const quotedMessageId = replyTarget?.messageId && !String(replyTarget.messageId).startsWith('pending-')
+            ? replyTarget.messageId
+            : undefined;
+
+        if (file) {
+            const result = await sendMessageWithAttachment(message, file, {
+                quotedMessageId,
+                sendAsSticker
+            });
+            resolvePendingMessage(tempId, result.messageId, Date.now());
             clearAttachment();
         } else {
-            await api('api/send', 'POST', { chatId: currentChat, message });
+            const result = await api('api/send', 'POST', { chatId: currentChat, message, quotedMessageId });
+            resolvePendingMessage(tempId, result.messageId, Date.now());
         }
-        // Socket event will refresh
+        clearReplyTarget();
     } catch (err) {
         showToast('Gonderme hatasi: ' + err.message, 'error');
         loadChatMessages(currentChat);
@@ -1742,26 +2080,6 @@ function handleInputKeydown(event) {
 function autoResizeInput(el) {
     el.style.height = 'auto';
     el.style.height = Math.min(el.scrollHeight, 100) + 'px';
-}
-
-function appendTempMessage(text, attachmentName) {
-    const container = document.getElementById('messagesContainer');
-    if (!container) return;
-
-    const attachmentHtml = attachmentName
-        ? '<div class="message-text">[Dosya] ' + escapeHtml(attachmentName) + '</div>'
-        : '';
-    const bodyHtml = text ? '<div class="message-text">' + escapeHtml(text) + '</div>' : '';
-
-    const messageHtml = '<div class="message-row sent">' +
-        '<div class="message-bubble sent">' +
-        attachmentHtml +
-        bodyHtml +
-        '<div class="message-footer"><span class="message-time">' + formatTime(Date.now()) + '</span><i class="bi bi-check2 check-icon"></i></div>' +
-        '</div></div>';
-
-    container.insertAdjacentHTML('beforeend', messageHtml);
-    container.scrollTop = container.scrollHeight;
 }
 
 async function addTagToChat() {
@@ -1866,8 +2184,6 @@ async function refreshChatNotes() {
 
 // Handle new incoming message
 function handleNewMessage(msg) {
-    console.log('New message received:', msg, 'currentChat:', currentChat, 'msg.chatId:', msg.chatId);
-
     if (settings.notifications) {
         const isMine = msg?.isFromMe === true || msg?.isFromMe === 1 || msg?.is_from_me === 1 || msg?.is_from_me === true || msg?.fromMe === true;
         if (!isMine) {
@@ -1889,13 +2205,27 @@ function handleNewMessage(msg) {
             from_number: msg.fromNumber || msg.from_number,
             type: msg.type,
             media_url: msg.mediaUrl || msg.media_url,
-            media_mimetype: msg.mediaMimeType || msg.media_mimetype
+            media_mimetype: msg.mediaMimeType || msg.media_mimetype,
+            quoted_message_id: msg.quotedMessageId || msg.quoted_message_id,
+            quoted_body: msg.quotedBody || msg.quoted_body,
+            quoted_from_name: msg.quotedFromName || msg.quoted_from_name
         };
-        chatMessagesPagination.items.push(normalized);
-        renderChatMessages(chatMessagesPagination.items, { scrollToBottom: true });
+
+        maybeResolvePendingFromSocketMessage(normalized);
+        const messageId = normalized.message_id || '';
+        const existing = messageId
+            ? chatMessagesPagination.items.find(item => (item.message_id || item.messageId) === messageId)
+            : null;
+        if (existing) {
+            Object.assign(existing, normalized);
+        } else {
+            chatMessagesPagination.items.push(normalized);
+        }
+
+        upsertChatMessageRow(normalized, { animate: true });
     }
 
-    loadChats();
+    scheduleChatsReload();
     if (messagesPagination.items.length) {
         messagesPagination.items.unshift({
             chat_id: incomingChatId || '',
@@ -2156,11 +2486,7 @@ async function recoverMedia() {
     document.querySelectorAll('.dropdown-menu.show').forEach(m => m.classList.remove('show'));
 }
 
-// Emoji and Attach (placeholder)
-function toggleEmojiPicker() {
-    showToast('Emoji secici yakinda gelecek', 'info');
-}
-
+// Attachments
 function toggleAttachMenu() {
     const input = document.getElementById('mediaInput');
     if (input) {
@@ -2178,6 +2504,11 @@ function handleMediaSelect(event) {
     const file = event.target.files && event.target.files[0];
     if (!file) return;
     selectedAttachment = file;
+    if (!file.type.startsWith('image/') && attachmentSendMode === 'sticker') {
+        attachmentSendMode = 'media';
+        showToast('Sticker sadece resimler icin destekleniyor', 'info');
+    }
+    updateStickerButtonUI();
     renderAttachmentPreview();
 }
 
@@ -2189,11 +2520,16 @@ function renderAttachmentPreview() {
         preview.innerHTML = '';
         return;
     }
+    const canSticker = selectedAttachment.type.startsWith('image/');
+    const modeBadge = (canSticker && attachmentSendMode === 'sticker')
+        ? '<span class="attachment-badge">Sticker</span>'
+        : '';
     preview.style.display = 'flex';
     preview.innerHTML = `
         <div class="attachment-chip">
             <i class="bi bi-paperclip"></i>
             <span>${escapeHtml(selectedAttachment.name)}</span>
+            ${modeBadge}
             <button class="icon-btn" onclick="clearAttachment()" title="Kaldir">
                 <i class="bi bi-x"></i>
             </button>
@@ -2210,11 +2546,17 @@ function clearAttachment() {
     renderAttachmentPreview();
 }
 
-async function sendMessageWithAttachment(message, file) {
+async function sendMessageWithAttachment(message, file, options = {}) {
     const formData = new FormData();
     formData.append('chatId', currentChat);
     formData.append('message', message || '');
     formData.append('media', file);
+    if (options.quotedMessageId) {
+        formData.append('quotedMessageId', String(options.quotedMessageId));
+    }
+    if (options.sendAsSticker) {
+        formData.append('sendAsSticker', 'true');
+    }
 
     const headers = {};
     if (activeAccountId) {
@@ -2235,6 +2577,157 @@ async function sendMessageWithAttachment(message, file) {
     if (!response.ok) throw new Error(data.error || 'API Error');
     return data;
 }
+
+// Emoji Picker
+const DEFAULT_EMOJIS = [
+    '😀', '😁', '😂', '🤣', '😊', '😍', '😘', '😎',
+    '🤔', '😅', '😇', '🥳', '😴', '😢', '😭', '😡',
+    '👍', '👎', '🙏', '👏', '💪', '🔥', '🎉', '❤️',
+    '💯', '✨', '✅', '❌', '⚡', '📌', '📎', '📷',
+    '🎧', '🎁', '🧠', '💡', '🚀', '🌿', '🌙', '☀️'
+];
+const EMOJI_RECENTS_KEY = 'emojiRecents';
+const EMOJI_RECENTS_MAX = 24;
+let emojiPickerInitialized = false;
+
+function initEmojiPicker() {
+    const picker = document.getElementById('emojiPicker');
+    if (!picker || emojiPickerInitialized) return;
+    emojiPickerInitialized = true;
+    renderEmojiPicker();
+}
+
+function getEmojiRecents() {
+    try {
+        const raw = localStorage.getItem(EMOJI_RECENTS_KEY);
+        const parsed = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed) ? parsed.filter(Boolean).slice(0, EMOJI_RECENTS_MAX) : [];
+    } catch (e) {
+        return [];
+    }
+}
+
+function setEmojiRecents(list) {
+    try {
+        localStorage.setItem(EMOJI_RECENTS_KEY, JSON.stringify(list.slice(0, EMOJI_RECENTS_MAX)));
+    } catch (e) {}
+}
+
+function addEmojiRecent(emoji) {
+    const value = String(emoji || '').trim();
+    if (!value) return;
+    const current = getEmojiRecents().filter(item => item !== value);
+    current.unshift(value);
+    setEmojiRecents(current);
+}
+
+function renderEmojiPicker() {
+    const picker = document.getElementById('emojiPicker');
+    if (!picker) return;
+    const recents = getEmojiRecents();
+    const combined = [...recents, ...DEFAULT_EMOJIS.filter(e => !recents.includes(e))];
+    const buttons = combined
+        .map((e) => '<button class="emoji-item" type="button" data-emoji="' + escapeHtml(e) + '">' + escapeHtml(e) + '</button>')
+        .join('');
+    picker.innerHTML = '<div class="emoji-grid">' + buttons + '</div>';
+
+    picker.querySelectorAll('.emoji-item').forEach((btn) => {
+        btn.addEventListener('click', (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            const emoji = btn.getAttribute('data-emoji') || btn.textContent || '';
+            insertEmojiIntoMessageInput(emoji);
+            addEmojiRecent(emoji);
+            renderEmojiPicker();
+        });
+    });
+}
+
+function setEmojiButtonActive(active) {
+    const btn = document.querySelector('.chat-input-area .emoji-btn');
+    if (!btn) return;
+    btn.classList.toggle('active', Boolean(active));
+}
+
+function isEmojiPickerOpen() {
+    const picker = document.getElementById('emojiPicker');
+    if (!picker) return false;
+    return picker.style.display !== 'none';
+}
+
+function openEmojiPicker() {
+    const picker = document.getElementById('emojiPicker');
+    if (!picker) return;
+    if (!emojiPickerInitialized) initEmojiPicker();
+    picker.style.display = 'block';
+    setEmojiButtonActive(true);
+}
+
+function closeEmojiPicker() {
+    const picker = document.getElementById('emojiPicker');
+    if (!picker) return;
+    if (picker.style.display === 'none') return;
+    picker.style.display = 'none';
+    setEmojiButtonActive(false);
+}
+
+function toggleEmojiPicker() {
+    if (isEmojiPickerOpen()) {
+        closeEmojiPicker();
+        return;
+    }
+    openEmojiPicker();
+}
+
+function insertEmojiIntoMessageInput(emoji) {
+    const input = document.getElementById('messageInput');
+    if (!input) return;
+    const value = String(emoji || '');
+    if (!value) return;
+
+    const start = Number.isFinite(input.selectionStart) ? input.selectionStart : input.value.length;
+    const end = Number.isFinite(input.selectionEnd) ? input.selectionEnd : input.value.length;
+    input.value = input.value.slice(0, start) + value + input.value.slice(end);
+    const nextPos = start + value.length;
+    try {
+        input.selectionStart = nextPos;
+        input.selectionEnd = nextPos;
+    } catch (e) {}
+    autoResizeInput(input);
+    input.focus();
+}
+
+// Sticker Mode
+function updateStickerButtonUI() {
+    const btn = document.querySelector('.chat-input-area .sticker-btn');
+    if (!btn) return;
+    btn.classList.toggle('active', attachmentSendMode === 'sticker');
+}
+
+function toggleStickerMode() {
+    attachmentSendMode = attachmentSendMode === 'sticker' ? 'media' : 'sticker';
+    updateStickerButtonUI();
+    renderAttachmentPreview();
+
+    if (attachmentSendMode === 'sticker') {
+        if (selectedAttachment && !selectedAttachment.type.startsWith('image/')) {
+            showToast('Sticker icin resim secin', 'info');
+            toggleAttachMenu();
+            return;
+        }
+        if (!selectedAttachment) {
+            showToast('Sticker icin resim secin', 'info');
+            toggleAttachMenu();
+            return;
+        }
+        showToast('Sticker olarak gonderilecek', 'info');
+    }
+}
+
+// Functions referenced via inline/dynamic onclick handlers
+window.setReplyTargetFromButton = setReplyTargetFromButton;
+window.scrollToMessage = scrollToMessage;
+window.toggleStickerMode = toggleStickerMode;
 
 // Media Lightbox
 function openMediaLightbox(src) {
@@ -3341,6 +3834,81 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+function normalizeLinkHref(raw) {
+    const input = typeof raw === 'string' ? raw.trim() : String(raw || '').trim();
+    if (!input) return null;
+
+    let candidate = input;
+    if (!/^https?:\/\//i.test(candidate)) {
+        const domainLike = /^(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d{1,5})?(?:\/\S*)?$/i.test(candidate);
+        if (candidate.toLowerCase().startsWith('www.') || domainLike) {
+            candidate = 'https://' + candidate;
+        } else {
+            return null;
+        }
+    }
+
+    try {
+        const parsed = new URL(candidate);
+        if (!['http:', 'https:'].includes(parsed.protocol)) return null;
+        return parsed.toString();
+    } catch (e) {
+        return null;
+    }
+}
+
+function linkifyTextToHtml(text) {
+    if (!text) return '';
+    const input = String(text);
+
+    // Very simple URL detector: http(s)://, www., or bare domain.tld[/path]
+    const urlRegex = /(?:https?:\/\/[^\s]+|www\.[^\s]+|(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d{1,5})?(?:\/[^\s]*)?)/ig;
+    const parts = [];
+    let lastIndex = 0;
+
+    for (let match; (match = urlRegex.exec(input)) !== null;) {
+        const raw = match[0];
+        const start = match.index;
+        if (start > lastIndex) {
+            parts.push({ type: 'text', value: input.slice(lastIndex, start) });
+        }
+
+        let urlText = raw;
+        let trailing = '';
+        while (urlText && /[),.!?;:'"\]]$/.test(urlText)) {
+            trailing = urlText.slice(-1) + trailing;
+            urlText = urlText.slice(0, -1);
+        }
+
+        const href = normalizeLinkHref(urlText);
+        if (href) {
+            parts.push({ type: 'link', href, text: urlText });
+        } else {
+            parts.push({ type: 'text', value: raw });
+        }
+
+        if (trailing) {
+            parts.push({ type: 'text', value: trailing });
+        }
+
+        lastIndex = start + raw.length;
+    }
+
+    if (lastIndex < input.length) {
+        parts.push({ type: 'text', value: input.slice(lastIndex) });
+    }
+
+    return parts.map((part) => {
+        if (part.type === 'text') {
+            return escapeHtml(part.value);
+        }
+        const safeHref = escapeHtml(part.href);
+        return '<a class="message-link" href="' + safeHref + '" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">' +
+            escapeHtml(part.text) +
+        '</a>';
+    }).join('');
 }
 
 function sanitizeUrl(url) {
