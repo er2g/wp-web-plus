@@ -384,17 +384,24 @@
                     </div>
                     <div class="toggle active" id="toggleSyncOnConnect" onclick="toggleSetting('syncOnConnect')"></div>
                 </div>
-                <div class="settings-item">
-                    <i class="icon bi bi-cloud-arrow-up"></i>
-                    <div class="info">
-                        <div class="title">Drive'a Yukle</div>
-                        <div class="subtitle">Medyalari Google Drive'a kaydet</div>
-                    </div>
-                    <div class="toggle" id="toggleUploadToDrive" onclick="toggleSetting('uploadToDrive')"></div>
-                </div>
-            </div>
+	                <div class="settings-item">
+	                    <i class="icon bi bi-cloud-arrow-up"></i>
+	                    <div class="info">
+	                        <div class="title">Drive'a Yukle</div>
+	                        <div class="subtitle">Medyalari Google Drive'a kaydet</div>
+	                    </div>
+	                    <div class="toggle" id="toggleUploadToDrive" onclick="toggleSetting('uploadToDrive')"></div>
+	                </div>
+	                <div class="settings-item" onclick="downloadAllMedia()">
+	                    <i class="icon bi bi-cloud-download-fill"></i>
+	                    <div class="info">
+	                        <div class="title">Tum Sohbetlerde Eksik Medyalari Indir</div>
+	                        <div class="subtitle">Tum sohbetler icin medya indirmeyi tetikle</div>
+	                    </div>
+	                </div>
+	            </div>
 
-            <!-- Appearance Section -->
+	            <!-- Appearance Section -->
             <div class="settings-section">
                 <div class="settings-section-title">Gorunum</div>
                 <div class="settings-item" onclick="toggleTheme()">

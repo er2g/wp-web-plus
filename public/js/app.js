@@ -2131,6 +2131,20 @@ function clearChat() {
     document.querySelectorAll('.dropdown-menu.show').forEach(m => m.classList.remove('show'));
 }
 
+async function downloadAllMedia() {
+    try {
+        showToast('Tum sohbetlerde eksik medyalar kuyruga ekleniyor...', 'info');
+        const result = await api('api/media/download-all', 'POST');
+        if (result && typeof result.enqueued === 'number' && typeof result.found === 'number') {
+            showToast(`Islem baslatildi: ${result.enqueued}/${result.found} dosya kuyruga eklendi.`, 'success');
+            return;
+        }
+        showToast((result && result.message) ? result.message : 'Islem baslatildi.', 'success');
+    } catch (err) {
+        showToast('Islem baslatilamadi: ' + err.message, 'error');
+    }
+}
+
 async function recoverMedia() {
     if (!currentChat) return;
     try {
@@ -3636,6 +3650,7 @@ Object.assign(window, {
     startSync,
     searchInChat,
     refreshChat,
+    downloadAllMedia,
     recoverMedia,
     exportChat,
     clearChat,

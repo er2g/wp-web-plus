@@ -585,13 +585,13 @@ class WhatsAppClient {
 
     enqueueMediaDownload(messageId) {
         const id = typeof messageId === 'string' ? messageId.trim() : '';
-        if (!id) return;
-        if (this.mediaQueueIds.has(id)) return;
+        if (!id) return false;
+        if (this.mediaQueueIds.has(id)) return false;
 
         const maxQueue = 10000;
         if (this.mediaQueue.length >= maxQueue) {
             this.log('warn', 'media', 'Media queue is full; dropping task for ' + id);
-            return;
+            return false;
         }
 
         this.mediaQueueIds.add(id);
@@ -601,6 +601,7 @@ class WhatsAppClient {
         if (!this.syncProgress.syncing) {
             this.processMediaQueue();
         }
+        return true;
     }
 
     processMediaQueue() {
@@ -2219,6 +2220,38 @@ class WhatsAppClient {
             this.log('error', 'media_recovery', 'Fatal error in recovery: ' + e.message);
             return { success: false, error: e.message };
         }
+    }
+
+    async enqueueMissingMediaAll(options = {}) {
+        if (!this.isReady()) throw new Error('WhatsApp not connected');
+
+        const requestedLimit = options && options.limit !== undefined ? parseInt(String(options.limit), 10) : NaN;
+        const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
+            ? Math.min(requestedLimit, 50000)
+            : 10000;
+
+        const rows = this.db.db.prepare(`
+            SELECT message_id
+            FROM messages
+            WHERE (type IN ('image', 'video', 'audio', 'ptt', 'document', 'sticker') OR media_mimetype IS NOT NULL)
+              AND media_url IS NULL
+            ORDER BY timestamp DESC
+            LIMIT ?
+        `).all(limit);
+
+        let enqueued = 0;
+        for (const row of rows) {
+            if (row && row.message_id && this.enqueueMediaDownload(row.message_id)) {
+                enqueued++;
+            }
+        }
+
+        return {
+            success: true,
+            found: rows.length,
+            enqueued,
+            queueLength: this.mediaQueue.length
+        };
     }
 
     async logout() {

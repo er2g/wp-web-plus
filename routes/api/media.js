@@ -5,6 +5,19 @@ const fs = require('fs');
 const path = require('path');
 const { sendError } = require('../../lib/httpResponses');
 
+router.post('/download-all', async (req, res) => {
+    try {
+        const result = await req.account.whatsapp.enqueueMissingMediaAll();
+        return res.json({
+            success: true,
+            ...result,
+            message: 'Tum sohbetlerde eksik medyalar indirme kuyruguna eklendi.'
+        });
+    } catch (error) {
+        return sendError(req, res, 500, error.message);
+    }
+});
+
 router.get('/:filename', (req, res) => {
     const filename = req.params.filename;
 
