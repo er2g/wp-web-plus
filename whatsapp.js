@@ -1706,6 +1706,36 @@ class WhatsAppClient {
         return this.startFullSyncAll();
     }
 
+    async getChatsWithRetry() {
+        if (!this.isReady()) throw new Error('WhatsApp not connected');
+        let lastError = null;
+        for (let attempt = 1; attempt <= CONSTANTS.SYNC_CHAT_MAX_RETRIES; attempt++) {
+            try {
+                const chats = await Promise.race([
+                    this.client.getChats(),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('getChats timeout')), 120000))
+                ]);
+                if (Array.isArray(chats) && chats.length) {
+                    return chats;
+                }
+                if (Array.isArray(chats)) {
+                    lastError = new Error('getChats returned empty');
+                }
+            } catch (e) {
+                lastError = e;
+            }
+
+            const baseDelay = Math.min(
+                CONSTANTS.SYNC_CHAT_BACKOFF_BASE_MS * (2 ** (attempt - 1)),
+                CONSTANTS.SYNC_CHAT_BACKOFF_MAX_MS
+            );
+            const jitter = 0.7 + Math.random() * 0.6;
+            const delay = Math.round(baseDelay * jitter);
+            await new Promise(resolve => setTimeout(resolve, delay));
+        }
+        throw lastError || new Error('getChats failed');
+    }
+
     async startFullSyncAll() {
         if (this.fullSyncPromise) {
             return { success: true, runId: this.fullSyncRunId, running: true };
@@ -1746,7 +1776,8 @@ class WhatsAppClient {
             const config = this.getFullSyncConfig();
             const cutoffMs = this.parseCutoffMs(config.cutoffDate);
 
-            const chats = await this.client.getChats();
+            this.db.syncRuns.updatePhase.run('loading_chats', runId);
+            const chats = await this.getChatsWithRetry();
             const lastMsCache = new Map();
             const getChatLastMs = (chat) => {
                 const chatId = chat?.id?._serialized || '';
