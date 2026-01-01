@@ -278,7 +278,8 @@ class WhatsAppClient {
     }
 
     getSenderName(contact, msg) {
-        const fallbackId = msg?.author || msg?.from;
+        const participantId = this.getParticipantId(msg);
+        const fallbackId = participantId || msg?.author || msg?.from;
         if (contact) {
             return contact.name || contact.pushname || contact.shortName || contact.number || this.extractPhoneFromId(fallbackId);
         }
@@ -289,11 +290,12 @@ class WhatsAppClient {
         if (contact && contact.number) {
             return contact.number;
         }
-        const fallbackId = msg?.author || msg?.from;
+        const participantId = this.getParticipantId(msg);
+        const fallbackId = participantId || msg?.author || msg?.from;
         if (typeof fallbackId === 'string') {
             const server = fallbackId.split('@')[1];
             if (server === 'g.us') {
-                return 'Unknown';
+                return participantId ? this.extractPhoneFromId(participantId) : 'Unknown';
             }
             if (server && server !== 'c.us') {
                 return fallbackId;
@@ -1221,15 +1223,28 @@ class WhatsAppClient {
         }
     }
 
+    getParticipantId(msg) {
+        if (!msg) return null;
+        if (msg.author) return msg.author;
+        if (msg.id && msg.id.participant) return msg.id.participant;
+        return null;
+    }
+
     async getContactCached(msg) {
-        const id = msg.author || msg.from;
+        const participantId = this.getParticipantId(msg);
+        const id = participantId || msg?.from;
         if (!id) return null;
         if (this.contactCache.has(id)) return this.contactCache.get(id);
         try {
             let contact = await msg.getContact();
-            const expectedId = typeof msg.author === 'string' ? msg.author : null;
+            const expectedId = participantId || (typeof msg.author === 'string' ? msg.author : null);
             const actualId = contact && contact.id && contact.id._serialized ? contact.id._serialized : null;
             if (expectedId && actualId && expectedId !== actualId && typeof this.client?.getContactById === 'function') {
+                try {
+                    contact = await this.client.getContactById(expectedId);
+                } catch (e) {}
+            }
+            if (!contact && expectedId && typeof this.client?.getContactById === 'function') {
                 try {
                     contact = await this.client.getContactById(expectedId);
                 } catch (e) {}
