@@ -1691,6 +1691,12 @@ class WhatsAppClient {
                 msg.ack || 0,
                 timestampMs
             );
+
+            if (messageType === 'revoked') {
+                try {
+                    this.db.messages.markDeletedForEveryone.run(timestampMs, messageId);
+                } catch (e) {}
+            }
         } catch (e) {}
 
         return { stored: true, messageId, chatId };
@@ -2144,6 +2150,12 @@ class WhatsAppClient {
                         row.ack,
                         row.timestamp
                     );
+
+                    if (row.type === 'revoked') {
+                        try {
+                            this.db.messages.markDeletedForEveryone.run(row.timestamp, row.messageId);
+                        } catch (e) {}
+                    }
                 }
 
                 upsertChatMeta();
@@ -2376,6 +2388,12 @@ class WhatsAppClient {
                         row.ack,
                         row.timestamp
                     );
+
+                    if (row.type === 'revoked') {
+                        try {
+                            this.db.messages.markDeletedForEveryone.run(row.timestamp, row.messageId);
+                        } catch (e) {}
+                    }
                 }
 
                 this.db.chats.upsert.run(

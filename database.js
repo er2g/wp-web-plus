@@ -555,8 +555,22 @@ function createDatabase(config) {
             from_number = excluded.from_number,
             to_number = excluded.to_number,
             from_name = excluded.from_name,
-            body = excluded.body,
-            type = excluded.type,
+            body = CASE
+                WHEN excluded.body IS NOT NULL AND excluded.body != '' THEN excluded.body
+                ELSE messages.body
+            END,
+            type = CASE
+                WHEN excluded.type IS NOT NULL AND excluded.type != '' AND excluded.type != 'revoked' THEN excluded.type
+                ELSE messages.type
+            END,
+            is_deleted_for_everyone = CASE
+                WHEN excluded.type = 'revoked' THEN 1
+                ELSE messages.is_deleted_for_everyone
+            END,
+            deleted_for_everyone_at = CASE
+                WHEN excluded.type = 'revoked' THEN COALESCE(messages.deleted_for_everyone_at, excluded.timestamp)
+                ELSE messages.deleted_for_everyone_at
+            END,
             media_path = COALESCE(excluded.media_path, messages.media_path),
             media_url = COALESCE(excluded.media_url, messages.media_url),
             media_mimetype = COALESCE(excluded.media_mimetype, messages.media_mimetype),
