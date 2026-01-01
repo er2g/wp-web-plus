@@ -7,6 +7,7 @@ const { requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { sendError } = require('../../lib/httpResponses');
 const { hashPassword, passwordMeetsPolicy } = require('../../services/passwords');
+const accountManager = require('../../services/accountManager');
 
 const intLike = (message) => z.preprocess(
     (value) => {
@@ -118,7 +119,8 @@ router.put('/me/preferences', validate({ body: preferencesSchema }), (req, res) 
         return sendError(req, res, 401, 'Not authenticated');
     }
     const preferencesJson = JSON.stringify(req.validatedBody);
-    req.account.db.users.updatePreferences.run(preferencesJson, userId);
+    const db = accountManager.getAccountContext(accountManager.getDefaultAccountId()).db;
+    db.users.updatePreferences.run(preferencesJson, userId);
     return res.json({ success: true });
 });
 

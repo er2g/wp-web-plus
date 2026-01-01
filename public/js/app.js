@@ -315,7 +315,7 @@ async function saveUserPreferences() {
 
     // Sync with server
     try {
-        await api('api/users/me/preferences', 'PUT', uiPreferences);
+        await api('api/users/me/preferences', 'PUT', uiPreferences, { includeAccount: false });
     } catch (e) {
         console.warn('Failed to sync preferences to server', e);
     }
@@ -635,9 +635,21 @@ function applyFontSize(size) {
     document.documentElement.style.setProperty('--font-size-base', size + 'px');
 }
 
+function previewInterfaceScale(value) {
+    const parsed = Number.parseInt(value, 10);
+    const clamped = Number.isFinite(parsed) ? Math.max(60, Math.min(140, parsed)) : 100;
+    uiPreferences.interfaceScale = clamped;
+
+    const interfaceScaleValue = document.getElementById('interfaceScaleValue');
+    if (interfaceScaleValue) interfaceScaleValue.textContent = String(clamped) + '%';
+}
+
 function updateInterfaceScale(value) {
     const parsed = Number.parseInt(value, 10);
     const clamped = Number.isFinite(parsed) ? Math.max(60, Math.min(140, parsed)) : 100;
+    const container = document.getElementById('messagesContainer');
+    const wasNearBottom = container ? isChatNearBottom(container, 220) : false;
+
     uiPreferences.interfaceScale = clamped;
     applyInterfaceScale(clamped);
     updateCustomizationUI();
@@ -645,6 +657,18 @@ function updateInterfaceScale(value) {
     try {
         renderMessagesList();
     } catch (e) {}
+
+    if (container) {
+        const raf = (window.requestAnimationFrame || ((cb) => setTimeout(cb, 0)));
+        raf(() => {
+            if (!container) return;
+            if (wasNearBottom) {
+                container.dataset.autoScrollTop = '';
+                scrollMessagesToBottom(container);
+                ensureChatScrolledToBottom(container);
+            }
+        });
+    }
 
     saveUserPreferences();
 }
@@ -4490,9 +4514,70 @@ function scriptEditorRenderChatPicker() {
     }).join('');
 }
 
+function captureScriptBuilderFocus(container) {
+    if (!container) return null;
+    const active = document.activeElement;
+    if (!active || !container.contains(active)) return null;
+
+    const descriptor = {
+        id: active.id || null,
+        condIdx: active.dataset?.condIdx,
+        condProp: active.dataset?.condProp,
+        actionIdx: active.dataset?.actionIdx,
+        actionProp: active.dataset?.actionProp,
+        selectionStart: (typeof active.selectionStart === 'number') ? active.selectionStart : null,
+        selectionEnd: (typeof active.selectionEnd === 'number') ? active.selectionEnd : null
+    };
+
+    return descriptor;
+}
+
+function restoreScriptBuilderFocus(container, descriptor) {
+    if (!container || !descriptor) return;
+    const esc = (value) => (window.CSS && typeof window.CSS.escape === 'function')
+        ? window.CSS.escape(String(value))
+        : String(value).replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+
+    let next = null;
+
+    if (descriptor.id) {
+        next = container.querySelector('#' + esc(descriptor.id));
+    }
+
+    if (!next && descriptor.condIdx !== undefined && descriptor.condProp) {
+        next = container.querySelector(
+            '[data-cond-idx="' + esc(descriptor.condIdx) + '"][data-cond-prop="' + esc(descriptor.condProp) + '"]'
+        );
+    }
+
+    if (!next && descriptor.actionIdx !== undefined && descriptor.actionProp) {
+        next = container.querySelector(
+            '[data-action-idx="' + esc(descriptor.actionIdx) + '"][data-action-prop="' + esc(descriptor.actionProp) + '"]'
+        );
+    }
+
+    if (!next || typeof next.focus !== 'function') return;
+
+    try {
+        next.focus({ preventScroll: true });
+    } catch (e) {
+        try {
+            next.focus();
+        } catch (e2) {}
+    }
+
+    if (descriptor.selectionStart === null || descriptor.selectionEnd === null) return;
+    if (typeof next.setSelectionRange !== 'function') return;
+
+    try {
+        next.setSelectionRange(descriptor.selectionStart, descriptor.selectionEnd);
+    } catch (e) {}
+}
+
 function scriptEditorRenderBuilder() {
     const container = document.getElementById('scriptBuilderPane');
     if (!container || !scriptEditorState) return;
+    const focusDescriptor = captureScriptBuilderFocus(container);
     const automation = scriptEditorState.automation || createDefaultAutomationConfig();
     const conditions = Array.isArray(automation.conditions) ? automation.conditions : [];
     const actions = Array.isArray(automation.actions) ? automation.actions : [];
@@ -4634,6 +4719,16 @@ function scriptEditorRenderBuilder() {
             '<summary>Kod onizleme</summary>' +
             '<pre class="script-code-preview">' + codePreview + '</pre>' +
         '</details>';
+
+    restoreScriptBuilderFocus(container, focusDescriptor);
+}
+
+function scriptEditorUpdateCodePreview() {
+    const container = document.getElementById('scriptBuilderPane');
+    if (!container) return;
+    const pre = container.querySelector('.script-code-preview');
+    if (!pre) return;
+    pre.textContent = String(scriptEditorGenerateAutomationCode() || '').trim();
 }
 
 function scriptEditorGenerateAutomationCode() {
@@ -4912,6 +5007,7 @@ function showScriptEditor(id) {
             const target = e.target;
             if (!target || !scriptEditorState) return;
             const automation = scriptEditorState.automation || createDefaultAutomationConfig();
+            let needsRender = false;
 
             if (target.id === 'automationDirection') {
                 automation.direction = target.value;
@@ -4926,6 +5022,7 @@ function showScriptEditor(id) {
                     if (prop === 'kind') {
                         item.op = item.kind === 'type' ? 'is' : (item.op || 'contains');
                         item.value = item.kind === 'type' ? (item.value || 'chat') : (item.value || '');
+                        needsRender = true;
                     }
                 }
             } else if (target.dataset && target.dataset.actionIdx !== undefined) {
@@ -4938,15 +5035,24 @@ function showScriptEditor(id) {
                     } else {
                         item[prop] = target.value;
                     }
-                    if (prop === 'type' && item.type === 'delay') {
-                        item.ms = item.ms || 500;
+                    if (prop === 'type') {
+                        if (item.type === 'delay') {
+                            item.ms = item.ms || 500;
+                        }
+                        needsRender = true;
+                    } else if (prop === 'target') {
+                        needsRender = true;
                     }
                 }
             }
 
             scriptEditorState.automation = automation;
             scriptEditorSyncFilterFromAutomation();
-            scriptEditorRenderBuilder();
+            if (needsRender) {
+                scriptEditorRenderBuilder();
+            } else {
+                scriptEditorUpdateCodePreview();
+            }
         });
     }
 
@@ -5662,6 +5768,7 @@ Object.assign(window, {
     updateTextSecondaryColor,
     resetTextColors,
     updateFontSize,
+    previewInterfaceScale,
     updateInterfaceScale,
     toggleEdgeToEdgeLayout,
     toggleCompactMode,

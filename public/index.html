@@ -607,7 +607,7 @@
                         <div class="subtitle">Tum arayuz boyutu</div>
                     </div>
                     <div style="display: flex; align-items: center; gap: 8px;">
-                        <input type="range" id="interfaceScaleRange" min="60" max="140" step="5" oninput="updateInterfaceScale(this.value)" style="width: 120px;">
+                        <input type="range" id="interfaceScaleRange" min="60" max="140" step="5" oninput="previewInterfaceScale(this.value)" onchange="updateInterfaceScale(this.value)" style="width: 120px;">
                         <span id="interfaceScaleValue" style="font-size: 12px; color: var(--text-secondary); min-width: 38px; text-align: right;">100%</span>
                     </div>
                 </div>
