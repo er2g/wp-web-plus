@@ -1036,7 +1036,8 @@ async function api(url, method, body, fetchOptions) {
     const options = {
         method: method,
         headers: headers,
-        credentials: 'include'
+        credentials: 'include',
+        cache: 'no-store'
     };
     if (body) options.body = JSON.stringify(body);
     const response = await fetch(url, options);
@@ -1726,14 +1727,14 @@ function renderChatList(chatList, options = {}) {
     container.innerHTML = chatList.map(c => {
         const isActive = currentChat === c.chat_id;
         const hasUnread = c.unread_count > 0;
-        const chatIdArg = escapeHtmlAttribute(JSON.stringify(String(c.chat_id || '')));
-        const nameArg = escapeHtmlAttribute(JSON.stringify(String(c.name || '')));
+        const chatIdAttr = escapeHtmlAttribute(String(c.chat_id || ''));
+        const nameAttr = escapeHtmlAttribute(String(c.name || ''));
         const timeValue = c.last_message_at ?? c.last_message_time;
         const actionBtn = isArchiveView
-            ? '<button class="chat-action-btn" title="Arsivden cikar" onclick="toggleChatArchive(event, ' + chatIdArg + ', false)"><i class="bi bi-inbox"></i></button>'
-            : '<button class="chat-action-btn" title="Arsive al" onclick="toggleChatArchive(event, ' + chatIdArg + ', true)"><i class="bi bi-archive"></i></button>';
+            ? '<button class="chat-action-btn" title="Arsivden cikar" data-chat-id="' + chatIdAttr + '" data-archive-action="unarchive"><i class="bi bi-inbox"></i></button>'
+            : '<button class="chat-action-btn" title="Arsive al" data-chat-id="' + chatIdAttr + '" data-archive-action="archive"><i class="bi bi-archive"></i></button>';
 
-        return '<div class="chat-item' + (isActive ? ' active' : '') + (hasUnread ? ' unread' : '') + '" onclick="selectChat(' + chatIdArg + ', ' + nameArg + ')">' +
+        return '<div class="chat-item' + (isActive ? ' active' : '') + (hasUnread ? ' unread' : '') + '" data-chat-id="' + chatIdAttr + '" data-chat-name="' + nameAttr + '">' +
             renderChatAvatar(c) +
             '<div class="chat-info">' +
                 '<div class="top-row">' +
@@ -1750,6 +1751,36 @@ function renderChatList(chatList, options = {}) {
             '</div>' +
         '</div>';
     }).join('');
+
+    attachChatListHandlers(containerId);
+}
+
+function attachChatListHandlers(containerId) {
+    const container = document.getElementById(containerId);
+    if (!container || container.dataset.handlerAttached === 'true') return;
+    container.dataset.handlerAttached = 'true';
+
+    container.addEventListener('click', (event) => {
+        const actionBtn = event.target.closest('.chat-action-btn');
+        if (actionBtn && container.contains(actionBtn)) {
+            event.preventDefault();
+            event.stopPropagation();
+            const chatId = actionBtn.dataset.chatId || '';
+            const action = actionBtn.dataset.archiveAction || '';
+            if (chatId) {
+                const shouldArchive = action === 'archive';
+                toggleChatArchive(event, chatId, shouldArchive);
+            }
+            return;
+        }
+
+        const item = event.target.closest('.chat-item');
+        if (!item || !container.contains(item)) return;
+        const chatId = item.dataset.chatId || '';
+        if (!chatId) return;
+        const chatName = item.dataset.chatName || chatId;
+        selectChat(chatId, chatName);
+    });
 }
 
 function renderMessagesList() {
