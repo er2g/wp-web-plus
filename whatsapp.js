@@ -280,10 +280,38 @@ class WhatsAppClient {
     getSenderName(contact, msg) {
         const participantId = this.getParticipantId(msg);
         const fallbackId = participantId || msg?.author || msg?.from;
-        if (contact) {
-            return contact.name || contact.pushname || contact.shortName || contact.number || this.extractPhoneFromId(fallbackId);
+        const fallback = this.extractPhoneFromId(fallbackId);
+        if (!contact) return fallback;
+
+        const rawCandidates = [
+            contact.name,
+            contact.pushname,
+            contact.shortName,
+            contact.verifiedName,
+            contact.number
+        ];
+
+        const candidates = rawCandidates
+            .filter((value) => value !== undefined && value !== null)
+            .map((value) => String(value).trim())
+            .filter(Boolean);
+
+        if (!candidates.length) return fallback;
+
+        const isNumericLike = (value) => /^\d{7,18}$/.test(value);
+        let chosen = candidates[0];
+
+        if (chosen && chosen.toLowerCase() === 'unknown') {
+            const better = candidates.find((v) => v && v.toLowerCase() !== 'unknown');
+            if (better) chosen = better;
         }
-        return this.extractPhoneFromId(fallbackId);
+
+        if (chosen && isNumericLike(chosen)) {
+            const better = candidates.find((v) => v && !isNumericLike(v) && v.toLowerCase() !== 'unknown');
+            if (better) chosen = better;
+        }
+
+        return chosen || fallback;
     }
 
     getSenderNumber(contact, msg) {
@@ -1234,23 +1262,67 @@ class WhatsAppClient {
         const participantId = this.getParticipantId(msg);
         const id = participantId || msg?.from;
         if (!id) return null;
-        if (this.contactCache.has(id)) return this.contactCache.get(id);
         try {
-            let contact = await msg.getContact();
-            const expectedId = participantId || (typeof msg.author === 'string' ? msg.author : null);
-            const actualId = contact && contact.id && contact.id._serialized ? contact.id._serialized : null;
-            if (expectedId && actualId && expectedId !== actualId && typeof this.client?.getContactById === 'function') {
-                try {
-                    contact = await this.client.getContactById(expectedId);
-                } catch (e) {}
-            }
-            if (!contact && expectedId && typeof this.client?.getContactById === 'function') {
-                try {
-                    contact = await this.client.getContactById(expectedId);
-                } catch (e) {}
-            }
-            this.contactCache.set(id, contact);
-            return contact;
+            return await this.getContactByIdCached(id);
+        } catch (e) {
+            return null;
+        }
+    }
+
+    async getContactModelFallback(contactId) {
+        if (!this.isReady()) return null;
+        const id = typeof contactId === 'string' ? contactId.trim() : '';
+        if (!id) return null;
+        if (!this.client?.pupPage) return null;
+
+        try {
+            return await Promise.race([
+                this.client.pupPage.evaluate(async (contactId) => {
+                    try {
+                        const wid = window.Store?.WidFactory?.createWid?.(contactId);
+                        if (!wid) return null;
+
+                        let contact = null;
+                        try {
+                            contact = window.Store?.Contact?.get?.(wid) || null;
+                        } catch (e) {}
+
+                        if (!contact) {
+                            try {
+                                contact = await window.Store?.Contact?.find?.(wid);
+                            } catch (e) {
+                                contact = null;
+                            }
+                        }
+
+                        if (!contact) {
+                            try {
+                                const models = window.Store?.Contact?.getModelsArray?.() || [];
+                                contact = models.find((c) => c?.id?._serialized === contactId) || null;
+                            } catch (e) {
+                                contact = null;
+                            }
+                        }
+
+                        if (!contact) return null;
+
+                        try {
+                            if (contact.id?._serialized?.endsWith('@lid') && contact.phoneNumber) {
+                                contact.id = contact.phoneNumber;
+                            }
+                        } catch (e) {}
+
+                        try {
+                            return window.WWebJS?.getContactModel?.(contact) || null;
+                        } catch (e) {
+                            return null;
+                        }
+                    } catch (e) {
+                        return null;
+                    }
+                }, id),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('getContactModelFallback timeout')), 15000))
+            ]);
         } catch (e) {
             return null;
         }
@@ -1266,6 +1338,28 @@ class WhatsAppClient {
             this.contactCache.set(chatId, contact);
             return contact;
         } catch (e) {
+            if (chatId.endsWith('@lid')) {
+                const model = await this.getContactModelFallback(chatId);
+                if (model) {
+                    const serializedId = typeof model.id === 'string'
+                        ? model.id
+                        : (model.id && typeof model.id._serialized === 'string' ? model.id._serialized : chatId);
+                    const userid = model.userid !== undefined && model.userid !== null ? String(model.userid) : '';
+                    const number = userid ? userid.replace(/[^\d]/g, '') : null;
+                    const contact = {
+                        id: { _serialized: serializedId },
+                        name: model.name || null,
+                        shortName: model.shortName || null,
+                        pushname: model.pushname || null,
+                        verifiedName: model.verifiedName || null,
+                        number: number || null,
+                        isMyContact: Boolean(model.isMyContact),
+                        isWAContact: Boolean(model.isWAContact)
+                    };
+                    this.contactCache.set(chatId, contact);
+                    return contact;
+                }
+            }
             return null;
         }
     }
@@ -1653,7 +1747,24 @@ class WhatsAppClient {
             const cutoffMs = this.parseCutoffMs(config.cutoffDate);
 
             const chats = await this.client.getChats();
+            const lastMsCache = new Map();
+            const getChatLastMs = (chat) => {
+                const chatId = chat?.id?._serialized || '';
+                if (!chatId) return 0;
+                if (lastMsCache.has(chatId)) return lastMsCache.get(chatId);
+
+                const existing = this.db.chats.getById.get(chatId);
+                const existingLast = Number(existing?.last_message_at) || 0;
+                const lastMsgTs = chat?.lastMessage?.timestamp ? chat.lastMessage.timestamp * 1000 : 0;
+                const chatTs = chat?.timestamp ? chat.timestamp * 1000 : 0;
+
+                const value = lastMsgTs || chatTs || existingLast || 0;
+                lastMsCache.set(chatId, value);
+                return value;
+            };
             chats.sort((a, b) => {
+                const diff = getChatLastMs(b) - getChatLastMs(a);
+                if (diff !== 0) return diff;
                 const aId = a?.id?._serialized || '';
                 const bId = b?.id?._serialized || '';
                 return aId.localeCompare(bId);
@@ -1771,6 +1882,29 @@ class WhatsAppClient {
         let newestMsgId = state.newest_msg_id || null;
         let oldestMsgId = state.oldest_msg_id || null;
         const safePageLimit = Math.max(25, Number(config.pageLimit) || CONSTANTS.FULL_SYNC_PAGE_LIMIT);
+        const maxMessagesPerChat = Math.min(5000, Math.max(1, Number(this.settings.maxMessagesPerChat) || 1000));
+        const countMessagesByChatId = this.db.db.prepare('SELECT COUNT(*) as count FROM messages WHERE chat_id = ?');
+        let storedCount = 0;
+        try {
+            storedCount = countMessagesByChatId.get(chatId)?.count || 0;
+        } catch (e) {
+            storedCount = 0;
+        }
+
+        if (storedCount >= maxMessagesPerChat) {
+            this.db.chatSyncState.upsert.run(
+                chatId,
+                runId,
+                'done',
+                'max_messages',
+                state.cursor_value || null,
+                oldestMsgId,
+                newestMsgId,
+                1,
+                null
+            );
+            return;
+        }
 
         const upsertChatMeta = () => {
             const lastMsg = chat.lastMessage || null;
@@ -1864,6 +1998,9 @@ class WhatsAppClient {
             });
 
             syncTx();
+            try {
+                storedCount = countMessagesByChatId.get(chatId)?.count || storedCount;
+            } catch (e) {}
 
             for (const row of msgRows) {
                 if (!row.messageId) continue;
@@ -1896,6 +2033,10 @@ class WhatsAppClient {
         // Seed with the most recent messages (also ensures chat message store is initialized)
         const initial = await this.fetchMessagesWithRetry(chat, safePageLimit);
         await saveMessages(initial);
+        let stopReason = 'load_earlier';
+        if (storedCount >= maxMessagesPerChat) {
+            stopReason = 'max_messages';
+        }
 
         // Now page backwards using WhatsApp Web's loadEarlierMsgs (whatsapp-web.js Chat.fetchMessages has no `before` cursor)
         let reachedEnd = false;
@@ -1904,6 +2045,10 @@ class WhatsAppClient {
         let lastOldestId = oldestMsgId || null;
 
         while (!reachedEnd) {
+            if (storedCount >= maxMessagesPerChat) {
+                stopReason = 'max_messages';
+                break;
+            }
             safetyLoops += 1;
             if (safetyLoops > 20000) {
                 throw new Error('Chat backfill exceeded max iterations');
@@ -1919,6 +2064,10 @@ class WhatsAppClient {
                 : [];
 
             await saveMessages(msgs);
+            if (storedCount >= maxMessagesPerChat) {
+                stopReason = 'max_messages';
+                break;
+            }
 
             if (cutoffMs && msgs.some(msg => (msg.timestamp * 1000) < cutoffMs)) {
                 reachedEnd = true;
@@ -1936,7 +2085,7 @@ class WhatsAppClient {
                 chatId,
                 runId,
                 'running',
-                'load_earlier',
+                stopReason,
                 oldestMsgId || cursor || null,
                 oldestMsgId,
                 newestMsgId,
@@ -1956,7 +2105,7 @@ class WhatsAppClient {
             chatId,
             runId,
             'done',
-            'load_earlier',
+            stopReason,
             oldestMsgId || cursor,
             oldestMsgId,
             newestMsgId,

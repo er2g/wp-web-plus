@@ -4493,6 +4493,13 @@ function getSenderContactIdFromMessage(message, chatIdForContext) {
     const isGroup = isGroupChatId(chatIdForContext || message.chat_id || message.chatId || currentChat);
     if (!isGroup) return '';
 
+    const messageId = getChatMessageId(message);
+    if (messageId) {
+        const parts = String(messageId).split('_');
+        const tail = parts[parts.length - 1] || '';
+        if (tail && tail.includes('@')) return tail;
+    }
+
     const rawNumber = String(message.from_number || message.fromNumber || '').trim();
     if (rawNumber) {
         if (rawNumber.includes('@')) return rawNumber;
