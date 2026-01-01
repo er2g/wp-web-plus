@@ -61,4 +61,13 @@ router.delete('/:id/tags/:tagId', validate({ params: tagParamsSchema }), (req, r
     return res.json({ success: true });
 });
 
+router.get('/:id/profile-picture', validate({ params: chatIdParamSchema }), async (req, res) => {
+    try {
+        const url = await req.account.whatsapp.getProfilePictureUrl(req.validatedParams.id);
+        return res.json({ success: true, url: url || null });
+    } catch (error) {
+        return sendError(req, res, 500, error.message);
+    }
+});
+
 module.exports = router;

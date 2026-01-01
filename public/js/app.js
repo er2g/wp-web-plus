@@ -58,6 +58,10 @@ const GRADIENT_PRESETS = {
 };
 
 let selectedAttachment = null;
+
+// Sender profile pictures (for group message UI)
+const senderProfilePicCache = new Map(); // contactId -> url|null
+const senderProfilePicPending = new Set(); // contactId currently fetching
 const MESSAGE_PAGE_SIZE = 50;
 const CHAT_MESSAGE_PAGE_SIZE = 50;
 const CHAT_SEARCH_PAGE_SIZE = 50;
@@ -1470,7 +1474,12 @@ function renderChatMessages(messages, options = {}) {
 
     const showSenderNames = isGroupChatId(currentChat);
 
-    container.innerHTML = sorted.map(m => {
+    const rows = [];
+    let prevSenderKey = null;
+    let prevCanStack = false;
+    let prevTs = null;
+
+    for (const m of sorted) {
         const isMine = m.is_from_me === 1 || m.is_from_me === true;
         let mediaHtml = '';
         const type = m.type || 'chat';
@@ -1535,21 +1544,46 @@ function renderChatMessages(messages, options = {}) {
             textHtml = '<div class="message-text muted">[Bos mesaj]</div>';
         }
 
-        const displayName = getDisplayNameFromMessage(m);
-        const senderHtml = (!isMine && displayName && showSenderNames) ?
+        const canShowGroupSender = showSenderNames && !isMine && !isSystem;
+        const displayName = canShowGroupSender ? getDisplayNameFromMessage(m, currentChat) : '';
+        const senderContactId = canShowGroupSender ? getSenderContactIdFromMessage(m, currentChat) : '';
+        const senderKey = senderContactId || displayName || '';
+
+        const timeGapMs = (prevTs && m.timestamp) ? (m.timestamp - prevTs) : Number.POSITIVE_INFINITY;
+        const isStacked = (canShowGroupSender && prevCanStack && prevSenderKey && prevSenderKey === senderKey && timeGapMs < (5 * 60 * 1000));
+        const showSenderMeta = (canShowGroupSender && !isStacked);
+
+        const senderHtml = (showSenderMeta && displayName) ?
             '<div class="sender-name">' + escapeHtml(formatSenderName(displayName)) + '</div>' : '';
+
+        const avatarHtml = canShowGroupSender
+            ? renderSenderAvatar(senderContactId, displayName, showSenderMeta)
+            : '';
 
         const checkIcon = isMine && !isSystem ? getMessageStatusIcon(m.ack) : '';
         const messageIdAttr = escapeHtml(m.message_id || m.messageId || '');
 
-        return '<div class="message-row ' + (isMine ? 'sent' : 'received') + '" data-message-id="' + messageIdAttr + '">' +
+        const rowClass = 'message-row ' + (isMine ? 'sent' : 'received') +
+            (canShowGroupSender ? ' group' : '') +
+            (isStacked ? ' stacked' : '');
+
+        rows.push(
+            '<div class="' + rowClass + '" data-message-id="' + messageIdAttr + '">' +
+            avatarHtml +
             '<div class="message-bubble ' + (isMine ? 'sent' : 'received') + '">' +
             senderHtml +
             mediaHtml +
             textHtml +
             '<div class="message-footer"><span class="message-time">' + formatTime(m.timestamp) + '</span>' + checkIcon + '</div>' +
-            '</div></div>';
-    }).join('');
+            '</div></div>'
+        );
+
+        prevSenderKey = senderKey;
+        prevCanStack = canShowGroupSender;
+        prevTs = m.timestamp;
+    }
+
+    container.innerHTML = rows.join('');
 
     if (options.preserveScroll) {
         const newScrollHeight = container.scrollHeight;
@@ -3288,18 +3322,124 @@ function sanitizeUrl(url) {
 
 function formatSenderName(name) {
     if (!name) return '';
-    if (name.includes('@')) {
-        return name.split('@')[0];
+    let normalized = String(name);
+    if (normalized.includes('@')) {
+        normalized = normalized.split('@')[0];
     }
-    if (/^\d{7,16}$/.test(name)) {
-        return '+' + name;
+    normalized = normalized.trim();
+    if (/^\d{7,16}$/.test(normalized)) {
+        return '+' + normalized;
     }
-    return name;
+    return normalized;
 }
 
-function getDisplayNameFromMessage(message) {
+function looksLikeGroupInternalId(value) {
+    const v = String(value || '').trim();
+    if (!v) return false;
+    if (!v.includes('-')) return false;
+    // Typical WhatsApp group internal IDs look like "<digits>-<digits>"
+    return /^\d{8,}-\d{3,}$/.test(v);
+}
+
+function getDisplayNameFromMessage(message, chatIdForContext) {
     if (!message) return '';
-    return message.from_name || message.fromName || message.from_number || message.fromNumber || message.from || '';
+    const isGroup = isGroupChatId(chatIdForContext || message.chat_id || message.chatId || currentChat);
+    const name = String(message.from_name || message.fromName || '').trim();
+    const number = String(message.from_number || message.fromNumber || '').trim();
+    const from = String(message.from || '').trim();
+
+    if (isGroup) {
+        if (name && looksLikeGroupInternalId(name) && number) return number;
+        if (name && name.toLowerCase() === 'unknown' && number) return number;
+    }
+
+    return name || number || from || '';
+}
+
+function getSenderContactIdFromMessage(message, chatIdForContext) {
+    if (!message) return '';
+    const isGroup = isGroupChatId(chatIdForContext || message.chat_id || message.chatId || currentChat);
+    if (!isGroup) return '';
+
+    const rawNumber = String(message.from_number || message.fromNumber || '').trim();
+    if (rawNumber) {
+        if (rawNumber.includes('@')) return rawNumber;
+        if (/^\d{7,16}$/.test(rawNumber)) return rawNumber + '@c.us';
+    }
+
+    const rawName = String(message.from_name || message.fromName || '').trim();
+    if (rawName && rawName.includes('@')) return rawName;
+
+    return '';
+}
+
+function getInitials(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '?';
+    const cleaned = formatSenderName(raw);
+    const parts = cleaned.split(/\s+/).filter(Boolean);
+    if (!parts.length) return '?';
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+}
+
+function updateSenderAvatarElements(contactId) {
+    if (!contactId) return;
+    const escaped = (window.CSS && CSS.escape) ? CSS.escape(contactId) : contactId;
+    const nodes = document.querySelectorAll('.sender-avatar[data-sender-id="' + escaped + '"]');
+    if (!nodes.length) return;
+
+    const cached = senderProfilePicCache.get(contactId) || null;
+    nodes.forEach((node) => {
+        if (node.classList.contains('spacer')) return;
+        const safeUrl = cached ? sanitizeUrl(cached) : '';
+        if (safeUrl) {
+            node.innerHTML = '<img src="' + safeUrl + '" alt="">';
+            return;
+        }
+        const name = node.getAttribute('data-sender-name') || '';
+        node.innerHTML = '<span class="sender-avatar-initials">' + escapeHtml(getInitials(name || contactId)) + '</span>';
+    });
+}
+
+async function fetchSenderProfilePic(contactId) {
+    if (!contactId) return;
+    if (senderProfilePicCache.has(contactId) || senderProfilePicPending.has(contactId)) return;
+    senderProfilePicPending.add(contactId);
+    try {
+        const result = await api('api/contacts/' + encodeURIComponent(contactId) + '/profile-picture');
+        senderProfilePicCache.set(contactId, result && result.success ? (result.url || null) : null);
+    } catch (e) {
+        senderProfilePicCache.set(contactId, null);
+    } finally {
+        senderProfilePicPending.delete(contactId);
+        updateSenderAvatarElements(contactId);
+    }
+}
+
+function renderSenderAvatar(contactId, displayName, showSenderMeta) {
+    const id = String(contactId || '').trim();
+    const name = String(displayName || '').trim();
+    const className = 'sender-avatar' + (showSenderMeta ? '' : ' spacer');
+
+    let inner = '';
+    if (showSenderMeta) {
+        const cached = id && senderProfilePicCache.has(id) ? senderProfilePicCache.get(id) : null;
+        const safeUrl = cached ? sanitizeUrl(cached) : '';
+        if (safeUrl) {
+            inner = '<img src="' + safeUrl + '" alt="">';
+        } else {
+            inner = '<span class="sender-avatar-initials">' + escapeHtml(getInitials(name || id)) + '</span>';
+        }
+
+        if (id && !senderProfilePicCache.has(id) && !senderProfilePicPending.has(id)) {
+            fetchSenderProfilePic(id);
+        }
+    }
+
+    return '<div class="' + className + '" data-sender-id="' + escapeHtml(id) + '" data-sender-name="' + escapeHtml(name) + '">' +
+        inner +
+        '</div>';
 }
 
 function formatTime(ts) {
