@@ -48,6 +48,8 @@
     --font-size-base: 14.2px;
     --chat-spacing: 2px;
     --bubble-radius: 7.5px;
+    --ui-scale: 1;
+    --message-bubble-scale: 1;
 
     /* App container surfaces (transparency) */
     --app-surface-opacity: 100%;
@@ -128,6 +130,17 @@ body {
     overflow: hidden;
 }
 
+#uiRoot {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: calc(100% / var(--ui-scale));
+    height: calc(100% / var(--ui-scale));
+    transform: scale(var(--ui-scale));
+    transform-origin: top left;
+    overflow: hidden;
+}
+
 /* Compact Mode */
 body.compact .chat-item {
     padding: 8px 16px;
@@ -163,7 +176,7 @@ body.compact .message-bubble .message-text {
 /* Main App Container */
 .app-container {
     display: flex;
-    height: 100vh;
+    height: 100%;
     max-width: 100%;
     margin: 0 auto;
     background-color: var(--bg-primary);
@@ -186,10 +199,17 @@ body.compact .message-bubble .message-text {
 @media (min-width: 1441px) {
     .app-container {
         margin: 20px auto;
-        height: calc(100vh - 40px);
+        height: calc(100% - 40px);
         max-width: 1600px;
         box-shadow: var(--shadow-lg);
     }
+}
+
+body.edge-to-edge .app-container {
+    margin: 0;
+    height: 100%;
+    max-width: 100%;
+    box-shadow: none;
 }
 
 /* Left Sidebar */
@@ -433,6 +453,34 @@ body.compact .message-bubble .message-text {
     justify-content: space-between;
     align-items: center;
     margin-bottom: 3px;
+}
+
+.chat-item .chat-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.chat-item .chat-action-btn {
+    border: none;
+    background: transparent;
+    color: var(--text-light);
+    padding: 4px;
+    border-radius: 8px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s, background-color 0.15s, color 0.15s;
+}
+
+.chat-item:hover .chat-action-btn,
+.chat-item.active .chat-action-btn {
+    opacity: 1;
+}
+
+.chat-item .chat-action-btn:hover {
+    background-color: var(--bg-hover);
+    color: var(--text-primary);
 }
 
 .chat-item .chat-name {
@@ -894,6 +942,7 @@ body.compact .message-row.stacked {
 
 .message-bubble {
     max-width: 65%;
+    zoom: var(--message-bubble-scale);
     padding: 6px 7px 8px 9px;
     border-radius: var(--bubble-radius);
     position: relative;
@@ -1299,7 +1348,7 @@ body.compact .message-row.stacked {
     top: 0;
     right: -450px;
     width: 450px;
-    height: 100vh;
+    height: 100%;
     background-color: var(--bg-primary);
     box-shadow: var(--shadow-lg);
     transition: right 0.3s ease;
@@ -1978,7 +2027,7 @@ body.compact .message-row.stacked {
     top: 0;
     left: -350px;
     width: 350px;
-    height: 100vh;
+    height: 100%;
     background-color: var(--bg-primary);
     box-shadow: var(--shadow-lg);
     transition: left 0.3s ease;

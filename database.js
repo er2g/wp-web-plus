@@ -66,6 +66,7 @@ function createDatabase(config) {
         last_message TEXT,
         last_message_at INTEGER,
         unread_count INTEGER DEFAULT 0,
+        is_archived INTEGER DEFAULT 0,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -290,6 +291,7 @@ function createDatabase(config) {
     CREATE INDEX IF NOT EXISTS idx_messages_chat_timestamp ON messages(chat_id, timestamp);
     CREATE INDEX IF NOT EXISTS idx_messages_message_id ON messages(message_id);
     CREATE INDEX IF NOT EXISTS idx_chats_updated ON chats(updated_at);
+    CREATE INDEX IF NOT EXISTS idx_chats_archived_last_message_at ON chats(is_archived, last_message_at);
     CREATE INDEX IF NOT EXISTS idx_scheduled_time ON scheduled_messages(scheduled_at);
     CREATE INDEX IF NOT EXISTS idx_templates_category ON message_templates(category);
     CREATE INDEX IF NOT EXISTS idx_logs_created ON logs(created_at);
@@ -494,6 +496,16 @@ function createDatabase(config) {
                     db.exec('ALTER TABLE messages ADD COLUMN quoted_from_name TEXT');
                 }
             }
+        },
+        {
+            version: 13,
+            name: 'add_chat_archive_flag',
+            apply: () => {
+                if (!columnExists('chats', 'is_archived')) {
+                    db.exec('ALTER TABLE chats ADD COLUMN is_archived INTEGER DEFAULT 0');
+                }
+                db.exec('CREATE INDEX IF NOT EXISTS idx_chats_archived_last_message_at ON chats(is_archived, last_message_at)');
+            }
         }
     ];
 
@@ -568,7 +580,10 @@ function createDatabase(config) {
             unread_count = excluded.unread_count, updated_at = datetime('now')
     `),
         getAll: db.prepare(`SELECT * FROM chats ORDER BY last_message_at DESC`),
+        getActive: db.prepare(`SELECT * FROM chats WHERE is_archived = 0 ORDER BY last_message_at DESC`),
+        getArchived: db.prepare(`SELECT * FROM chats WHERE is_archived = 1 ORDER BY last_message_at DESC`),
         getById: db.prepare(`SELECT * FROM chats WHERE chat_id = ?`),
+        setArchived: db.prepare(`UPDATE chats SET is_archived = ?, updated_at = datetime('now') WHERE chat_id = ?`),
         search: db.prepare(`SELECT * FROM chats WHERE name LIKE ? ORDER BY last_message_at DESC LIMIT ? OFFSET ?`)
     };
 

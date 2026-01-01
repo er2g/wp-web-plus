@@ -7,6 +7,14 @@ const { sendError } = require('../../lib/httpResponses');
 const { queryLimit, queryOffset, queryString } = require('../../lib/zodHelpers');
 const { validate } = require('../middleware/validate');
 
+const booleanLike = z.preprocess((value) => {
+    if (value === undefined || value === null || value === '') return undefined;
+    if (value === true || value === false) return value;
+    if (value === 1 || value === '1' || value === 'true') return true;
+    if (value === 0 || value === '0' || value === 'false') return false;
+    return value;
+}, z.boolean());
+
 const intLike = (message) => z.preprocess(
     (value) => {
         if (value === undefined || value === null || value === '') return value;
@@ -54,6 +62,7 @@ const chatSearchQuerySchema = z.object({
     q: queryString({ defaultValue: '', maxLength: LIMITS.QUERY_LENGTH, trim: true }),
     tag: queryString({ defaultValue: '', maxLength: LIMITS.QUERY_LENGTH, trim: true }),
     note: queryString({ defaultValue: '', maxLength: LIMITS.QUERY_LENGTH, trim: true }),
+    archived: booleanLike.optional().default(false),
     limit: queryLimit({ defaultValue: 50, max: LIMITS.PAGINATION.MESSAGES }),
     offset: queryOffset({ defaultValue: 0 })
 });
@@ -70,8 +79,14 @@ const tagParamsSchema = z.object({
 
 router.get('/', (req, res) => {
     const tagFilter = (req.query.tag || '').trim();
+    const archivedQuery = req.query.archived;
+    const archived = archivedQuery === true || archivedQuery === 1
+        || (typeof archivedQuery === 'string' && ['1', 'true'].includes(archivedQuery.trim().toLowerCase()));
+    const archivedFlag = archived ? 1 : 0;
+
     if (!tagFilter) {
-        return res.json(req.account.db.chats.getAll.all());
+        const list = archived ? req.account.db.chats.getArchived.all() : req.account.db.chats.getActive.all();
+        return res.json(list);
     }
 
     const tagId = /^\d+$/.test(tagFilter) ? parseInt(tagFilter, 10) : null;
@@ -85,13 +100,14 @@ router.get('/', (req, res) => {
 
     const placeholders = chatIds.map(() => '?').join(',');
     const chats = req.account.db.db.prepare(
-        `SELECT * FROM chats WHERE chat_id IN (${placeholders}) ORDER BY last_message_at DESC`
-    ).all(...chatIds);
+        `SELECT * FROM chats WHERE is_archived = ? AND chat_id IN (${placeholders}) ORDER BY last_message_at DESC`
+    ).all(archivedFlag, ...chatIds);
     return res.json(chats);
 });
 
 router.get('/search', validate({ query: chatSearchQuerySchema }), (req, res) => {
-    const { q: query, tag: tagFilter, note: noteQuery, limit, offset } = req.validatedQuery;
+    const { q: query, tag: tagFilter, note: noteQuery, archived, limit, offset } = req.validatedQuery;
+    const archivedFlag = archived ? 1 : 0;
 
     if (!query && !tagFilter && !noteQuery) return res.json([]);
 
@@ -119,21 +135,29 @@ router.get('/search', validate({ query: chatSearchQuerySchema }), (req, res) => 
     }
 
     if (!chatIds && query) {
-        return res.json(req.account.db.chats.search.all('%' + query + '%', limit, offset));
+        const results = req.account.db.db.prepare(`
+            SELECT * FROM chats
+            WHERE is_archived = ?
+              AND name LIKE ?
+            ORDER BY last_message_at DESC
+            LIMIT ? OFFSET ?
+        `).all(archivedFlag, '%' + query + '%', limit, offset);
+        return res.json(results);
     }
 
     const filterIds = chatIds ? Array.from(chatIds) : null;
     if (query) {
         const placeholders = filterIds ? filterIds.map(() => '?').join(',') : '';
-        const params = ['%' + query + '%'];
+        const params = [archivedFlag, '%' + query + '%'];
         if (filterIds) {
             params.push(...filterIds);
         }
         params.push(limit, offset);
         const results = req.account.db.db.prepare(`
             SELECT * FROM chats
-            WHERE name LIKE ?
-            ${filterIds ? `AND chat_id IN (${placeholders})` : ''}
+            WHERE is_archived = ?
+              AND name LIKE ?
+              ${filterIds ? `AND chat_id IN (${placeholders})` : ''}
             ORDER BY last_message_at DESC
             LIMIT ? OFFSET ?
         `).all(...params);
@@ -143,11 +167,52 @@ router.get('/search', validate({ query: chatSearchQuerySchema }), (req, res) => 
     const placeholders = filterIds.map(() => '?').join(',');
     const results = req.account.db.db.prepare(`
         SELECT * FROM chats
-        WHERE chat_id IN (${placeholders})
+        WHERE is_archived = ?
+          AND chat_id IN (${placeholders})
         ORDER BY last_message_at DESC
         LIMIT ? OFFSET ?
-    `).all(...filterIds, limit, offset);
+    `).all(archivedFlag, ...filterIds, limit, offset);
     return res.json(results);
+});
+
+router.post('/:id/archive', validate({ params: chatIdParamSchema }), async (req, res) => {
+    const chatId = req.validatedParams.id;
+    const chat = req.account.db.chats.getById.get(chatId);
+    if (!chat) {
+        return sendError(req, res, 404, 'Chat not found');
+    }
+
+    req.account.db.chats.setArchived.run(1, chatId);
+
+    if (typeof req.account.whatsapp.archiveChat === 'function') {
+        try {
+            await req.account.whatsapp.archiveChat(chatId);
+        } catch (error) {
+            req.log?.warn?.('WhatsApp archive failed', { chatId, error: error.message });
+        }
+    }
+
+    return res.json({ success: true });
+});
+
+router.post('/:id/unarchive', validate({ params: chatIdParamSchema }), async (req, res) => {
+    const chatId = req.validatedParams.id;
+    const chat = req.account.db.chats.getById.get(chatId);
+    if (!chat) {
+        return sendError(req, res, 404, 'Chat not found');
+    }
+
+    req.account.db.chats.setArchived.run(0, chatId);
+
+    if (typeof req.account.whatsapp.unarchiveChat === 'function') {
+        try {
+            await req.account.whatsapp.unarchiveChat(chatId);
+        } catch (error) {
+            req.log?.warn?.('WhatsApp unarchive failed', { chatId, error: error.message });
+        }
+    }
+
+    return res.json({ success: true });
 });
 
 router.get('/:id/messages', validate({ params: chatIdParamSchema, query: paginationQuerySchema }), (req, res) => {

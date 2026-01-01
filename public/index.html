@@ -9,6 +9,7 @@
     <link href="css/loading.css" rel="stylesheet">
 </head>
 <body>
+    <div id="uiRoot">
     <div class="app-container">
         <!-- Left Sidebar -->
         <div class="sidebar">
@@ -114,6 +115,9 @@
                 <button class="active" data-tab="chats" onclick="switchSidebarTab('chats')">
                     <i class="bi bi-chat-fill"></i> Sohbetler
                 </button>
+                <button data-tab="archived" onclick="switchSidebarTab('archived')">
+                    <i class="bi bi-archive-fill"></i> Arsiv
+                </button>
                 <button data-tab="messages" onclick="switchSidebarTab('messages')">
                     <i class="bi bi-envelope-fill"></i> Mesajlar
                 </button>
@@ -125,6 +129,11 @@
             <!-- Chat List -->
             <div class="chat-list" id="chatList">
                 <!-- Chats will be rendered here -->
+            </div>
+
+            <!-- Archived Chats -->
+            <div class="chat-list" id="archivedChatList" style="display:none;">
+                <!-- Archived chats will be rendered here -->
             </div>
 
             <!-- Messages Tab Content -->
@@ -474,6 +483,14 @@
                         <span id="appOpacityValue" style="font-size: 12px; color: var(--text-secondary); min-width: 38px; text-align: right;">100%</span>
                     </div>
                 </div>
+                <div class="settings-item" onclick="toggleEdgeToEdgeLayout()">
+                    <i class="icon bi bi-arrows-fullscreen"></i>
+                    <div class="info">
+                        <div class="title">Ekrana Yapisik Mod</div>
+                        <div class="subtitle">Panel yuzmesin, kenarlik olmasin</div>
+                    </div>
+                    <div class="toggle" id="toggleEdgeToEdgeLayout"></div>
+                </div>
                 <div class="settings-item">
                     <i class="icon bi bi-image"></i>
                     <div class="info">
@@ -523,6 +540,28 @@
                     </div>
                     <input type="range" id="fontSizeRange" min="12" max="18" step="0.5" oninput="updateFontSize(this.value)" style="width: 100px;">
                 </div>
+                <div class="settings-item">
+                    <i class="icon bi bi-aspect-ratio"></i>
+                    <div class="info">
+                        <div class="title">Arayuz Olcegi</div>
+                        <div class="subtitle">Tum arayuz boyutu</div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <input type="range" id="interfaceScaleRange" min="60" max="140" step="5" oninput="updateInterfaceScale(this.value)" style="width: 120px;">
+                        <span id="interfaceScaleValue" style="font-size: 12px; color: var(--text-secondary); min-width: 38px; text-align: right;">100%</span>
+                    </div>
+                </div>
+                <div class="settings-item">
+                    <i class="icon bi bi-chat-left-text"></i>
+                    <div class="info">
+                        <div class="title">Baloncuk Olcegi</div>
+                        <div class="subtitle">Mesaj baloncuk boyutu</div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <input type="range" id="messageBubbleScaleRange" min="60" max="160" step="5" oninput="updateMessageBubbleScale(this.value)" style="width: 120px;">
+                        <span id="messageBubbleScaleValue" style="font-size: 12px; color: var(--text-secondary); min-width: 38px; text-align: right;">100%</span>
+                    </div>
+                </div>
                 <div class="settings-item" onclick="toggleCompactMode()">
                     <i class="icon bi bi-list-task"></i>
                     <div class="info">
@@ -551,7 +590,7 @@
                 <div class="settings-item">
                     <i class="icon bi bi-bell-fill"></i>
                     <div class="info">
-                        <div class="title">Masaustu Bildirimi</div>
+                        <div class="title">Ekran Bildirimi</div>
                         <div class="subtitle">Yeni mesaj geldiginde bildir</div>
                     </div>
                     <div class="toggle active" id="toggleNotifications" onclick="toggleSetting('notifications')"></div>
@@ -563,6 +602,30 @@
                         <div class="subtitle">Mesaj gonderme/alma sesi</div>
                     </div>
                     <div class="toggle active" id="toggleSounds" onclick="toggleSetting('sounds')"></div>
+                </div>
+                <div class="settings-item">
+                    <i class="icon bi bi-music-note-beamed"></i>
+                    <div class="info">
+                        <div class="title">Bildirim Sesi</div>
+                        <div class="subtitle">Ozel ses dosyasi sec</div>
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 8px; width: 50%;">
+                        <select id="notificationSoundModeSelect" class="select-input" onchange="updateNotificationSoundMode(this.value)">
+                            <option value="default">Varsayilan</option>
+                            <option value="custom">Ozel Dosya</option>
+                        </select>
+                        <div id="notificationSoundCustomControl" style="display: none;">
+                            <input type="file" id="notificationSoundFileInput" class="form-input" accept="audio/*" onchange="handleNotificationSoundFile(this.files && this.files[0])" style="padding: 4px 8px; font-size: 12px;">
+                            <div id="notificationSoundFileName" style="font-size: 11px; color: var(--text-secondary); margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"></div>
+                            <button class="btn btn-secondary btn-sm" type="button" onclick="clearNotificationSound()" style="margin-top: 6px;">Temizle</button>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span style="font-size: 11px; color: var(--text-secondary);">Ses</span>
+                            <input type="range" id="notificationSoundVolumeRange" min="0" max="100" value="100" oninput="updateNotificationSoundVolume(this.value)" style="flex: 1;">
+                            <span id="notificationSoundVolumeValue" style="font-size: 12px; color: var(--text-secondary); min-width: 38px; text-align: right;">100%</span>
+                        </div>
+                        <button class="btn btn-secondary btn-sm" type="button" onclick="testNotificationSound()">Test Et</button>
+                    </div>
                 </div>
                 <div class="settings-item">
                     <i class="icon bi bi-eye-slash-fill"></i>
@@ -599,6 +662,7 @@
 
 	    <!-- Feature Modals will be injected here -->
 	    <div id="modalContainer"></div>
+    </div>
 
     <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js"></script>

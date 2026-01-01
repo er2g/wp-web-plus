@@ -8,6 +8,9 @@
 let socket;
 let currentChat = null;
 let chats = [];
+let archivedChats = [];
+let archivedChatsLoaded = false;
+let currentSidebarTab = 'chats';
 let monacoEditor = null;
 let editingScriptId = null;
 let templates = [];
@@ -34,6 +37,9 @@ let uiPreferences = {
     accentColor: '',
     wallpaper: 'default',
     fontSize: '14.2',
+    interfaceScale: 100,
+    messageBubbleScale: 100,
+    edgeToEdgeLayout: false,
     compactMode: false,
     bubbleStyle: 'rounded',
     chatMetaCollapsed: false,
@@ -46,7 +52,11 @@ let uiPreferences = {
     backgroundImage: '',
     backgroundGradient: '',
     backgroundColor: '#efeae2',
-    backgroundOpacity: 100
+    backgroundOpacity: 100,
+    notificationSoundMode: 'default',
+    notificationSoundDataUrl: '',
+    notificationSoundFileName: '',
+    notificationSoundVolume: 100
 };
 
 const GRADIENT_PRESETS = {
@@ -63,6 +73,10 @@ let attachmentSendMode = 'media'; // 'media' | 'sticker'
 let replyTarget = null; // { messageId, fromName, previewText }
 const pendingOutgoing = new Map(); // tempId -> { tempId, chatId, body, timestamp, serverMessageId }
 let chatAutoScrollSeq = 0;
+
+let notificationSoundAudio = null;
+let notificationSoundAudioSrc = null;
+let notificationSoundAudioContext = null;
 
 // Sender profile pictures (for group message UI)
 const senderProfilePicCache = new Map(); // contactId -> { url: string|null, fetchedAt: number }
@@ -101,6 +115,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupMessagesListScroll();
     setupChatMessagesScroll();
     initializeApp();
+    document.addEventListener('pointerdown', unlockNotificationAudio, { once: true });
 
     // Close dropdowns when clicking outside
     document.addEventListener('click', (e) => {
@@ -180,6 +195,17 @@ function loadLocalPreferences() {
     uiPreferences.accentColor = localStorage.getItem('uiAccent') || uiPreferences.accentColor;
     uiPreferences.wallpaper = localStorage.getItem('uiWallpaper') || uiPreferences.wallpaper;
     uiPreferences.fontSize = localStorage.getItem('uiFontSize') || uiPreferences.fontSize;
+    const interfaceScale = localStorage.getItem('uiInterfaceScale');
+    if (interfaceScale !== null) {
+        const parsed = Number.parseInt(interfaceScale, 10);
+        if (Number.isFinite(parsed)) uiPreferences.interfaceScale = Math.max(60, Math.min(140, parsed));
+    }
+    const bubbleScale = localStorage.getItem('uiMessageBubbleScale');
+    if (bubbleScale !== null) {
+        const parsed = Number.parseInt(bubbleScale, 10);
+        if (Number.isFinite(parsed)) uiPreferences.messageBubbleScale = Math.max(60, Math.min(160, parsed));
+    }
+    uiPreferences.edgeToEdgeLayout = localStorage.getItem('uiEdgeToEdgeLayout') === 'true';
     uiPreferences.compactMode = localStorage.getItem('uiCompactMode') === 'true';
     uiPreferences.bubbleStyle = localStorage.getItem('uiBubbleStyle') || uiPreferences.bubbleStyle;
     uiPreferences.chatMetaCollapsed = localStorage.getItem('uiChatMetaCollapsed') === 'true';
@@ -196,6 +222,15 @@ function loadLocalPreferences() {
     uiPreferences.backgroundGradient = localStorage.getItem('uiBackgroundGradient') || uiPreferences.backgroundGradient;
     uiPreferences.backgroundColor = localStorage.getItem('uiBackgroundColor') || uiPreferences.backgroundColor;
     uiPreferences.backgroundOpacity = localStorage.getItem('uiBackgroundOpacity') || uiPreferences.backgroundOpacity;
+
+    uiPreferences.notificationSoundMode = localStorage.getItem('uiNotificationSoundMode') || uiPreferences.notificationSoundMode;
+    uiPreferences.notificationSoundDataUrl = localStorage.getItem('uiNotificationSoundDataUrl') || uiPreferences.notificationSoundDataUrl;
+    uiPreferences.notificationSoundFileName = localStorage.getItem('uiNotificationSoundFileName') || uiPreferences.notificationSoundFileName;
+    const localNotificationVolume = localStorage.getItem('uiNotificationSoundVolume');
+    if (localNotificationVolume !== null) {
+        const parsed = Number.parseInt(localNotificationVolume, 10);
+        if (Number.isFinite(parsed)) uiPreferences.notificationSoundVolume = Math.max(0, Math.min(100, parsed));
+    }
 }
 
 function loadCustomizations() {
@@ -209,6 +244,9 @@ function loadCustomizations() {
 
 function applyCustomizations() {
     if (uiPreferences.accentColor) applyAccentColor(uiPreferences.accentColor);
+    applyInterfaceScale(uiPreferences.interfaceScale);
+    applyMessageBubbleScale(uiPreferences.messageBubbleScale);
+    applyEdgeToEdgeLayout(uiPreferences.edgeToEdgeLayout);
     applyDesktopBackgroundSettings();
     applyAppSurfaceOpacity(uiPreferences.appSurfaceOpacity);
     applyWallpaper(uiPreferences.wallpaper); // Kept for legacy
@@ -221,25 +259,37 @@ function applyCustomizations() {
 }
 
 async function saveUserPreferences() {
-    // Save to local storage for offline/fallback
-    localStorage.setItem('uiAccent', uiPreferences.accentColor);
-    localStorage.setItem('uiWallpaper', uiPreferences.wallpaper);
-    localStorage.setItem('uiFontSize', uiPreferences.fontSize);
-    localStorage.setItem('uiCompactMode', uiPreferences.compactMode);
-    localStorage.setItem('uiBubbleStyle', uiPreferences.bubbleStyle);
-    localStorage.setItem('uiChatMetaCollapsed', uiPreferences.chatMetaCollapsed);
+    // Save to local storage for offline/fallback (best-effort; may exceed quota for large custom assets)
+    try {
+        localStorage.setItem('uiAccent', uiPreferences.accentColor);
+        localStorage.setItem('uiWallpaper', uiPreferences.wallpaper);
+        localStorage.setItem('uiFontSize', uiPreferences.fontSize);
+        localStorage.setItem('uiInterfaceScale', String(uiPreferences.interfaceScale));
+        localStorage.setItem('uiMessageBubbleScale', String(uiPreferences.messageBubbleScale));
+        localStorage.setItem('uiEdgeToEdgeLayout', String(Boolean(uiPreferences.edgeToEdgeLayout)));
+        localStorage.setItem('uiCompactMode', uiPreferences.compactMode);
+        localStorage.setItem('uiBubbleStyle', uiPreferences.bubbleStyle);
+        localStorage.setItem('uiChatMetaCollapsed', uiPreferences.chatMetaCollapsed);
 
-    localStorage.setItem('uiAppSurfaceOpacity', uiPreferences.appSurfaceOpacity);
-    localStorage.setItem('uiDesktopBackgroundType', uiPreferences.desktopBackgroundType);
-    localStorage.setItem('uiDesktopBackgroundImage', uiPreferences.desktopBackgroundImage);
-    localStorage.setItem('uiDesktopBackgroundGradient', uiPreferences.desktopBackgroundGradient);
-    localStorage.setItem('uiDesktopBackgroundColor', uiPreferences.desktopBackgroundColor);
+        localStorage.setItem('uiAppSurfaceOpacity', uiPreferences.appSurfaceOpacity);
+        localStorage.setItem('uiDesktopBackgroundType', uiPreferences.desktopBackgroundType);
+        localStorage.setItem('uiDesktopBackgroundImage', uiPreferences.desktopBackgroundImage);
+        localStorage.setItem('uiDesktopBackgroundGradient', uiPreferences.desktopBackgroundGradient);
+        localStorage.setItem('uiDesktopBackgroundColor', uiPreferences.desktopBackgroundColor);
 
-    localStorage.setItem('uiBackgroundType', uiPreferences.backgroundType);
-    localStorage.setItem('uiBackgroundImage', uiPreferences.backgroundImage);
-    localStorage.setItem('uiBackgroundGradient', uiPreferences.backgroundGradient);
-    localStorage.setItem('uiBackgroundColor', uiPreferences.backgroundColor);
-    localStorage.setItem('uiBackgroundOpacity', uiPreferences.backgroundOpacity);
+        localStorage.setItem('uiBackgroundType', uiPreferences.backgroundType);
+        localStorage.setItem('uiBackgroundImage', uiPreferences.backgroundImage);
+        localStorage.setItem('uiBackgroundGradient', uiPreferences.backgroundGradient);
+        localStorage.setItem('uiBackgroundColor', uiPreferences.backgroundColor);
+        localStorage.setItem('uiBackgroundOpacity', uiPreferences.backgroundOpacity);
+
+        localStorage.setItem('uiNotificationSoundMode', uiPreferences.notificationSoundMode);
+        localStorage.setItem('uiNotificationSoundDataUrl', uiPreferences.notificationSoundDataUrl);
+        localStorage.setItem('uiNotificationSoundFileName', uiPreferences.notificationSoundFileName);
+        localStorage.setItem('uiNotificationSoundVolume', String(uiPreferences.notificationSoundVolume));
+    } catch (e) {
+        console.warn('Failed to persist preferences to localStorage', e);
+    }
 
     // Sync with server
     try {
@@ -261,6 +311,27 @@ function updateCustomizationUI() {
     const fontSizeRange = document.getElementById('fontSizeRange');
     if (fontSizeRange) {
         fontSizeRange.value = uiPreferences.fontSize;
+    }
+    const interfaceScaleRange = document.getElementById('interfaceScaleRange');
+    const interfaceScaleValue = document.getElementById('interfaceScaleValue');
+    {
+        const parsed = Number.parseInt(String(uiPreferences.interfaceScale ?? '100'), 10);
+        const clamped = Number.isFinite(parsed) ? Math.max(60, Math.min(140, parsed)) : 100;
+        if (interfaceScaleRange) interfaceScaleRange.value = String(clamped);
+        if (interfaceScaleValue) interfaceScaleValue.textContent = String(clamped) + '%';
+    }
+
+    const messageBubbleScaleRange = document.getElementById('messageBubbleScaleRange');
+    const messageBubbleScaleValue = document.getElementById('messageBubbleScaleValue');
+    {
+        const parsed = Number.parseInt(String(uiPreferences.messageBubbleScale ?? '100'), 10);
+        const clamped = Number.isFinite(parsed) ? Math.max(60, Math.min(160, parsed)) : 100;
+        if (messageBubbleScaleRange) messageBubbleScaleRange.value = String(clamped);
+        if (messageBubbleScaleValue) messageBubbleScaleValue.textContent = String(clamped) + '%';
+    }
+    const toggleEdgeToEdgeLayout = document.getElementById('toggleEdgeToEdgeLayout');
+    if (toggleEdgeToEdgeLayout) {
+        toggleEdgeToEdgeLayout.classList.toggle('active', Boolean(uiPreferences.edgeToEdgeLayout));
     }
     const toggleCompactMode = document.getElementById('toggleCompactMode');
     if (toggleCompactMode) {
@@ -365,6 +436,28 @@ function updateCustomizationUI() {
     document.getElementById('bgGradientControl').style.display = uiPreferences.backgroundType === 'gradient' ? 'block' : 'none';
     document.getElementById('bgGradientCustomControl').style.display = (uiPreferences.backgroundType === 'gradient' && gradientSelectValue === 'custom') ? 'block' : 'none';
     document.getElementById('bgColorControl').style.display = (uiPreferences.backgroundType === 'solid' || (uiPreferences.backgroundType === 'gradient' && gradientSelectValue === 'auto')) ? 'block' : 'none';
+
+    // Notification sound UI
+    const soundModeSelect = document.getElementById('notificationSoundModeSelect');
+    const rawMode = String(uiPreferences.notificationSoundMode || 'default').toLowerCase();
+    const soundMode = rawMode === 'custom' ? 'custom' : 'default';
+    if (soundModeSelect) soundModeSelect.value = soundMode;
+
+    const soundCustomControl = document.getElementById('notificationSoundCustomControl');
+    if (soundCustomControl) soundCustomControl.style.display = soundMode === 'custom' ? 'block' : 'none';
+
+    const fileNameEl = document.getElementById('notificationSoundFileName');
+    if (fileNameEl) {
+        const name = String(uiPreferences.notificationSoundFileName || '').trim();
+        fileNameEl.textContent = name || (uiPreferences.notificationSoundDataUrl ? 'Ozel ses secildi' : '');
+    }
+
+    const volumeRange = document.getElementById('notificationSoundVolumeRange');
+    const volumeValue = document.getElementById('notificationSoundVolumeValue');
+    const parsedVol = Number.parseInt(String(uiPreferences.notificationSoundVolume ?? '100'), 10);
+    const clampedVol = Number.isFinite(parsedVol) ? Math.max(0, Math.min(100, parsedVol)) : 100;
+    if (volumeRange) volumeRange.value = String(clampedVol);
+    if (volumeValue) volumeValue.textContent = String(clampedVol) + '%';
 }
 
 function updateAccentColor(color) {
@@ -403,6 +496,38 @@ function applyFontSize(size) {
     document.documentElement.style.setProperty('--font-size-base', size + 'px');
 }
 
+function updateInterfaceScale(value) {
+    const parsed = Number.parseInt(value, 10);
+    const clamped = Number.isFinite(parsed) ? Math.max(60, Math.min(140, parsed)) : 100;
+    uiPreferences.interfaceScale = clamped;
+    applyInterfaceScale(clamped);
+    updateCustomizationUI();
+
+    try {
+        renderMessagesList();
+    } catch (e) {}
+
+    saveUserPreferences();
+}
+
+function applyInterfaceScale(value) {
+    const parsed = Number.parseInt(String(value ?? '100'), 10);
+    const clamped = Number.isFinite(parsed) ? Math.max(60, Math.min(140, parsed)) : 100;
+    const scale = clamped / 100;
+    document.documentElement.style.setProperty('--ui-scale', String(scale));
+}
+
+function toggleEdgeToEdgeLayout() {
+    uiPreferences.edgeToEdgeLayout = !uiPreferences.edgeToEdgeLayout;
+    applyEdgeToEdgeLayout(uiPreferences.edgeToEdgeLayout);
+    updateCustomizationUI();
+    saveUserPreferences();
+}
+
+function applyEdgeToEdgeLayout(isEnabled) {
+    document.body.classList.toggle('edge-to-edge', Boolean(isEnabled));
+}
+
 function toggleCompactMode() {
     uiPreferences.compactMode = !uiPreferences.compactMode;
     applyCompactMode(uiPreferences.compactMode);
@@ -427,6 +552,22 @@ function applyBubbleStyle(style) {
     else if (style === 'leaf') radius = '7.5px';
     else if (style === 'rounded') radius = '18px';
     root.style.setProperty('--bubble-radius', radius);
+}
+
+function updateMessageBubbleScale(value) {
+    const parsed = Number.parseInt(value, 10);
+    const clamped = Number.isFinite(parsed) ? Math.max(60, Math.min(160, parsed)) : 100;
+    uiPreferences.messageBubbleScale = clamped;
+    applyMessageBubbleScale(clamped);
+    updateCustomizationUI();
+    saveUserPreferences();
+}
+
+function applyMessageBubbleScale(value) {
+    const parsed = Number.parseInt(String(value ?? '100'), 10);
+    const clamped = Number.isFinite(parsed) ? Math.max(60, Math.min(160, parsed)) : 100;
+    const scale = clamped / 100;
+    document.documentElement.style.setProperty('--message-bubble-scale', String(scale));
 }
 
 function updateAppSurfaceOpacity(opacity) {
@@ -778,6 +919,8 @@ async function createAccount() {
 function resetAppState() {
     currentChat = null;
     chats = [];
+    archivedChats = [];
+    archivedChatsLoaded = false;
     messagesPagination = {
         items: [],
         offset: 0,
@@ -792,6 +935,8 @@ function resetAppState() {
         loading: false
     };
     document.getElementById('chatList').innerHTML = '';
+    const archivedList = document.getElementById('archivedChatList');
+    if (archivedList) archivedList.innerHTML = '';
     document.getElementById('messagesList').innerHTML = '';
     document.getElementById('logsList').innerHTML = '';
     closeChat();
@@ -807,11 +952,18 @@ function resetSocket() {
 
 // Socket.IO
 let chatsReloadTimeout = null;
+function reloadChatLists() {
+    loadChats();
+    if (archivedChatsLoaded || currentSidebarTab === 'archived') {
+        loadArchivedChats();
+    }
+}
+
 function scheduleChatsReload(delayMs = 250) {
     if (chatsReloadTimeout) return;
     chatsReloadTimeout = setTimeout(() => {
         chatsReloadTimeout = null;
-        loadChats();
+        reloadChatLists();
     }, delayMs);
 }
 
@@ -834,7 +986,7 @@ function initSocket() {
         hideQR();
         updateConnectionStatus({ status: 'ready', info });
         showToast('WhatsApp baglandi: ' + info.pushname, 'success');
-        loadChats();
+        reloadChatLists();
         loadAllMessages();
     });
     socket.on('disconnected', () => {
@@ -850,7 +1002,7 @@ function initSocket() {
     socket.on('sync_progress', updateSyncProgress);
     socket.on('sync_complete', (data) => {
         showToast('Senkronizasyon tamamlandi: ' + data.chats + ' sohbet, ' + data.messages + ' mesaj', 'success');
-        loadChats();
+        reloadChatLists();
         loadAllMessages();
     });
 }
@@ -945,6 +1097,7 @@ function toggleDropdown(id) {
 
 // Tab Management
 function switchSidebarTab(tab) {
+    currentSidebarTab = tab;
     // Update tab buttons
     document.querySelectorAll('.tab-nav button').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.tab === tab);
@@ -952,12 +1105,16 @@ function switchSidebarTab(tab) {
 
     // Show/hide content
     document.getElementById('chatList').style.display = tab === 'chats' ? 'block' : 'none';
+    const archivedList = document.getElementById('archivedChatList');
+    if (archivedList) archivedList.style.display = tab === 'archived' ? 'block' : 'none';
     document.getElementById('messagesList').style.display = tab === 'messages' ? 'block' : 'none';
     document.getElementById('logsList').style.display = tab === 'logs' ? 'block' : 'none';
 
     // Load data
     if (tab === 'chats') {
         loadChats();
+    } else if (tab === 'archived') {
+        loadArchivedChats();
     } else if (tab === 'messages') {
         if (!messagesPagination.items.length) {
             loadMessagesPage({ reset: true });
@@ -1092,9 +1249,25 @@ async function loadInitialData() {
 async function loadChats() {
     try {
         chats = await api('api/chats');
-        renderChatList(chats);
+        if (currentSidebarTab === 'chats') {
+            const { query, tagFilter, noteQuery } = getChatSearchInputs();
+            await performChatSearch(query, tagFilter, noteQuery);
+        }
     } catch (err) {
         console.error('Chats load error:', err);
+    }
+}
+
+async function loadArchivedChats() {
+    try {
+        archivedChats = await api('api/chats?archived=1');
+        archivedChatsLoaded = true;
+        if (currentSidebarTab === 'archived') {
+            const { query, tagFilter, noteQuery } = getChatSearchInputs();
+            await performChatSearch(query, tagFilter, noteQuery);
+        }
+    } catch (err) {
+        console.error('Archived chats load error:', err);
     }
 }
 
@@ -1368,6 +1541,159 @@ async function toggleSetting(key) {
     }
 }
 
+function normalizeNotificationSoundMode(mode) {
+    const value = String(mode || '').trim().toLowerCase();
+    return value === 'custom' ? 'custom' : 'default';
+}
+
+function updateNotificationSoundMode(mode) {
+    uiPreferences.notificationSoundMode = normalizeNotificationSoundMode(mode);
+    updateCustomizationUI();
+    saveUserPreferences();
+}
+
+function updateNotificationSoundVolume(value) {
+    const parsed = Number.parseInt(String(value ?? ''), 10);
+    const clamped = Number.isFinite(parsed) ? Math.max(0, Math.min(100, parsed)) : 100;
+    uiPreferences.notificationSoundVolume = clamped;
+    updateCustomizationUI();
+    saveUserPreferences();
+}
+
+function handleNotificationSoundFile(file) {
+    if (!file) return;
+
+    const maxBytes = 2 * 1024 * 1024;
+    if (typeof file.size === 'number' && file.size > maxBytes) {
+        showToast('Ses dosyasi cok buyuk (max 2MB)', 'error');
+        return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+        const dataUrl = typeof reader.result === 'string' ? reader.result : '';
+        if (!dataUrl) {
+            showToast('Ses dosyasi okunamadi', 'error');
+            return;
+        }
+
+        uiPreferences.notificationSoundMode = 'custom';
+        uiPreferences.notificationSoundDataUrl = dataUrl;
+        uiPreferences.notificationSoundFileName = String(file.name || '').slice(0, 180);
+        updateCustomizationUI();
+        saveUserPreferences();
+        showToast('Bildirim sesi kaydedildi', 'success');
+    };
+    reader.onerror = () => {
+        showToast('Ses dosyasi okunamadi', 'error');
+    };
+    reader.readAsDataURL(file);
+}
+
+function clearNotificationSound() {
+    uiPreferences.notificationSoundMode = 'default';
+    uiPreferences.notificationSoundDataUrl = '';
+    uiPreferences.notificationSoundFileName = '';
+    updateCustomizationUI();
+    saveUserPreferences();
+}
+
+function testNotificationSound() {
+    playNotificationSound({ force: true });
+}
+
+function getNotificationSoundVolume01() {
+    const parsed = Number.parseInt(String(uiPreferences.notificationSoundVolume ?? '100'), 10);
+    const clamped = Number.isFinite(parsed) ? Math.max(0, Math.min(100, parsed)) : 100;
+    return clamped / 100;
+}
+
+function getNotificationAudioContext() {
+    if (notificationSoundAudioContext) return notificationSoundAudioContext;
+    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextCtor) return null;
+    notificationSoundAudioContext = new AudioContextCtor();
+    return notificationSoundAudioContext;
+}
+
+function unlockNotificationAudio() {
+    try {
+        const ctx = getNotificationAudioContext();
+        if (!ctx) return;
+        if (ctx.state === 'suspended') {
+            ctx.resume().catch(() => {});
+        }
+    } catch (e) {}
+}
+
+function playDefaultNotificationBeep(volume01) {
+    const volume = Number.isFinite(volume01) ? Math.max(0, Math.min(1, volume01)) : 1;
+    if (volume <= 0) return false;
+
+    const ctx = getNotificationAudioContext();
+    if (!ctx) return false;
+
+    try {
+        if (ctx.state === 'suspended') {
+            ctx.resume().catch(() => {});
+        }
+
+        const now = ctx.currentTime;
+        const duration = 0.18;
+        const oscillator = ctx.createOscillator();
+        const gain = ctx.createGain();
+
+        oscillator.type = 'sine';
+        oscillator.frequency.setValueAtTime(880, now);
+
+        const peak = Math.max(0.0001, 0.18 * volume);
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.exponentialRampToValueAtTime(peak, now + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+        oscillator.connect(gain);
+        gain.connect(ctx.destination);
+
+        oscillator.start(now);
+        oscillator.stop(now + duration + 0.02);
+
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+function playNotificationSound(options = {}) {
+    const force = options.force === true;
+    if (!force && !settings.sounds) return;
+
+    const volume = getNotificationSoundVolume01();
+    if (volume <= 0) return;
+
+    const mode = normalizeNotificationSoundMode(uiPreferences.notificationSoundMode);
+    const dataUrl = String(uiPreferences.notificationSoundDataUrl || '');
+
+    if (mode === 'custom' && dataUrl) {
+        try {
+            if (!notificationSoundAudio || notificationSoundAudioSrc !== dataUrl) {
+                notificationSoundAudio = new Audio(dataUrl);
+                notificationSoundAudioSrc = dataUrl;
+            }
+            notificationSoundAudio.volume = volume;
+            notificationSoundAudio.currentTime = 0;
+            const p = notificationSoundAudio.play();
+            if (p && typeof p.catch === 'function') {
+                p.catch(() => {});
+            }
+            return;
+        } catch (e) {
+            // Fall back to default beep
+        }
+    }
+
+    playDefaultNotificationBeep(volume);
+}
+
 // Render Functions
 function renderAvatarContent(chat) {
     const isGroup = chat && chat.chat_id && chat.chat_id.includes('@g.us');
@@ -1385,25 +1711,37 @@ function renderChatAvatar(chat) {
     return '<div class="' + avatarClass + '">' + renderAvatarContent(chat) + '</div>';
 }
 
-function renderChatList(chatList) {
-    const container = document.getElementById('chatList');
+function renderChatList(chatList, options = {}) {
+    const containerId = options.containerId || 'chatList';
+    const isArchiveView = options.archivedView === true;
+    const container = document.getElementById(containerId);
     if (!container) return;
 
     if (chatList.length === 0) {
-        container.innerHTML = '<div class="chat-item"><div class="chat-info"><div class="chat-name" style="color: var(--text-secondary)">Henuz sohbet yok</div></div></div>';
+        const text = isArchiveView ? 'Arsiv bos' : 'Henuz sohbet yok';
+        container.innerHTML = '<div class="chat-item"><div class="chat-info"><div class="chat-name" style="color: var(--text-secondary)">' + escapeHtml(text) + '</div></div></div>';
         return;
     }
 
     container.innerHTML = chatList.map(c => {
         const isActive = currentChat === c.chat_id;
         const hasUnread = c.unread_count > 0;
+        const chatIdArg = JSON.stringify(String(c.chat_id || ''));
+        const nameArg = JSON.stringify(String(c.name || ''));
+        const timeValue = c.last_message_at ?? c.last_message_time;
+        const actionBtn = isArchiveView
+            ? '<button class="chat-action-btn" title="Arsivden cikar" onclick="toggleChatArchive(event, ' + chatIdArg + ', false)"><i class="bi bi-inbox"></i></button>'
+            : '<button class="chat-action-btn" title="Arsive al" onclick="toggleChatArchive(event, ' + chatIdArg + ', true)"><i class="bi bi-archive"></i></button>';
 
-        return '<div class="chat-item' + (isActive ? ' active' : '') + (hasUnread ? ' unread' : '') + '" onclick="selectChat(\'' + c.chat_id + '\', \'' + escapeHtml(c.name) + '\')">' +
+        return '<div class="chat-item' + (isActive ? ' active' : '') + (hasUnread ? ' unread' : '') + '" onclick="selectChat(' + chatIdArg + ', ' + nameArg + ')">' +
             renderChatAvatar(c) +
             '<div class="chat-info">' +
                 '<div class="top-row">' +
                     '<div class="chat-name">' + escapeHtml(c.name) + '</div>' +
-                    '<span class="chat-time">' + formatTime(c.last_message_time) + '</span>' +
+                    '<div class="chat-actions">' +
+                        actionBtn +
+                        '<span class="chat-time">' + formatTime(timeValue) + '</span>' +
+                    '</div>' +
                 '</div>' +
                 '<div class="chat-preview">' +
                     '<span class="preview-text">' + escapeHtml((c.last_message || '').substring(0, 40)) + '</span>' +
@@ -1729,12 +2067,19 @@ function renderChatMessages(messages, options = {}) {
 }
 
 // Chat Selection
+function findChatById(chatId) {
+    const id = typeof chatId === 'string' ? chatId : String(chatId || '');
+    return chats.find(chat => chat.chat_id === id)
+        || archivedChats.find(chat => chat.chat_id === id)
+        || null;
+}
+
 function selectChat(chatId, name) {
     currentChat = chatId;
     currentChatTags = [];
     currentChatNotes = [];
     renderChatMeta();
-    const selectedChat = chats.find(chat => chat.chat_id === chatId) || null;
+    const selectedChat = findChatById(chatId);
 
     if (!settings.ghostMode) {
         api('api/chats/' + encodeURIComponent(chatId) + '/mark-read', 'POST').catch(() => {});
@@ -1762,7 +2107,8 @@ function selectChat(chatId, name) {
     }
 
     loadChatMessages(chatId);
-    renderChatList(chats);
+    const { query, tagFilter, noteQuery } = getChatSearchInputs();
+    performChatSearch(query, tagFilter, noteQuery);
 
     // Mobile: show chat area with transition
     chatArea.classList.add('active');
@@ -1792,17 +2138,40 @@ function closeChat() {
 
 function openChatForMessage(chatId) {
     if (!chatId) return;
-    const chat = chats.find(c => c.chat_id === chatId);
+    const chat = findChatById(chatId);
     if (chat) {
         selectChat(chatId, chat.name);
     }
 }
 
+async function toggleChatArchive(ev, chatId, shouldArchive) {
+    try {
+        ev?.stopPropagation?.();
+        ev?.preventDefault?.();
+    } catch (e) {}
+
+    const id = typeof chatId === 'string' ? chatId.trim() : String(chatId || '').trim();
+    if (!id) return;
+
+    const action = shouldArchive ? 'archive' : 'unarchive';
+    try {
+        await api('api/chats/' + encodeURIComponent(id) + '/' + action, 'POST');
+        reloadChatLists();
+    } catch (err) {
+        showToast('Islem basarisiz: ' + err.message, 'error');
+    }
+}
+
 // Chat Search
-function filterChats() {
-    const query = document.getElementById('searchInput').value.trim();
+function getChatSearchInputs() {
+    const query = document.getElementById('searchInput')?.value?.trim() || '';
     const tagFilter = document.getElementById('tagFilter')?.value || '';
-    const noteQuery = document.getElementById('noteSearchInput')?.value.trim() || '';
+    const noteQuery = document.getElementById('noteSearchInput')?.value?.trim() || '';
+    return { query, tagFilter, noteQuery };
+}
+
+function filterChats() {
+    const { query, tagFilter, noteQuery } = getChatSearchInputs();
     if (chatSearchDebounce) {
         clearTimeout(chatSearchDebounce);
     }
@@ -1812,8 +2181,12 @@ function filterChats() {
 }
 
 async function performChatSearch(query, tagFilter, noteQuery) {
+    const isArchiveView = currentSidebarTab === 'archived';
+    const baseList = isArchiveView ? archivedChats : chats;
+    const containerId = isArchiveView ? 'archivedChatList' : 'chatList';
+
     if (!query && !tagFilter && !noteQuery) {
-        renderChatList(chats);
+        renderChatList(baseList, { containerId, archivedView: isArchiveView });
         return;
     }
 
@@ -1822,9 +2195,10 @@ async function performChatSearch(query, tagFilter, noteQuery) {
         if (query) params.set('q', query);
         if (tagFilter) params.set('tag', tagFilter);
         if (noteQuery) params.set('note', noteQuery);
+        if (isArchiveView) params.set('archived', '1');
         params.set('limit', CHAT_SEARCH_PAGE_SIZE);
         const results = await api('api/chats/search?' + params.toString());
-        renderChatList(results);
+        renderChatList(results, { containerId, archivedView: isArchiveView });
     } catch (err) {
         console.error('Chat search error:', err);
     }
@@ -2201,12 +2575,13 @@ async function refreshChatNotes() {
 
 // Handle new incoming message
 function handleNewMessage(msg) {
-    if (settings.notifications) {
-        const isMine = msg?.isFromMe === true || msg?.isFromMe === 1 || msg?.is_from_me === 1 || msg?.is_from_me === true || msg?.fromMe === true;
-        if (!isMine) {
-            const displayName = getDisplayNameFromMessage(msg);
-            showToast('Yeni mesaj: ' + formatSenderName(displayName), 'info');
-        }
+    const isMine = msg?.isFromMe === true || msg?.isFromMe === 1 || msg?.is_from_me === 1 || msg?.is_from_me === true || msg?.fromMe === true;
+    if (!isMine) {
+        playNotificationSound();
+    }
+    if (settings.notifications && !isMine) {
+        const displayName = getDisplayNameFromMessage(msg);
+        showToast('Yeni mesaj: ' + formatSenderName(displayName), 'info');
     }
 
     const incomingChatId = msg.chatId || msg.chat_id;
@@ -2428,7 +2803,7 @@ function updateSyncProgress(progress) {
             syncProgressPoller = null;
         }
         showToast('Senkronizasyon tamamlandi', 'success');
-        loadChats();
+        reloadChatLists();
         loadAllMessages();
     } else if (progress.status === 'failed') {
         if (syncProgressPoller) {
@@ -2455,7 +2830,7 @@ async function refreshChat() {
             await api('api/chats/' + encodeURIComponent(currentChat) + '/refresh-picture', 'POST');
             
             // Reload chat info to update UI
-            loadChats();
+            reloadChatLists();
             
             showToast('Sohbet ve profil fotografi yenilendi', 'success');
         } catch (e) {
@@ -4254,8 +4629,11 @@ Object.assign(window, {
     updateAccentColor,
     updateWallpaperChoice,
     updateFontSize,
+    updateInterfaceScale,
+    toggleEdgeToEdgeLayout,
     toggleCompactMode,
     updateBubbleStyle,
+    updateMessageBubbleScale,
     toggleChatMetaPanel,
     updateAppSurfaceOpacity,
     updateDesktopBackgroundType,
@@ -4269,6 +4647,11 @@ Object.assign(window, {
     updateBackgroundGradient,
     updateBackgroundGradientCustom,
     updateBackgroundOpacity,
+    updateNotificationSoundMode,
+    updateNotificationSoundVolume,
+    handleNotificationSoundFile,
+    clearNotificationSound,
+    testNotificationSound,
     createAccount,
     openSettings,
     openFeatures,

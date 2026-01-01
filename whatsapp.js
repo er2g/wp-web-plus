@@ -1338,6 +1338,11 @@ class WhatsAppClient {
                 msgData.timestamp,
                 chat.unreadCount || 0
             );
+            if (chat.archived) {
+                try {
+                    this.db.chats.setArchived.run(1, chat.id._serialized);
+                } catch (e) {}
+            }
 
             this.emit('message', msgData);
 
@@ -1408,6 +1413,11 @@ class WhatsAppClient {
             lastAt,
             chat.unreadCount || 0
         );
+        if (chat.archived) {
+            try {
+                this.db.chats.setArchived.run(1, chatId);
+            } catch (e) {}
+        }
 
         if (!profilePic) {
             this.enqueueProfilePicRefresh(chatId);
@@ -1536,6 +1546,11 @@ class WhatsAppClient {
                     lastAt,
                     chat.unreadCount || 0
                 );
+                if (chat.archived) {
+                    try {
+                        this.db.chats.setArchived.run(1, chatId);
+                    } catch (e) {}
+                }
             });
 
             syncTx();
@@ -1568,6 +1583,11 @@ class WhatsAppClient {
                     lastAt,
                     chat.unreadCount || 0
                 );
+                if (chat.archived) {
+                    try {
+                        this.db.chats.setArchived.run(1, chatId);
+                    } catch (e) {}
+                }
             } catch (inner) {}
             return { count: 0, lastMessageTs: null };
         }
@@ -1756,6 +1776,11 @@ class WhatsAppClient {
                 lastAt,
                 chat.unreadCount || 0
             );
+            if (chat.archived) {
+                try {
+                    this.db.chats.setArchived.run(1, chatId);
+                } catch (e) {}
+            }
         };
 
         const saveMessages = async (messages) => {
@@ -2163,6 +2188,50 @@ class WhatsAppClient {
 
         const chat = await this.client.getChatById(chatId);
         await chat.sendSeen();
+        return { success: true };
+    }
+
+    async archiveChat(chatId) {
+        if (!this.isReady()) throw new Error('WhatsApp not connected');
+        const id = typeof chatId === 'string' ? chatId.trim() : '';
+        if (!id) throw new Error('Invalid chatId');
+
+        const chat = await Promise.race([
+            this.client.getChatById(id),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Chat fetch timeout')), 10000))
+        ]);
+
+        await Promise.race([
+            chat.archive(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Chat archive timeout')), 10000))
+        ]);
+
+        try {
+            this.db.chats.setArchived.run(1, id);
+        } catch (e) {}
+
+        return { success: true };
+    }
+
+    async unarchiveChat(chatId) {
+        if (!this.isReady()) throw new Error('WhatsApp not connected');
+        const id = typeof chatId === 'string' ? chatId.trim() : '';
+        if (!id) throw new Error('Invalid chatId');
+
+        const chat = await Promise.race([
+            this.client.getChatById(id),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Chat fetch timeout')), 10000))
+        ]);
+
+        await Promise.race([
+            chat.unarchive(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Chat unarchive timeout')), 10000))
+        ]);
+
+        try {
+            this.db.chats.setArchived.run(0, id);
+        } catch (e) {}
+
         return { success: true };
     }
 
