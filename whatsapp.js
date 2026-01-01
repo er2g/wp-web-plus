@@ -73,6 +73,8 @@ class WhatsAppClient {
         this.profilePicQueue = [];
         this.profilePicQueueIds = new Set();
         this.profilePicQueueRunning = false;
+
+        this.chatCatchupAttempts = new Map(); // chatId -> lastAttemptMs
     }
 
     getWhatsAppMediaKeyInfoString(type) {
@@ -1651,173 +1653,6 @@ class WhatsAppClient {
         return true;
     }
 
-    async syncChat(chat) {
-        const chatId = chat?.id?._serialized;
-        if (!chatId) return 0;
-
-        const chatName = chat.name || chat.id.user;
-        let fetchedMessages = [];
-
-        try {
-            const limit = Math.max(1, Number(this.settings.maxMessagesPerChat) || 1000);
-            let lastError = null;
-            for (let attempt = 1; attempt <= CONSTANTS.SYNC_CHAT_MAX_RETRIES; attempt++) {
-                try {
-                    fetchedMessages = await Promise.race([
-                        chat.fetchMessages({ limit }),
-                        new Promise((_, reject) => setTimeout(() => reject(new Error('fetchMessages timeout')), 120000))
-                    ]);
-                    lastError = null;
-                    break;
-                } catch (e) {
-                    lastError = e;
-                    const baseDelay = Math.min(
-                        CONSTANTS.SYNC_CHAT_BACKOFF_BASE_MS * (2 ** (attempt - 1)),
-                        CONSTANTS.SYNC_CHAT_BACKOFF_MAX_MS
-                    );
-                    const jitter = 0.7 + Math.random() * 0.6;
-                    const delay = Math.round(baseDelay * jitter);
-                    this.log('warn', 'sync', `Chat fetchMessages retry ${attempt}/${CONSTANTS.SYNC_CHAT_MAX_RETRIES} for ${chatName}: ${e.message}`);
-                    await new Promise(resolve => setTimeout(resolve, delay));
-                }
-            }
-
-            if (lastError) {
-                throw lastError;
-            }
-        } catch (e) {
-            this.log('warn', 'sync', `Chat fetchMessages failed for ${chatName}: ${e.message}`);
-            fetchedMessages = [];
-        }
-
-        const messages = fetchedMessages.length
-            ? fetchedMessages
-            : (chat.lastMessage ? [chat.lastMessage] : []);
-
-        try {
-            const msgRows = [];
-            for (const msg of messages) {
-                const contact = await this.getContactCached(msg);
-
-                const body = this.getMessageBody(msg);
-                msgRows.push({
-                    messageId: msg.id._serialized,
-                    chatId: chatId,
-                    from: msg.from,
-                    to: msg.to,
-                    fromName: msg.fromMe ? (this.info ? this.info.pushname : 'Me') : this.getSenderName(contact, msg),
-                    fromNumber: msg.fromMe ? (this.info?.wid?.user || this.extractPhoneFromId(msg.from)) : this.getSenderNumber(contact, msg),
-                    body,
-                    type: msg.type,
-                    timestamp: msg.timestamp * 1000,
-                    isGroup: chat.isGroup,
-                    isFromMe: msg.fromMe,
-                    mediaMimetype: msg.mimetype || msg._data?.mimetype,
-                    mediaPath: null,
-                    mediaUrl: null,
-                    ack: msg.ack || 0,
-                    hasMedia: msg.hasMedia
-                });
-            }
-
-            const existingChat = this.db.chats.getById.get(chatId);
-            const cachedPic = this.chatProfileCache.get(chatId) || null;
-            const profilePic = existingChat?.profile_pic || cachedPic || null;
-            if (!profilePic) {
-                this.enqueueProfilePicRefresh(chatId);
-            }
-
-            const lastMsg = fetchedMessages.length
-                ? fetchedMessages[fetchedMessages.length - 1]
-                : (chat.lastMessage || null);
-
-            const lastPreview = lastMsg
-                ? (this.getMessageBody(lastMsg) || (lastMsg.hasMedia ? (lastMsg.type === 'document' ? '[Dosya]' : '[Medya]') : ''))
-                : (existingChat?.last_message || '');
-
-            const lastAt = lastMsg?.timestamp
-                ? lastMsg.timestamp * 1000
-                : (Number(existingChat?.last_message_at) || 0);
-
-            const syncTx = this.db.db.transaction(() => {
-                for (const row of msgRows) {
-                    this.db.messages.save.run(
-                        row.messageId,
-                        row.chatId,
-                        row.fromNumber,
-                        row.to,
-                        row.fromName,
-                        row.body,
-                        row.type,
-                        row.mediaPath,
-                        row.mediaUrl,
-                        row.mediaMimetype,
-                        null,
-                        null,
-                        null,
-                        row.isGroup ? 1 : 0,
-                        row.isFromMe ? 1 : 0,
-                        row.ack,
-                        row.timestamp
-                    );
-                }
-
-                this.db.chats.upsert.run(
-                    chatId,
-                    chatName,
-                    chat.isGroup ? 1 : 0,
-                    profilePic,
-                    String(lastPreview || '').substring(0, 100),
-                    lastAt,
-                    chat.unreadCount || 0
-                );
-                if (chat.archived) {
-                    try {
-                        this.db.chats.setArchived.run(1, chatId);
-                    } catch (e) {}
-                }
-            });
-
-            syncTx();
-
-            for (const row of msgRows) {
-                if (row.hasMedia && this.settings.downloadMedia && this.settings.downloadMediaOnSync) {
-                    this.enqueueMediaDownload(row.messageId);
-                }
-            }
-
-            return { count: msgRows.length, lastMessageTs: lastAt };
-        } catch (e) {
-            this.log('warn', 'sync', `Chat sync error for ${chatName}: ${e.message}`);
-            try {
-                const existingChat = this.db.chats.getById.get(chatId);
-                const lastMsg = chat.lastMessage || null;
-                const lastPreview = lastMsg
-                    ? (this.getMessageBody(lastMsg) || (lastMsg.hasMedia ? (lastMsg.type === 'document' ? '[Dosya]' : '[Medya]') : ''))
-                    : (existingChat?.last_message || '');
-                const lastAt = lastMsg?.timestamp
-                    ? lastMsg.timestamp * 1000
-                    : (Number(existingChat?.last_message_at) || 0);
-                const profilePic = existingChat?.profile_pic || null;
-                this.db.chats.upsert.run(
-                    chatId,
-                    chatName,
-                    chat.isGroup ? 1 : 0,
-                    profilePic,
-                    String(lastPreview || '').substring(0, 100),
-                    lastAt,
-                    chat.unreadCount || 0
-                );
-                if (chat.archived) {
-                    try {
-                        this.db.chats.setArchived.run(1, chatId);
-                    } catch (e) {}
-                }
-            } catch (inner) {}
-            return { count: 0, lastMessageTs: null };
-        }
-    }
-
     async fullSync() {
         return this.startFullSyncAll();
     }
@@ -2038,21 +1873,6 @@ class WhatsAppClient {
             storedCount = 0;
         }
 
-        if (storedCount >= maxMessagesPerChat) {
-            this.db.chatSyncState.upsert.run(
-                chatId,
-                runId,
-                'done',
-                'max_messages',
-                state.cursor_value || null,
-                oldestMsgId,
-                newestMsgId,
-                1,
-                null
-            );
-            return;
-        }
-
         const upsertChatMeta = () => {
             const lastMsg = chat.lastMessage || null;
             const lastPreview = lastMsg
@@ -2259,6 +2079,212 @@ class WhatsAppClient {
             1,
             null
         );
+    }
+
+    async syncChat(chat, options = {}) {
+        const chatId = chat?.id?._serialized;
+        if (!chatId) return { count: 0, lastMessageTs: null };
+
+        const chatName = chat.name || chat.id?.user || chatId;
+        const limitRaw = options.limit !== undefined ? options.limit : this.settings.maxMessagesPerChat;
+        const limit = Math.min(5000, Math.max(1, Number(limitRaw) || 250));
+        const timeoutMs = Math.max(5000, Number(options.timeoutMs) || 30000);
+
+        let fetchedMessages = [];
+        try {
+            let lastError = null;
+            for (let attempt = 1; attempt <= CONSTANTS.SYNC_CHAT_MAX_RETRIES; attempt++) {
+                try {
+                    fetchedMessages = await Promise.race([
+                        chat.fetchMessages({ limit }),
+                        new Promise((_, reject) => setTimeout(() => reject(new Error('fetchMessages timeout')), timeoutMs))
+                    ]);
+                    lastError = null;
+                    break;
+                } catch (e) {
+                    lastError = e;
+                    const baseDelay = Math.min(
+                        CONSTANTS.SYNC_CHAT_BACKOFF_BASE_MS * (2 ** (attempt - 1)),
+                        CONSTANTS.SYNC_CHAT_BACKOFF_MAX_MS
+                    );
+                    const jitter = 0.7 + Math.random() * 0.6;
+                    const delay = Math.round(baseDelay * jitter);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+
+            if (lastError) {
+                throw lastError;
+            }
+        } catch (e) {
+            this.log('warn', 'sync', `Chat fetchMessages failed for ${chatName}: ${e.message}`);
+            fetchedMessages = [];
+        }
+
+        const messages = fetchedMessages.length
+            ? fetchedMessages
+            : (chat.lastMessage ? [chat.lastMessage] : []);
+
+        try {
+            const msgRows = [];
+            for (const msg of messages) {
+                const contact = await this.getContactCached(msg);
+                const body = this.getMessageBody(msg);
+                msgRows.push({
+                    messageId: msg.id?._serialized,
+                    chatId: chatId,
+                    from: msg.from,
+                    to: msg.to,
+                    fromName: msg.fromMe ? (this.info ? this.info.pushname : 'Me') : this.getSenderName(contact, msg),
+                    fromNumber: msg.fromMe ? (this.info?.wid?.user || this.extractPhoneFromId(msg.from)) : this.getSenderNumber(contact, msg),
+                    body,
+                    type: msg.type,
+                    timestamp: msg.timestamp * 1000,
+                    isGroup: chat.isGroup,
+                    isFromMe: msg.fromMe,
+                    mediaMimetype: msg.mimetype || msg._data?.mimetype,
+                    mediaPath: null,
+                    mediaUrl: null,
+                    ack: msg.ack || 0,
+                    hasMedia: msg.hasMedia
+                });
+            }
+
+            const existingChat = this.db.chats.getById.get(chatId);
+            const cachedPic = this.chatProfileCache.get(chatId) || null;
+            const profilePic = existingChat?.profile_pic || cachedPic || null;
+            if (!profilePic) {
+                this.enqueueProfilePicRefresh(chatId);
+            }
+
+            const lastMsg = fetchedMessages.length
+                ? fetchedMessages[fetchedMessages.length - 1]
+                : (chat.lastMessage || null);
+
+            const lastPreview = lastMsg
+                ? (this.getMessageBody(lastMsg) || (lastMsg.hasMedia ? (lastMsg.type === 'document' ? '[Dosya]' : '[Medya]') : ''))
+                : (existingChat?.last_message || '');
+
+            const lastAt = lastMsg?.timestamp
+                ? lastMsg.timestamp * 1000
+                : (Number(existingChat?.last_message_at) || 0);
+
+            const syncTx = this.db.db.transaction(() => {
+                for (const row of msgRows) {
+                    if (!row.messageId) continue;
+                    this.db.messages.save.run(
+                        row.messageId,
+                        row.chatId,
+                        row.fromNumber,
+                        row.to,
+                        row.fromName,
+                        row.body,
+                        row.type,
+                        row.mediaPath,
+                        row.mediaUrl,
+                        row.mediaMimetype,
+                        null,
+                        null,
+                        null,
+                        row.isGroup ? 1 : 0,
+                        row.isFromMe ? 1 : 0,
+                        row.ack,
+                        row.timestamp
+                    );
+                }
+
+                this.db.chats.upsert.run(
+                    chatId,
+                    chat.name || this.extractPhoneFromId(chat.id?.user),
+                    chat.isGroup ? 1 : 0,
+                    profilePic,
+                    String(lastPreview || '').substring(0, 100),
+                    lastAt,
+                    chat.unreadCount || 0
+                );
+                if (chat.archived) {
+                    try {
+                        this.db.chats.setArchived.run(1, chatId);
+                    } catch (e) {}
+                }
+            });
+
+            syncTx();
+
+            for (const row of msgRows) {
+                if (!row.messageId) continue;
+                if (row.hasMedia && this.settings.downloadMedia && this.settings.downloadMediaOnSync) {
+                    this.enqueueMediaDownload(row.messageId);
+                }
+            }
+
+            return { count: msgRows.length, lastMessageTs: lastAt };
+        } catch (e) {
+            this.log('warn', 'sync', `Chat sync error for ${chatName}: ${e.message}`);
+            return { count: 0, lastMessageTs: null };
+        }
+    }
+
+    async syncChatById(chatId, options = {}) {
+        if (!this.isReady()) throw new Error('WhatsApp not connected');
+        const id = typeof chatId === 'string' ? chatId.trim() : '';
+        if (!id) throw new Error('Invalid chat id');
+
+        const timeoutMs = Math.max(5000, Number(options.chatTimeoutMs) || 30000);
+        const chat = await Promise.race([
+            this.client.getChatById(id),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('getChatById timeout')), timeoutMs))
+        ]);
+        if (!chat) throw new Error('Chat not found');
+        return await this.syncChat(chat, options);
+    }
+
+    async ensureChatCaughtUp(chatId, options = {}) {
+        const id = typeof chatId === 'string' ? chatId.trim() : '';
+        if (!id) return { refreshed: false, reason: 'invalid_chat_id' };
+        if (!this.isReady()) return { refreshed: false, reason: 'not_ready' };
+
+        const now = Date.now();
+        const cooldownMs = Math.max(1000, Number(options.cooldownMs) || 30000);
+        const lastAttempt = this.chatCatchupAttempts.get(id) || 0;
+        if (lastAttempt && (now - lastAttempt) < cooldownMs) {
+            return { refreshed: false, reason: 'cooldown' };
+        }
+        this.chatCatchupAttempts.set(id, now);
+
+        let chatLastAt = 0;
+        try {
+            const chatRow = this.db.chats.getById.get(id);
+            chatLastAt = Number(chatRow?.last_message_at) || 0;
+        } catch (e) {
+            chatLastAt = 0;
+        }
+
+        let maxMsgTs = 0;
+        try {
+            const row = this.db.db.prepare('SELECT MAX(timestamp) as maxTs FROM messages WHERE chat_id = ?').get(id);
+            maxMsgTs = Number(row?.maxTs) || 0;
+        } catch (e) {
+            maxMsgTs = 0;
+        }
+
+        const thresholdMs = Math.max(0, Number(options.thresholdMs) || (2 * 60 * 1000));
+        const looksStale = chatLastAt > 0 && (maxMsgTs + thresholdMs) < chatLastAt;
+        if (!looksStale) {
+            return { refreshed: false, reason: 'up_to_date', chatLastAt, maxMsgTs };
+        }
+
+        const limit = Math.min(
+            1000,
+            Math.max(50, Number(options.limit) || 250, Number(this.settings.maxMessagesPerChat) || 250)
+        );
+
+        try {
+            const result = await this.syncChatById(id, { limit, timeoutMs: options.timeoutMs || 30000 });
+            return { refreshed: true, reason: 'synced', result };
+        } catch (e) {
+            return { refreshed: false, reason: 'sync_failed', error: e.message, chatLastAt, maxMsgTs };
+        }
     }
 
     async fetchMessagesWithRetry(chat, limit) {

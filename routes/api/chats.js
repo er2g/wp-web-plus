@@ -215,9 +215,18 @@ router.post('/:id/unarchive', validate({ params: chatIdParamSchema }), async (re
     return res.json({ success: true });
 });
 
-router.get('/:id/messages', validate({ params: chatIdParamSchema, query: paginationQuerySchema }), (req, res) => {
+router.get('/:id/messages', validate({ params: chatIdParamSchema, query: paginationQuerySchema }), async (req, res) => {
     const { limit, offset } = req.validatedQuery;
     const chatId = req.validatedParams.id;
+
+    if (offset === 0 && req.account?.whatsapp?.isReady?.()) {
+        try {
+            await req.account.whatsapp.ensureChatCaughtUp(chatId, { limit: Math.max(250, limit) });
+        } catch (error) {
+            req.log?.warn?.('Chat catch-up sync failed', { chatId, error: error.message });
+        }
+    }
+
     const messages = req.account.db.messages.getByChatId.all(chatId, limit, offset);
     const tags = req.account.db.contactTags.getByChatId.all(chatId);
     const notes = req.account.db.notes.getByChatId.all(chatId);
