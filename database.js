@@ -291,7 +291,6 @@ function createDatabase(config) {
     CREATE INDEX IF NOT EXISTS idx_messages_chat_timestamp ON messages(chat_id, timestamp);
     CREATE INDEX IF NOT EXISTS idx_messages_message_id ON messages(message_id);
     CREATE INDEX IF NOT EXISTS idx_chats_updated ON chats(updated_at);
-    CREATE INDEX IF NOT EXISTS idx_chats_archived_last_message_at ON chats(is_archived, last_message_at);
     CREATE INDEX IF NOT EXISTS idx_scheduled_time ON scheduled_messages(scheduled_at);
     CREATE INDEX IF NOT EXISTS idx_templates_category ON message_templates(category);
     CREATE INDEX IF NOT EXISTS idx_logs_created ON logs(created_at);
