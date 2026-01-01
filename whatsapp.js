@@ -2,7 +2,7 @@
  * WhatsApp Web Panel - WhatsApp Client Module v5 (Optimized)
  * Fast sync with batching, caching, and parallel processing
  */
-const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
+const { Client, LocalAuth, MessageMedia, Message } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -1735,32 +1735,10 @@ class WhatsAppClient {
         let cursor = state.cursor_value || null;
         let newestMsgId = state.newest_msg_id || null;
         let oldestMsgId = state.oldest_msg_id || null;
-        let reachedEnd = false;
+        const safePageLimit = Math.max(25, Number(config.pageLimit) || CONSTANTS.FULL_SYNC_PAGE_LIMIT);
 
-        while (!reachedEnd) {
-            const page = await this.fetchMessagesWithRetry(chat, cursor, config.pageLimit);
-            if (!Array.isArray(page) || page.length === 0) {
-                break;
-            }
-
-            const pageOldest = page[page.length - 1];
-            const pageNewest = page[0];
-            if (!newestMsgId && pageNewest?.id?._serialized) {
-                newestMsgId = pageNewest.id._serialized;
-            }
-            if (pageOldest?.id?._serialized) {
-                oldestMsgId = pageOldest.id._serialized;
-            }
-
-            let filteredMessages = page;
-            if (cutoffMs) {
-                filteredMessages = page.filter(msg => (msg.timestamp * 1000) >= cutoffMs);
-                if (pageOldest?.timestamp && pageOldest.timestamp * 1000 < cutoffMs) {
-                    reachedEnd = true;
-                }
-            }
-
-            const lastMsg = chat.lastMessage || pageNewest || null;
+        const upsertChatMeta = () => {
+            const lastMsg = chat.lastMessage || null;
             const lastPreview = lastMsg
                 ? (this.getMessageBody(lastMsg) || (lastMsg.hasMedia ? (lastMsg.type === 'document' ? '[Dosya]' : '[Medya]') : ''))
                 : '';
@@ -1769,9 +1747,28 @@ class WhatsAppClient {
                 : (chat.timestamp ? chat.timestamp * 1000 : Date.now());
             const existingChat = this.db.chats.getById.get(chatId);
             const profilePic = existingChat?.profile_pic || this.chatProfileCache.get(chatId) || null;
+            this.db.chats.upsert.run(
+                chatId,
+                chat.name || this.extractPhoneFromId(chat.id.user),
+                chat.isGroup ? 1 : 0,
+                profilePic,
+                String(lastPreview || '').substring(0, 100),
+                lastAt,
+                chat.unreadCount || 0
+            );
+        };
+
+        const saveMessages = async (messages) => {
+            if (!Array.isArray(messages) || messages.length === 0) return;
+
+            const filtered = cutoffMs
+                ? messages.filter(msg => (msg.timestamp * 1000) >= cutoffMs)
+                : messages;
+
+            if (!filtered.length) return;
 
             const msgRows = [];
-            for (const msg of filteredMessages) {
+            for (const msg of filtered) {
                 let contact = null;
                 if (!msg.fromMe) {
                     contact = await this.getContactCached(msg);
@@ -1779,7 +1776,7 @@ class WhatsAppClient {
 
                 const body = this.getMessageBody(msg);
                 msgRows.push({
-                    messageId: msg.id._serialized,
+                    messageId: msg.id?._serialized,
                     chatId,
                     fromNumber: msg.fromMe
                         ? (this.info?.wid?.user || this.extractPhoneFromId(msg.from))
@@ -1794,12 +1791,14 @@ class WhatsAppClient {
                     isGroup: chat.isGroup,
                     isFromMe: msg.fromMe,
                     ack: msg.ack || 0,
-                    timestamp: msg.timestamp * 1000
+                    timestamp: msg.timestamp * 1000,
+                    hasMedia: msg.hasMedia
                 });
             }
 
             const syncTx = this.db.db.transaction(() => {
                 for (const row of msgRows) {
+                    if (!row.messageId) continue;
                     this.db.messages.save.run(
                         row.messageId,
                         row.chatId,
@@ -1821,42 +1820,93 @@ class WhatsAppClient {
                     );
                 }
 
-                this.db.chats.upsert.run(
-                    chatId,
-                    chat.name || this.extractPhoneFromId(chat.id.user),
-                    chat.isGroup ? 1 : 0,
-                    profilePic,
-                    String(lastPreview || '').substring(0, 100),
-                    lastAt,
-                    chat.unreadCount || 0
-                );
+                upsertChatMeta();
             });
 
             syncTx();
 
-            for (const msg of filteredMessages) {
-                if (msg.hasMedia || msg.mimetype || ['image', 'video', 'audio', 'ptt', 'document', 'sticker'].includes(msg.type)) {
-                    this.db.mediaTasks.upsert.run(msg.id._serialized, chatId);
+            for (const row of msgRows) {
+                if (!row.messageId) continue;
+                if (row.hasMedia || row.mediaMimetype || ['image', 'video', 'audio', 'ptt', 'document', 'sticker'].includes(row.type)) {
+                    this.db.mediaTasks.upsert.run(row.messageId, chatId);
                 }
             }
             this.db.profilePicTasks.upsert.run(chatId);
 
-            cursor = pageOldest?.id?._serialized || null;
+            const oldest = filtered.reduce((acc, msg) => {
+                if (!msg?.id?._serialized) return acc;
+                if (!acc) return msg;
+                return msg.timestamp < acc.timestamp ? msg : acc;
+            }, null);
+            const newest = filtered.reduce((acc, msg) => {
+                if (!msg?.id?._serialized) return acc;
+                if (!acc) return msg;
+                return msg.timestamp > acc.timestamp ? msg : acc;
+            }, null);
+
+            if (!newestMsgId && newest?.id?._serialized) {
+                newestMsgId = newest.id._serialized;
+            }
+            if (oldest?.id?._serialized) {
+                oldestMsgId = oldest.id._serialized;
+                cursor = oldestMsgId;
+            }
+        };
+
+        // Seed with the most recent messages (also ensures chat message store is initialized)
+        const initial = await this.fetchMessagesWithRetry(chat, safePageLimit);
+        await saveMessages(initial);
+
+        // Now page backwards using WhatsApp Web's loadEarlierMsgs (whatsapp-web.js Chat.fetchMessages has no `before` cursor)
+        let reachedEnd = false;
+        let safetyLoops = 0;
+        let stagnantLoops = 0;
+        let lastOldestId = oldestMsgId || null;
+
+        while (!reachedEnd) {
+            safetyLoops += 1;
+            if (safetyLoops > 20000) {
+                throw new Error('Chat backfill exceeded max iterations');
+            }
+
+            const batch = await this.loadEarlierMessagesWithRetry(chatId, safePageLimit);
+            if (!batch.loaded) {
+                break;
+            }
+
+            const msgs = Array.isArray(batch.models)
+                ? batch.models.map((model) => new Message(this.client, model))
+                : [];
+
+            await saveMessages(msgs);
+
+            if (cutoffMs && msgs.some(msg => (msg.timestamp * 1000) < cutoffMs)) {
+                reachedEnd = true;
+            }
+
+            const hadMessages = msgs.length > 0;
+            if (hadMessages && oldestMsgId && oldestMsgId === lastOldestId) {
+                stagnantLoops += 1;
+            } else if (hadMessages) {
+                stagnantLoops = 0;
+                lastOldestId = oldestMsgId || null;
+            }
 
             this.db.chatSyncState.upsert.run(
                 chatId,
                 runId,
                 'running',
-                'before_id',
-                cursor,
+                'load_earlier',
+                oldestMsgId || cursor || null,
                 oldestMsgId,
                 newestMsgId,
                 0,
                 null
             );
 
-            if (!cursor) {
-                break;
+            if (stagnantLoops >= 50 && !cutoffMs) {
+                // No progress for a while despite loadEarlier returning data; avoid infinite loops.
+                throw new Error('Chat backfill made no progress (stuck cursor)');
             }
 
             await new Promise(resolve => setImmediate(resolve));
@@ -1866,8 +1916,8 @@ class WhatsAppClient {
             chatId,
             runId,
             'done',
-            state.cursor_type || null,
-            cursor,
+            'load_earlier',
+            oldestMsgId || cursor,
             oldestMsgId,
             newestMsgId,
             1,
@@ -1875,14 +1925,11 @@ class WhatsAppClient {
         );
     }
 
-    async fetchMessagesWithRetry(chat, cursor, limit) {
+    async fetchMessagesWithRetry(chat, limit) {
         let lastError = null;
         for (let attempt = 1; attempt <= CONSTANTS.SYNC_CHAT_MAX_RETRIES; attempt++) {
             try {
                 const options = { limit };
-                if (cursor) {
-                    options.before = cursor;
-                }
                 return await Promise.race([
                     chat.fetchMessages(options),
                     new Promise((_, reject) => setTimeout(() => reject(new Error('fetchMessages timeout')), 120000))
@@ -1899,6 +1946,53 @@ class WhatsAppClient {
             }
         }
         throw lastError || new Error('fetchMessages failed');
+    }
+
+    async loadEarlierMessagesWithRetry(chatId, targetCount) {
+        let lastError = null;
+        for (let attempt = 1; attempt <= CONSTANTS.SYNC_CHAT_MAX_RETRIES; attempt++) {
+            try {
+                return await Promise.race([
+                    this.client.pupPage.evaluate(async (chatId, targetCount) => {
+                        const msgFilter = (m) => !m.isNotification;
+                        const chat = await window.WWebJS.getChat(chatId, { getAsModel: false });
+                        const maxTarget = Math.max(1, Number(targetCount) || 250);
+
+                        let loaded = 0;
+                        let models = [];
+                        let loops = 0;
+                        const maxLoops = 50;
+
+                        while (models.length < maxTarget && loops < maxLoops) {
+                            loops += 1;
+                            const batch = await window.Store.ConversationMsgs.loadEarlierMsgs(chat);
+                            if (!batch || !batch.length) break;
+                            loaded += batch.length;
+                            for (const m of batch) {
+                                if (msgFilter(m)) models.push(m);
+                            }
+                        }
+
+                        models.sort((a, b) => (a.t > b.t ? 1 : -1));
+                        return {
+                            loaded,
+                            models: models.map(m => window.WWebJS.getMessageModel(m))
+                        };
+                    }, chatId, targetCount),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('loadEarlierMsgs timeout')), 120000))
+                ]);
+            } catch (e) {
+                lastError = e;
+                const baseDelay = Math.min(
+                    CONSTANTS.SYNC_CHAT_BACKOFF_BASE_MS * (2 ** (attempt - 1)),
+                    CONSTANTS.SYNC_CHAT_BACKOFF_MAX_MS
+                );
+                const jitter = 0.7 + Math.random() * 0.6;
+                const delay = Math.round(baseDelay * jitter);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+        }
+        throw lastError || new Error('loadEarlierMsgs failed');
     }
 
     async processMediaTasks(config) {

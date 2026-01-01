@@ -1134,7 +1134,9 @@ async function loadChatMessages(chatId, options = {}) {
         }
         renderChatMessages(chatMessagesPagination.items, {
             preserveScroll: !shouldReset,
-            scrollToBottom: shouldReset
+            scrollToBottom: shouldReset,
+            scrollAttempts: shouldReset ? 25 : undefined,
+            scrollIntervalMs: shouldReset ? 200 : undefined
         });
     } catch (err) {
         console.error('Chat messages load error:', err);
@@ -1563,7 +1565,9 @@ function buildChatMessageRow(message, context = {}, options = {}) {
     const prevSenderKey = context.prevSenderKey || null;
     const prevCanStack = context.prevCanStack === true;
     const prevTs = context.prevTs || null;
-    const timeGapMs = (prevTs && message.timestamp) ? (message.timestamp - prevTs) : Number.POSITIVE_INFINITY;
+    const msgTs = normalizeTimestamp(message.timestamp);
+    const prevTsMs = normalizeTimestamp(prevTs);
+    const timeGapMs = (prevTsMs && msgTs) ? (msgTs - prevTsMs) : Number.POSITIVE_INFINITY;
     const isStacked = (canShowGroupSender && prevCanStack && prevSenderKey && prevSenderKey === senderKey && timeGapMs < (5 * 60 * 1000));
     const showSenderMeta = (canShowGroupSender && !isStacked);
 
@@ -1614,7 +1618,7 @@ function buildChatMessageRow(message, context = {}, options = {}) {
         (options.animate ? ' animate-in' : '');
 
     const dataSenderKeyAttr = escapeHtml(senderKey);
-    const dataTsAttr = message.timestamp ? String(message.timestamp) : '';
+    const dataTsAttr = msgTs ? String(msgTs) : '';
     const dataCanStackAttr = canShowGroupSender ? '1' : '0';
 
     const bubbleClass = isSystem
@@ -1644,7 +1648,7 @@ function buildChatMessageRow(message, context = {}, options = {}) {
         meta: {
             senderKey,
             canStack: canShowGroupSender,
-            timestamp: message.timestamp || null
+            timestamp: msgTs || null
         }
     };
 }
@@ -1682,8 +1686,12 @@ function renderChatMessages(messages, options = {}) {
     const previousScrollHeight = container.scrollHeight;
     const previousScrollTop = container.scrollTop;
 
-    // Sort messages chronologically
-    const sorted = [...messages].sort((a, b) => a.timestamp - b.timestamp);
+    // Sort messages chronologically (timestamps may be ms, seconds, or SQLite DATETIME strings)
+    const sorted = [...messages].sort((a, b) => {
+        const aTs = normalizeTimestamp(a?.timestamp) || 0;
+        const bTs = normalizeTimestamp(b?.timestamp) || 0;
+        return aTs - bTs;
+    });
 
     const rows = [];
     let prevSenderKey = null;
@@ -1707,7 +1715,10 @@ function renderChatMessages(messages, options = {}) {
     }
 
     if (options.scrollToBottom !== false) {
-        ensureChatScrolledToBottom(container);
+        const attempts = options.scrollAttempts ?? 10;
+        const intervalMs = options.scrollIntervalMs ?? 150;
+        ensureChatScrolledToBottom(container, { attempts, intervalMs });
+        bindChatMediaAutoScroll(container);
     }
 }
 
@@ -3836,6 +3847,40 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+function normalizeTimestamp(value) {
+    if (value === undefined || value === null || value === '') return null;
+
+    if (value instanceof Date) {
+        const ms = value.getTime();
+        return Number.isFinite(ms) ? ms : null;
+    }
+
+    if (typeof value === 'number') {
+        if (!Number.isFinite(value)) return null;
+        // Heuristic: treat < 1e12 as epoch seconds
+        return value < 1e12 ? value * 1000 : value;
+    }
+
+    const raw = String(value).trim();
+    if (!raw) return null;
+
+    if (/^\\d+$/.test(raw)) {
+        const asNumber = Number(raw);
+        if (!Number.isFinite(asNumber)) return null;
+        return asNumber < 1e12 ? asNumber * 1000 : asNumber;
+    }
+
+    // SQLite DATETIME (UTC): "YYYY-MM-DD HH:MM:SS"
+    if (/^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}/.test(raw)) {
+        const iso = raw.replace(' ', 'T') + 'Z';
+        const parsed = Date.parse(iso);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    const parsed = Date.parse(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
 function normalizeLinkHref(raw) {
     const input = typeof raw === 'string' ? raw.trim() : String(raw || '').trim();
     if (!input) return null;
@@ -3930,7 +3975,28 @@ function sanitizeUrl(url) {
 function scrollMessagesToBottom(container) {
     if (!container) return;
     container.scrollTop = container.scrollHeight;
+    const last = container.lastElementChild;
+    if (last && typeof last.scrollIntoView === 'function') {
+        try {
+            last.scrollIntoView({ block: 'end', inline: 'nearest' });
+        } catch (e) {}
+    }
     container.dataset.autoScrollTop = String(container.scrollTop);
+}
+
+function bindChatMediaAutoScroll(container) {
+    if (!container) return;
+    const elements = container.querySelectorAll('.message-media img, .message-media video');
+    elements.forEach((el) => {
+        if (!el || el.dataset.autoScrollBound === '1') return;
+        el.dataset.autoScrollBound = '1';
+        const eventName = el.tagName === 'VIDEO' ? 'loadedmetadata' : 'load';
+        el.addEventListener(eventName, () => {
+            if (shouldKeepChatAutoScrolled(container)) {
+                scrollMessagesToBottom(container);
+            }
+        }, { once: true });
+    });
 }
 
 function isChatNearBottom(container, thresholdPx = 120) {
@@ -4146,8 +4212,9 @@ function renderSenderAvatar(contactId, displayName, showSenderMeta) {
 }
 
 function formatTime(ts) {
-    if (!ts) return '';
-    const date = new Date(ts);
+    const ms = normalizeTimestamp(ts);
+    if (!ms) return '';
+    const date = new Date(ms);
     const now = new Date();
     const isToday = date.toDateString() === now.toDateString();
 
@@ -4158,8 +4225,9 @@ function formatTime(ts) {
 }
 
 function formatDateTime(ts) {
-    if (!ts) return '';
-    return new Date(ts).toLocaleString('tr-TR');
+    const ms = normalizeTimestamp(ts);
+    if (!ms) return '';
+    return new Date(ms).toLocaleString('tr-TR');
 }
 
 function showToast(message, type) {
