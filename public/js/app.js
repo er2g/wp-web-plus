@@ -13,6 +13,7 @@ let archivedChatsLoaded = false;
 let currentSidebarTab = 'chats';
 let monacoEditor = null;
 let editingScriptId = null;
+let scriptEditorState = null;
 let templates = [];
 let editingTemplateId = null;
 let accounts = [];
@@ -3636,18 +3637,28 @@ async function loadScriptsData() {
             return;
         }
 
-        container.innerHTML = scripts.map(s =>
-            '<div class="settings-item" style="border: 1px solid var(--border-color); border-radius: 8px; margin-bottom: 8px; padding: 12px;">' +
+        container.innerHTML = scripts.map(s => {
+            let scopeText = 'Hedef: secilmedi';
+            try {
+                const filter = s.trigger_filter ? JSON.parse(s.trigger_filter) : null;
+                const chatIds = Array.isArray(filter?.chatIds)
+                    ? filter.chatIds
+                    : (Array.isArray(filter?.chat_ids) ? filter.chat_ids : []);
+                scopeText = chatIds.length ? ('Hedef: ' + chatIds.length + ' sohbet') : 'Hedef: secilmedi';
+            } catch (e) {
+                scopeText = 'Hedef: okunamadi';
+            }
+            return '<div class="settings-item" style="border: 1px solid var(--border-color); border-radius: 8px; margin-bottom: 8px; padding: 12px;">' +
             '<div class="info" style="flex: 1;">' +
                 '<div class="title">' + escapeHtml(s.name) + '</div>' +
-                '<div class="subtitle">' + escapeHtml(s.description || 'Aciklama yok') + ' - ' + s.trigger_type + '</div>' +
+                '<div class="subtitle">' + escapeHtml(s.description || 'Aciklama yok') + ' - ' + s.trigger_type + ' - ' + escapeHtml(scopeText) + '</div>' +
             '</div>' +
             '<span style="padding: 4px 8px; border-radius: 4px; font-size: 12px; background: ' + (s.is_active ? 'var(--accent)' : 'var(--text-light)') + '; color: white; margin-right: 8px;">' + (s.is_active ? 'Aktif' : 'Pasif') + '</span>' +
             '<button class="icon-btn" onclick="editScript(' + s.id + ')" title="Duzenle"><i class="bi bi-pencil"></i></button>' +
             '<button class="icon-btn" onclick="toggleScript(' + s.id + ')" title="Toggle"><i class="bi bi-toggle-on"></i></button>' +
             '<button class="icon-btn" onclick="deleteScript(' + s.id + ')" title="Sil"><i class="bi bi-trash" style="color: #f15c6d;"></i></button>' +
             '</div>'
-        ).join('');
+        }).join('');
     } catch (err) {
         console.error('Scripts load error:', err);
     }
@@ -4327,70 +4338,773 @@ async function migrateToDrive() {
 }
 
 // Script editor
+function closeScriptEditor() {
+    const overlay = document.getElementById('scriptEditorOverlay');
+    if (overlay) overlay.remove();
+    if (monacoEditor) {
+        try {
+            monacoEditor.dispose();
+        } catch (e) {}
+        monacoEditor = null;
+    }
+    editingScriptId = null;
+    scriptEditorState = null;
+}
+
+function createDefaultAutomationConfig() {
+    return {
+        version: 1,
+        direction: 'incoming', // incoming | outgoing | any
+        chatKind: 'any', // any | group | private
+        conditions: [],
+        actions: [
+            { type: 'replyText', text: '' }
+        ]
+    };
+}
+
+function scriptEditorGetSelectedChatIds() {
+    if (!scriptEditorState || !scriptEditorState.selectedChatIds) return [];
+    return Array.from(scriptEditorState.selectedChatIds);
+}
+
+function scriptEditorParseTriggerFilter(raw) {
+    if (!raw) return {};
+    if (typeof raw !== 'string') return {};
+    try {
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (e) {
+        return {};
+    }
+}
+
+function scriptEditorExtractChatIds(filter) {
+    const raw = filter?.chatIds ?? filter?.chat_ids;
+    const list = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+    const normalized = list
+        .map((value) => (typeof value === 'string' ? value.trim() : String(value || '').trim()))
+        .filter(Boolean);
+    return Array.from(new Set(normalized));
+}
+
+function scriptEditorEnsureMonaco(initialValue) {
+    if (monacoEditor) return;
+    if (typeof require === 'undefined') return;
+    require(['vs/editor/editor.main'], function() {
+        const container = document.getElementById('scriptEditorContainer');
+        if (!container) return;
+        monacoEditor = monaco.editor.create(container, {
+            value: initialValue || '// Script kodunuz\n',
+            language: 'javascript',
+            theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'vs-dark' : 'vs',
+            minimap: { enabled: false },
+            automaticLayout: true,
+            fontSize: 14
+        });
+    });
+}
+
+function scriptEditorSetMode(mode, options = {}) {
+    if (!scriptEditorState) return;
+    const triggerType = scriptEditorState.triggerType || 'message';
+    const nextMode = (mode === 'code' || triggerType !== 'message') ? 'code' : 'builder';
+    const previousMode = scriptEditorState.mode;
+    scriptEditorState.mode = nextMode;
+
+    const builderBtn = document.getElementById('scriptTabBuilder');
+    const codeBtn = document.getElementById('scriptTabCode');
+    const builderPane = document.getElementById('scriptBuilderPane');
+    const codePane = document.getElementById('scriptCodePane');
+
+    if (builderBtn) builderBtn.classList.toggle('active', nextMode === 'builder');
+    if (codeBtn) codeBtn.classList.toggle('active', nextMode === 'code');
+    if (builderPane) builderPane.style.display = nextMode === 'builder' ? 'block' : 'none';
+    if (codePane) codePane.style.display = nextMode === 'code' ? 'flex' : 'none';
+
+    if (nextMode === 'code') {
+        const shouldSeedFromBuilder = previousMode === 'builder' && options.seedFromBuilder !== false;
+        const initialValue = shouldSeedFromBuilder
+            ? scriptEditorGenerateAutomationCode()
+            : (scriptEditorState.codeDraft || '// Script kodunuz\n');
+
+        scriptEditorState.codeDraft = initialValue;
+        scriptEditorEnsureMonaco(initialValue);
+        if (monacoEditor) {
+            monacoEditor.setValue(initialValue);
+            setTimeout(() => monacoEditor.layout(), 50);
+        } else {
+            setTimeout(() => {
+                if (monacoEditor) monacoEditor.layout();
+            }, 150);
+        }
+    }
+}
+
+function scriptEditorRenderChatPicker() {
+    const listEl = document.getElementById('scriptChatPickerList');
+    const countEl = document.getElementById('scriptChatSelectedCount');
+    if (!listEl || !scriptEditorState) return;
+
+    const selected = scriptEditorState.selectedChatIds || new Set();
+    const totalSelected = selected.size;
+    if (countEl) {
+        countEl.textContent = totalSelected + ' sohbet secildi';
+    }
+
+    const query = (scriptEditorState.chatSearch || '').trim().toLowerCase();
+    const chatsList = Array.isArray(scriptEditorState.chats) ? scriptEditorState.chats : [];
+
+    if (!chatsList.length) {
+        listEl.innerHTML = '<div style="padding: 12px; color: var(--text-secondary);">Sohbet listesi yukleniyor...</div>';
+        return;
+    }
+
+    const filtered = query
+        ? chatsList.filter((chat) => {
+            const name = String(chat.name || '').toLowerCase();
+            const id = String(chat.chat_id || '').toLowerCase();
+            return name.includes(query) || id.includes(query);
+        })
+        : chatsList;
+
+    if (!filtered.length) {
+        listEl.innerHTML = '<div style="padding: 12px; color: var(--text-secondary);">Eslesen sohbet yok</div>';
+        return;
+    }
+
+    listEl.innerHTML = filtered.map((chat) => {
+        const chatId = chat.chat_id || '';
+        const isChecked = selected.has(chatId);
+        const isGroup = typeof chatId === 'string' && chatId.includes('@g.us');
+        const name = chat.name || chatId || 'Sohbet';
+        const avatar = '<div class="chat-scope-avatar' + (isGroup ? ' group' : '') + '">' + renderAvatarContent(chat) + '</div>';
+        return '<label class="chat-scope-item">' +
+            '<input class="chat-scope-checkbox" type="checkbox" data-chat-id="' + escapeHtml(chatId) + '"' + (isChecked ? ' checked' : '') + '>' +
+            avatar +
+            '<div class="chat-scope-info">' +
+                '<div class="chat-scope-name">' + escapeHtml(name) + '</div>' +
+                '<div class="chat-scope-meta">' + escapeHtml(chatId) + '</div>' +
+            '</div>' +
+        '</label>';
+    }).join('');
+}
+
+function scriptEditorRenderBuilder() {
+    const container = document.getElementById('scriptBuilderPane');
+    if (!container || !scriptEditorState) return;
+    const automation = scriptEditorState.automation || createDefaultAutomationConfig();
+    const conditions = Array.isArray(automation.conditions) ? automation.conditions : [];
+    const actions = Array.isArray(automation.actions) ? automation.actions : [];
+
+    const conditionRows = conditions.length
+        ? conditions.map((c, idx) => {
+            const kind = c.kind || 'text';
+            const op = c.op || 'contains';
+            const value = c.value || '';
+
+            const opOptions = (() => {
+                if (kind === 'text') {
+                    return [
+                        ['contains', 'icerir'],
+                        ['equals', 'esittir'],
+                        ['startsWith', 'ile baslar'],
+                        ['endsWith', 'ile biter'],
+                        ['regex', 'regex']
+                    ];
+                }
+                if (kind === 'sender') {
+                    return [
+                        ['contains', 'icerir'],
+                        ['equals', 'esittir']
+                    ];
+                }
+                if (kind === 'type') {
+                    return [['is', 'esittir']];
+                }
+                return [['equals', 'esittir']];
+            })();
+
+            const valueInput = kind === 'type'
+                ? '<select class="form-input builder-input" data-cond-idx="' + idx + '" data-cond-prop="value">' +
+                    '<option value="chat"' + (value === 'chat' ? ' selected' : '') + '>Metin</option>' +
+                    '<option value="image"' + (value === 'image' ? ' selected' : '') + '>Fotograf</option>' +
+                    '<option value="video"' + (value === 'video' ? ' selected' : '') + '>Video</option>' +
+                    '<option value="audio"' + (value === 'audio' ? ' selected' : '') + '>Ses</option>' +
+                    '<option value="ptt"' + (value === 'ptt' ? ' selected' : '') + '>Ses (PTT)</option>' +
+                    '<option value="document"' + (value === 'document' ? ' selected' : '') + '>Belge</option>' +
+                    '<option value="sticker"' + (value === 'sticker' ? ' selected' : '') + '>Sticker</option>' +
+                '</select>'
+                : '<input class="form-input builder-input" data-cond-idx="' + idx + '" data-cond-prop="value" value="' + escapeHtml(value) + '" placeholder="Deger">';
+
+            return '<div class="builder-row">' +
+                '<select class="form-input builder-input" data-cond-idx="' + idx + '" data-cond-prop="kind">' +
+                    '<option value="text"' + (kind === 'text' ? ' selected' : '') + '>Mesaj metni</option>' +
+                    '<option value="sender"' + (kind === 'sender' ? ' selected' : '') + '>Gonderen</option>' +
+                    '<option value="type"' + (kind === 'type' ? ' selected' : '') + '>Mesaj turu</option>' +
+                '</select>' +
+                '<select class="form-input builder-input" data-cond-idx="' + idx + '" data-cond-prop="op">' +
+                    opOptions.map(([k, label]) => '<option value="' + k + '"' + (op === k ? ' selected' : '') + '>' + label + '</option>').join('') +
+                '</select>' +
+                valueInput +
+                '<button class="btn btn-secondary btn-sm builder-remove" type="button" data-builder-action="remove-condition" data-index="' + idx + '"><i class="bi bi-x"></i></button>' +
+            '</div>';
+        }).join('')
+        : '<div class="builder-empty">Kosul eklenmedi (secilen sohbetlerde her mesaja calisir)</div>';
+
+    const selectedChats = scriptEditorGetSelectedChatIds();
+    const actionRows = actions.length
+        ? actions.map((a, idx) => {
+            const type = a.type || 'replyText';
+            const text = a.text || '';
+            const target = a.target || 'same';
+            const targetChatId = a.chatId || '';
+            const delayMs = Number(a.ms) || 500;
+
+            const targetOptions = (() => {
+                if (type !== 'sendText') return '';
+                const chatOptions = selectedChats
+                    .map((id) => '<option value="' + escapeHtml(id) + '"' + (targetChatId === id ? ' selected' : '') + '>' + escapeHtml(id) + '</option>')
+                    .join('');
+                return '<select class="form-input builder-input" data-action-idx="' + idx + '" data-action-prop="target">' +
+                    '<option value="same"' + (target === 'same' ? ' selected' : '') + '>Ayni sohbet</option>' +
+                    '<option value="allSelected"' + (target === 'allSelected' ? ' selected' : '') + '>Secilen tum sohbetler</option>' +
+                    '<option value="chatId"' + (target === 'chatId' ? ' selected' : '') + '>Belirli sohbet</option>' +
+                '</select>' +
+                (target === 'chatId'
+                    ? ('<select class="form-input builder-input" data-action-idx="' + idx + '" data-action-prop="chatId">' +
+                        '<option value="">Sohbet secin</option>' +
+                        chatOptions +
+                      '</select>')
+                    : '');
+            })();
+
+            const body = (() => {
+                if (type === 'delay') {
+                    return '<input class="form-input builder-input" data-action-idx="' + idx + '" data-action-prop="ms" type="number" min="0" max="30000" value="' + escapeHtml(String(delayMs)) + '" placeholder="ms">';
+                }
+                return '<textarea class="form-input builder-input" data-action-idx="' + idx + '" data-action-prop="text" rows="2" placeholder="Mesaj...">' + escapeHtml(text) + '</textarea>';
+            })();
+
+            return '<div class="builder-row builder-action-row">' +
+                '<select class="form-input builder-input" data-action-idx="' + idx + '" data-action-prop="type">' +
+                    '<option value="replyText"' + (type === 'replyText' ? ' selected' : '') + '>Yanitla</option>' +
+                    '<option value="sendText"' + (type === 'sendText' ? ' selected' : '') + '>Mesaj gonder</option>' +
+                    '<option value="delay"' + (type === 'delay' ? ' selected' : '') + '>Bekle</option>' +
+                '</select>' +
+                (type === 'sendText' ? targetOptions : '') +
+                body +
+                '<button class="btn btn-secondary btn-sm builder-remove" type="button" data-builder-action="remove-action" data-index="' + idx + '"><i class="bi bi-x"></i></button>' +
+            '</div>';
+        }).join('')
+        : '<div class="builder-empty">Aksiyon ekleyin</div>';
+
+    const codePreview = escapeHtml(scriptEditorGenerateAutomationCode()).trim();
+
+    container.innerHTML =
+        '<div class="builder-section">' +
+            '<div class="builder-help">Degiskenler: <code>{body}</code>, <code>{fromName}</code>, <code>{fromNumber}</code>, <code>{chatId}</code>, <code>{time}</code></div>' +
+        '</div>' +
+        '<div class="builder-section">' +
+            '<div class="builder-title">Ne zaman?</div>' +
+            '<div class="builder-row">' +
+                '<select class="form-input builder-input" id="automationDirection">' +
+                    '<option value="incoming"' + (automation.direction === 'incoming' ? ' selected' : '') + '>Mesaj alindiginda</option>' +
+                    '<option value="outgoing"' + (automation.direction === 'outgoing' ? ' selected' : '') + '>Mesaj gonderildiginde</option>' +
+                    '<option value="any"' + (automation.direction === 'any' ? ' selected' : '') + '>Her mesaj</option>' +
+                '</select>' +
+                '<select class="form-input builder-input" id="automationChatKind">' +
+                    '<option value="any"' + (automation.chatKind === 'any' ? ' selected' : '') + '>Grup + DM</option>' +
+                    '<option value="group"' + (automation.chatKind === 'group' ? ' selected' : '') + '>Sadece grup</option>' +
+                    '<option value="private"' + (automation.chatKind === 'private' ? ' selected' : '') + '>Sadece DM</option>' +
+                '</select>' +
+            '</div>' +
+        '</div>' +
+        '<div class="builder-section">' +
+            '<div class="builder-title">Kosullar</div>' +
+            conditionRows +
+            '<div style="margin-top: 8px;"><button class="btn btn-secondary btn-sm" type="button" data-builder-action="add-condition"><i class="bi bi-plus"></i> Kosul ekle</button></div>' +
+        '</div>' +
+        '<div class="builder-section">' +
+            '<div class="builder-title">Aksiyonlar</div>' +
+            actionRows +
+            '<div style="margin-top: 8px;"><button class="btn btn-secondary btn-sm" type="button" data-builder-action="add-action"><i class="bi bi-plus"></i> Aksiyon ekle</button></div>' +
+        '</div>' +
+        '<details class="builder-section builder-code-preview">' +
+            '<summary>Kod onizleme</summary>' +
+            '<pre class="script-code-preview">' + codePreview + '</pre>' +
+        '</details>';
+}
+
+function scriptEditorGenerateAutomationCode() {
+    if (!scriptEditorState) return '';
+    const automation = scriptEditorState.automation || createDefaultAutomationConfig();
+    const actions = Array.isArray(automation.actions) ? automation.actions : [];
+    const conditions = Array.isArray(automation.conditions) ? automation.conditions : [];
+
+    const js = (value) => JSON.stringify(String(value || ''));
+
+    const lines = [];
+    lines.push("const tpl = (input) => {");
+    lines.push("  const map = {");
+    lines.push("    body: (msg && msg.body) ? String(msg.body) : '',");
+    lines.push("    fromName: (msg && msg.fromName) ? String(msg.fromName) : '',");
+    lines.push("    fromNumber: (msg && msg.fromNumber) ? String(msg.fromNumber) : '',");
+    lines.push("    chatId: (msg && msg.chatId) ? String(msg.chatId) : '',");
+    lines.push("    time: new Date().toLocaleString()");
+    lines.push("  };");
+    lines.push("  return String(input || '').replace(/\\{(\\w+)\\}/g, (m, k) => (k in map ? map[k] : m));");
+    lines.push("};");
+    lines.push("");
+    lines.push("if (!msg || !msg.chatId) return;");
+    if (automation.direction === 'incoming') {
+        lines.push("if (msg.isFromMe) return;");
+    } else if (automation.direction === 'outgoing') {
+        lines.push("if (!msg.isFromMe) return;");
+    }
+    if (automation.chatKind === 'group') {
+        lines.push("if (!msg.isGroup) return;");
+    } else if (automation.chatKind === 'private') {
+        lines.push("if (msg.isGroup) return;");
+    }
+
+    for (const c of conditions) {
+        const kind = c.kind || 'text';
+        const op = c.op || 'contains';
+        const value = String(c.value || '');
+        if (!value && kind !== 'type') continue;
+
+        if (kind === 'text') {
+            if (op === 'contains') {
+                lines.push("if (!String(msg.body || '').toLowerCase().includes(" + js(value.toLowerCase()) + ")) return;");
+            } else if (op === 'equals') {
+                lines.push("if (String(msg.body || '').trim().toLowerCase() !== " + js(value.trim().toLowerCase()) + ") return;");
+            } else if (op === 'startsWith') {
+                lines.push("if (!String(msg.body || '').toLowerCase().startsWith(" + js(value.toLowerCase()) + ")) return;");
+            } else if (op === 'endsWith') {
+                lines.push("if (!String(msg.body || '').toLowerCase().endsWith(" + js(value.toLowerCase()) + ")) return;");
+            } else if (op === 'regex') {
+                lines.push("try {");
+                lines.push("  const re = new RegExp(" + js(value) + ", 'i');");
+                lines.push("  if (!re.test(String(msg.body || ''))) return;");
+                lines.push("} catch (e) { return; }");
+            }
+        } else if (kind === 'sender') {
+            if (op === 'equals') {
+                lines.push("if (String(msg.fromNumber || msg.from || '').trim() !== " + js(value.trim()) + ") return;");
+            } else {
+                lines.push("if (!String(msg.fromNumber || msg.from || '').includes(" + js(value) + ")) return;");
+            }
+        } else if (kind === 'type') {
+            const typeValue = value || 'chat';
+            lines.push("if (String(msg.type || 'chat') !== " + js(typeValue) + ") return;");
+        }
+    }
+
+    lines.push("");
+    for (const a of actions) {
+        const type = a.type || 'replyText';
+        if (type === 'delay') {
+            const ms = Math.max(0, Math.min(Number(a.ms) || 0, 30000));
+            lines.push("await new Promise(r => setTimeout(r, " + String(ms) + "));");
+            continue;
+        }
+        const text = String(a.text || '').trim();
+        if (!text) continue;
+
+        if (type === 'sendText') {
+            const target = a.target || 'same';
+            if (target === 'allSelected') {
+                lines.push("for (const cid of (Array.isArray(allowedChats) ? allowedChats : [])) {");
+                lines.push("  await sendMessage(cid, tpl(" + js(text) + "));");
+                lines.push("}");
+            } else if (target === 'chatId') {
+                const cid = String(a.chatId || '').trim();
+                if (cid) {
+                    lines.push("await sendMessage(" + js(cid) + ", tpl(" + js(text) + "));");
+                }
+            } else {
+                lines.push("await sendMessage(msg.chatId, tpl(" + js(text) + "));");
+            }
+        } else {
+            lines.push("await reply(tpl(" + js(text) + "));");
+        }
+    }
+
+    return lines.join('\n') + '\n';
+}
+
+function scriptEditorSyncFilterFromAutomation() {
+    if (!scriptEditorState) return;
+    const filter = scriptEditorState.filter || {};
+    const automation = scriptEditorState.automation || createDefaultAutomationConfig();
+
+    if (automation.direction === 'incoming') {
+        filter.incoming = true;
+        delete filter.outgoing;
+    } else if (automation.direction === 'outgoing') {
+        filter.outgoing = true;
+        delete filter.incoming;
+    } else {
+        delete filter.incoming;
+        delete filter.outgoing;
+    }
+
+    if (automation.chatKind === 'group') {
+        filter.groupOnly = true;
+        delete filter.privateOnly;
+    } else if (automation.chatKind === 'private') {
+        filter.privateOnly = true;
+        delete filter.groupOnly;
+    } else {
+        delete filter.groupOnly;
+        delete filter.privateOnly;
+    }
+
+    scriptEditorState.filter = filter;
+}
+
 function showScriptEditor(id) {
     editingScriptId = id || null;
+    scriptEditorState = {
+        mode: id ? 'code' : 'builder',
+        triggerType: 'message',
+        chatSearch: '',
+        selectedChatIds: new Set(),
+        chats: [],
+        filter: {},
+        automation: createDefaultAutomationConfig(),
+        codeDraft: '// Script kodunuz\n'
+    };
 
     const modal = document.createElement('div');
+    modal.id = 'scriptEditorOverlay';
     modal.className = 'modal-overlay show';
-    modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
-    modal.innerHTML = '<div class="modal" style="max-width: 900px; height: 80vh;">' +
-        '<div class="modal-header"><h3>' + (id ? 'Script Duzenle' : 'Yeni Script') + '</h3><i class="bi bi-x-lg close-btn" onclick="this.closest(\'.modal-overlay\').remove()"></i></div>' +
-        '<div class="modal-body" style="display: flex; flex-direction: column; height: calc(100% - 130px);">' +
-        '<div style="display: flex; gap: 12px; margin-bottom: 12px;">' +
-        '<input type="text" class="form-input" id="scriptNameEditor" placeholder="Script Adi" style="flex: 1;">' +
-        '<select class="form-input" id="scriptTriggerEditor" style="width: 150px;"><option value="message">Mesaj</option><option value="ready">Hazir</option><option value="manual">Manuel</option></select>' +
-        '</div>' +
-        '<input type="text" class="form-input" id="scriptDescEditor" placeholder="Aciklama" style="margin-bottom: 12px;">' +
-        '<div id="scriptEditorContainer" style="flex: 1; border: 1px solid var(--border-color); border-radius: 4px;"></div>' +
+    modal.onclick = (e) => { if (e.target === modal) closeScriptEditor(); };
+    modal.innerHTML = '<div class="modal script-editor-modal" style="max-width: 980px; height: 85vh;">' +
+        '<div class="modal-header"><h3>' + (id ? 'Script Duzenle' : 'Yeni Script') + '</h3><i class="bi bi-x-lg close-btn" onclick="closeScriptEditor()"></i></div>' +
+        '<div class="modal-body" style="display: flex; flex-direction: column; gap: 12px; height: 100%; overflow: hidden;">' +
+            '<div style="display: flex; gap: 12px;">' +
+                '<input type="text" class="form-input" id="scriptNameEditor" placeholder="Script Adi" style="flex: 1;">' +
+                '<select class="form-input" id="scriptTriggerEditor" style="width: 180px;">' +
+                    '<option value="message">Mesaj</option>' +
+                    '<option value="ready">Hazir</option>' +
+                    '<option value="manual">Manuel</option>' +
+                '</select>' +
+            '</div>' +
+            '<input type="text" class="form-input" id="scriptDescEditor" placeholder="Aciklama">' +
+            '<div class="form-group" style="margin-bottom: 0;">' +
+                '<label class="form-label">Hedef sohbetler (mesaj scriptleri icin zorunlu)</label>' +
+                '<input type="text" class="form-input" id="scriptChatSearch" placeholder="Sohbet ara (isim / id)">' +
+                '<div class="chat-scope-picker" id="scriptChatPickerList"></div>' +
+                '<div class="chat-scope-footer">' +
+                    '<div id="scriptChatSelectedCount" style="color: var(--text-secondary); font-size: 13px;">0 sohbet secildi</div>' +
+                    '<div style="display:flex; gap:8px;">' +
+                        '<button class="btn btn-secondary btn-sm" type="button" id="scriptChatSelectAllBtn">Hepsini sec</button>' +
+                        '<button class="btn btn-secondary btn-sm" type="button" id="scriptChatClearBtn">Temizle</button>' +
+                    '</div>' +
+                '</div>' +
+            '</div>' +
+            '<div class="script-tabs">' +
+                '<button class="script-tab active" id="scriptTabBuilder" type="button">Bloklar</button>' +
+                '<button class="script-tab" id="scriptTabCode" type="button">Kod</button>' +
+            '</div>' +
+            '<div style="flex: 1; min-height: 0; overflow: hidden;">' +
+                '<div id="scriptBuilderPane" style="height: 100%; overflow: auto;"></div>' +
+                '<div id="scriptCodePane" style="height: 100%; display: none; flex-direction: column;">' +
+                    '<div id="scriptEditorContainer" style="flex: 1; border: 1px solid var(--border-color); border-radius: 4px;"></div>' +
+                '</div>' +
+            '</div>' +
         '</div>' +
         '<div class="modal-footer">' +
-        '<button class="btn btn-secondary" onclick="testScriptCode()"><i class="bi bi-play"></i> Test</button>' +
-        '<button class="btn btn-primary" onclick="saveScriptCode()"><i class="bi bi-check"></i> Kaydet</button>' +
+            '<button class="btn btn-secondary" onclick="testScriptCode()"><i class="bi bi-play"></i> Test</button>' +
+            '<button class="btn btn-primary" onclick="saveScriptCode()"><i class="bi bi-check"></i> Kaydet</button>' +
         '</div></div>';
 
     document.body.appendChild(modal);
 
-    // Init Monaco
-    setTimeout(() => {
-        if (typeof require !== 'undefined') {
-            require(['vs/editor/editor.main'], function() {
-                const container = document.getElementById('scriptEditorContainer');
-                if (!container) return;
-                monacoEditor = monaco.editor.create(container, {
-                    value: '// Script kodunuz\n',
-                    language: 'javascript',
-                    theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'vs-dark' : 'vs',
-                    minimap: { enabled: false },
-                    automaticLayout: true,
-                    fontSize: 14
-                });
+    const nameEl = document.getElementById('scriptNameEditor');
+    const descEl = document.getElementById('scriptDescEditor');
+    const triggerEl = document.getElementById('scriptTriggerEditor');
+    if (nameEl) nameEl.value = id ? '' : 'Otomasyon';
+    if (descEl) descEl.value = '';
 
-                if (id) {
-                    loadScriptForEdit(id);
+    const chatSearchEl = document.getElementById('scriptChatSearch');
+    if (chatSearchEl) {
+        chatSearchEl.addEventListener('input', (e) => {
+            if (!scriptEditorState) return;
+            scriptEditorState.chatSearch = e.target.value || '';
+            scriptEditorRenderChatPicker();
+        });
+    }
+
+    const chatPickerEl = document.getElementById('scriptChatPickerList');
+    if (chatPickerEl) {
+        chatPickerEl.addEventListener('change', (e) => {
+            const input = e.target;
+            if (!input || input.tagName !== 'INPUT') return;
+            const chatId = input.getAttribute('data-chat-id') || '';
+            if (!chatId || !scriptEditorState) return;
+            if (input.checked) {
+                scriptEditorState.selectedChatIds.add(chatId);
+            } else {
+                scriptEditorState.selectedChatIds.delete(chatId);
+            }
+            scriptEditorRenderChatPicker();
+            if (scriptEditorState.mode === 'builder') {
+                scriptEditorRenderBuilder();
+            }
+        });
+    }
+
+    const selectAllBtn = document.getElementById('scriptChatSelectAllBtn');
+    if (selectAllBtn) {
+        selectAllBtn.addEventListener('click', () => {
+            if (!scriptEditorState) return;
+            const chatsList = Array.isArray(scriptEditorState.chats) ? scriptEditorState.chats : [];
+            chatsList.forEach((c) => { if (c?.chat_id) scriptEditorState.selectedChatIds.add(c.chat_id); });
+            scriptEditorRenderChatPicker();
+            if (scriptEditorState.mode === 'builder') scriptEditorRenderBuilder();
+        });
+    }
+
+    const clearBtn = document.getElementById('scriptChatClearBtn');
+    if (clearBtn) {
+        clearBtn.addEventListener('click', () => {
+            if (!scriptEditorState) return;
+            scriptEditorState.selectedChatIds.clear();
+            scriptEditorRenderChatPicker();
+            if (scriptEditorState.mode === 'builder') scriptEditorRenderBuilder();
+        });
+    }
+
+    const builderTab = document.getElementById('scriptTabBuilder');
+    const codeTab = document.getElementById('scriptTabCode');
+    if (builderTab) builderTab.addEventListener('click', () => scriptEditorSetMode('builder'));
+    if (codeTab) codeTab.addEventListener('click', () => scriptEditorSetMode('code'));
+
+    const builderPane = document.getElementById('scriptBuilderPane');
+    if (builderPane) {
+        builderPane.addEventListener('click', (e) => {
+            const btn = e.target.closest('button[data-builder-action]');
+            if (!btn || !scriptEditorState) return;
+            const action = btn.getAttribute('data-builder-action');
+            const index = Number(btn.getAttribute('data-index') || '0');
+            const automation = scriptEditorState.automation || createDefaultAutomationConfig();
+            automation.conditions = Array.isArray(automation.conditions) ? automation.conditions : [];
+            automation.actions = Array.isArray(automation.actions) ? automation.actions : [];
+
+            if (action === 'add-condition') {
+                automation.conditions.push({ kind: 'text', op: 'contains', value: '' });
+            } else if (action === 'remove-condition') {
+                automation.conditions.splice(index, 1);
+            } else if (action === 'add-action') {
+                automation.actions.push({ type: 'replyText', text: '' });
+            } else if (action === 'remove-action') {
+                automation.actions.splice(index, 1);
+            }
+            scriptEditorState.automation = automation;
+            scriptEditorSyncFilterFromAutomation();
+            scriptEditorRenderBuilder();
+        });
+
+        builderPane.addEventListener('input', (e) => {
+            const target = e.target;
+            if (!target || !scriptEditorState) return;
+            const automation = scriptEditorState.automation || createDefaultAutomationConfig();
+
+            if (target.id === 'automationDirection') {
+                automation.direction = target.value;
+            } else if (target.id === 'automationChatKind') {
+                automation.chatKind = target.value;
+            } else if (target.dataset && target.dataset.condIdx !== undefined) {
+                const idx = Number(target.dataset.condIdx);
+                const prop = target.dataset.condProp;
+                const item = automation.conditions?.[idx];
+                if (item && prop) {
+                    item[prop] = target.value;
+                    if (prop === 'kind') {
+                        item.op = item.kind === 'type' ? 'is' : (item.op || 'contains');
+                        item.value = item.kind === 'type' ? (item.value || 'chat') : (item.value || '');
+                    }
                 }
-            });
+            } else if (target.dataset && target.dataset.actionIdx !== undefined) {
+                const idx = Number(target.dataset.actionIdx);
+                const prop = target.dataset.actionProp;
+                const item = automation.actions?.[idx];
+                if (item && prop) {
+                    if (prop === 'ms') {
+                        item.ms = Number(target.value) || 0;
+                    } else {
+                        item[prop] = target.value;
+                    }
+                    if (prop === 'type' && item.type === 'delay') {
+                        item.ms = item.ms || 500;
+                    }
+                }
+            }
+
+            scriptEditorState.automation = automation;
+            scriptEditorSyncFilterFromAutomation();
+            scriptEditorRenderBuilder();
+        });
+    }
+
+    // Load chats for picker
+    (async () => {
+        try {
+            const list = (Array.isArray(chats) && chats.length) ? chats : await api('api/chats');
+            scriptEditorState.chats = Array.isArray(list) ? list : [];
+        } catch (e) {
+            scriptEditorState.chats = [];
         }
-    }, 100);
+        scriptEditorRenderChatPicker();
+        scriptEditorRenderBuilder();
+    })();
+
+    if (triggerEl) {
+        triggerEl.addEventListener('change', () => {
+            if (!scriptEditorState) return;
+            scriptEditorState.triggerType = triggerEl.value;
+            const builderTabEl = document.getElementById('scriptTabBuilder');
+            if (builderTabEl) {
+                const disabled = scriptEditorState.triggerType !== 'message';
+                builderTabEl.toggleAttribute('disabled', disabled);
+                builderTabEl.classList.toggle('disabled', disabled);
+            }
+            if (scriptEditorState.triggerType !== 'message') {
+                scriptEditorSetMode('code', { seedFromBuilder: false });
+            }
+        });
+    }
+
+    if (id) {
+        loadScriptForEdit(id);
+    } else {
+        scriptEditorRenderChatPicker();
+        scriptEditorRenderBuilder();
+        scriptEditorSetMode('builder');
+    }
 }
 
 async function loadScriptForEdit(id) {
     try {
         const script = await api('api/scripts/' + id);
+        if (!scriptEditorState) return;
+        scriptEditorState.codeDraft = script.code || '// Script kodunuz\n';
+
+        const filter = scriptEditorParseTriggerFilter(script.trigger_filter);
+        scriptEditorState.filter = filter;
+
+        const chatIds = scriptEditorExtractChatIds(filter);
+        scriptEditorState.selectedChatIds = new Set(chatIds);
+
+        const automation = filter?.automation && typeof filter.automation === 'object'
+            ? filter.automation
+            : null;
+        scriptEditorState.automation = automation || createDefaultAutomationConfig();
+        scriptEditorSyncFilterFromAutomation();
+
         document.getElementById('scriptNameEditor').value = script.name;
         document.getElementById('scriptDescEditor').value = script.description || '';
-        document.getElementById('scriptTriggerEditor').value = script.trigger_type;
-        if (monacoEditor) monacoEditor.setValue(script.code);
+        document.getElementById('scriptTriggerEditor').value = script.trigger_type || 'message';
+        scriptEditorState.triggerType = script.trigger_type || 'message';
+        const builderTabEl = document.getElementById('scriptTabBuilder');
+        if (builderTabEl) {
+            const disabled = scriptEditorState.triggerType !== 'message';
+            builderTabEl.toggleAttribute('disabled', disabled);
+            builderTabEl.classList.toggle('disabled', disabled);
+        }
+
+        scriptEditorRenderChatPicker();
+        scriptEditorRenderBuilder();
+
+        const startMode = automation ? 'builder' : 'code';
+        scriptEditorSetMode(startMode, { seedFromBuilder: false });
+        if (startMode === 'code') {
+            scriptEditorEnsureMonaco(scriptEditorState.codeDraft);
+            if (monacoEditor) {
+                monacoEditor.setValue(scriptEditorState.codeDraft);
+                setTimeout(() => monacoEditor.layout(), 50);
+            } else {
+                setTimeout(() => {
+                    if (monacoEditor) {
+                        monacoEditor.setValue(scriptEditorState.codeDraft);
+                        monacoEditor.layout();
+                    }
+                }, 250);
+            }
+        }
     } catch (err) {
         showToast('Script yuklenemedi: ' + err.message, 'error');
     }
 }
 
+function scriptEditorValidateBuilder() {
+    const automation = scriptEditorState?.automation;
+    if (!automation) return { ok: false, error: 'Otomasyon verisi bulunamadi' };
+
+    const actions = Array.isArray(automation.actions) ? automation.actions : [];
+    if (!actions.length) return { ok: false, error: 'En az 1 aksiyon ekleyin' };
+
+    const invalidAction = actions.find((a) => {
+        if (a.type === 'delay') return false;
+        return !String(a.text || '').trim();
+    });
+    if (invalidAction) return { ok: false, error: 'Bos mesaj gonderilemez (aksiyon metnini doldurun)' };
+
+    const hasNoConditions = !(Array.isArray(automation.conditions) && automation.conditions.length);
+    return { ok: true, warnNoConditions: hasNoConditions };
+}
+
 async function saveScriptCode() {
+    if (!scriptEditorState) return;
+    const name = document.getElementById('scriptNameEditor').value;
+    const description = document.getElementById('scriptDescEditor').value;
+    const triggerType = document.getElementById('scriptTriggerEditor').value;
+
+    const selectedChatIds = scriptEditorGetSelectedChatIds();
+    if (triggerType === 'message' && selectedChatIds.length === 0) {
+        showToast('Mesaj scripti icin en az 1 hedef sohbet secin', 'error');
+        return;
+    }
+
+    const filter = { ...(scriptEditorState.filter || {}) };
+    if (selectedChatIds.length) {
+        filter.chatIds = selectedChatIds;
+    } else {
+        delete filter.chatIds;
+    }
+    delete filter.chat_ids;
+
+    let code = '';
+
+    if (scriptEditorState.mode === 'builder') {
+        const validation = scriptEditorValidateBuilder();
+        if (!validation.ok) {
+            showToast(validation.error, 'error');
+            return;
+        }
+        if (validation.warnNoConditions) {
+            if (!confirm('Kosul eklemediniz. Secilen sohbetlerde her mesajda calisacak. Devam edilsin mi?')) {
+                return;
+            }
+        }
+
+        scriptEditorSyncFilterFromAutomation();
+        filter.automation = scriptEditorState.automation;
+        code = scriptEditorGenerateAutomationCode();
+    } else {
+        delete filter.automation;
+        code = monacoEditor ? monacoEditor.getValue() : (scriptEditorState.codeDraft || '');
+    }
+
     const data = {
-        name: document.getElementById('scriptNameEditor').value,
-        description: document.getElementById('scriptDescEditor').value,
-        code: monacoEditor ? monacoEditor.getValue() : '',
-        trigger_type: document.getElementById('scriptTriggerEditor').value
+        name,
+        description,
+        code,
+        trigger_type: triggerType,
+        trigger_filter: filter
     };
 
     try {
@@ -4399,7 +5113,7 @@ async function saveScriptCode() {
         } else {
             await api('api/scripts', 'POST', data);
         }
-        document.querySelector('.modal-overlay').remove();
+        closeScriptEditor();
         loadScriptsData();
         showToast('Script kaydedildi', 'success');
     } catch (err) {
@@ -4408,7 +5122,10 @@ async function saveScriptCode() {
 }
 
 async function testScriptCode() {
-    const code = monacoEditor ? monacoEditor.getValue() : '';
+    if (!scriptEditorState) return;
+    const code = scriptEditorState.mode === 'builder'
+        ? scriptEditorGenerateAutomationCode()
+        : (monacoEditor ? monacoEditor.getValue() : (scriptEditorState.codeDraft || ''));
     try {
         const result = await api('api/scripts/test', 'POST', { code });
         if (result.success) {
@@ -4939,6 +5656,11 @@ Object.assign(window, {
     toggleTheme,
     updateAccentColor,
     updateWallpaperChoice,
+    updateFontFamily,
+    updateFontFamilyCustom,
+    updateTextPrimaryColor,
+    updateTextSecondaryColor,
+    resetTextColors,
     updateFontSize,
     updateInterfaceScale,
     toggleEdgeToEdgeLayout,
@@ -5010,6 +5732,8 @@ Object.assign(window, {
     assignUserRole,
     deleteUser,
     migrateToDrive,
+    showScriptEditor,
+    closeScriptEditor,
     saveScriptCode,
     testScriptCode,
     toggleAutoReply,

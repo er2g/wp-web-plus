@@ -2,6 +2,7 @@
  * WhatsApp Web Panel - WhatsApp Client Module v5 (Optimized)
  * Fast sync with batching, caching, and parallel processing
  */
+/* global window */
 const { Client, LocalAuth, MessageMedia, Message } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
 const crypto = require('crypto');

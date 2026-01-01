@@ -2101,6 +2101,212 @@ body.compact .message-row.stacked {
     color: var(--text-light);
 }
 
+/* Script Editor (Chat-scoped Automation Builder) */
+.script-tabs {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.script-tab {
+    padding: 8px 14px;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    cursor: pointer;
+    font-size: 13px;
+    transition: background-color 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s;
+}
+
+.script-tab:hover {
+    background-color: var(--bg-hover);
+}
+
+.script-tab.active {
+    background-color: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+}
+
+.script-tab.disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.chat-scope-picker {
+    margin-top: 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background-color: var(--bg-secondary);
+    max-height: 220px;
+    overflow: auto;
+    padding: 6px;
+}
+
+.chat-scope-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background-color 0.15s;
+}
+
+.chat-scope-item:hover {
+    background-color: var(--bg-hover);
+}
+
+.chat-scope-checkbox {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    flex-shrink: 0;
+}
+
+.chat-scope-avatar {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background-color: var(--bg-active);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+}
+
+.chat-scope-avatar.group {
+    background-color: #00a884;
+    border-color: #00a884;
+}
+
+.chat-scope-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.chat-scope-avatar i {
+    font-size: 18px;
+    color: var(--text-light);
+}
+
+.chat-scope-avatar.group i {
+    color: #fff;
+}
+
+.chat-scope-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.chat-scope-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.chat-scope-meta {
+    font-size: 11px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.chat-scope-footer {
+    margin-top: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.builder-section {
+    margin-bottom: 14px;
+}
+
+.builder-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+}
+
+.builder-help {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.35;
+}
+
+.builder-help code {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 11.5px;
+}
+
+.builder-row {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    margin-bottom: 10px;
+}
+
+.builder-row .form-input {
+    min-width: 0;
+}
+
+.builder-input {
+    flex: 1;
+}
+
+.builder-remove {
+    padding: 8px 10px;
+    min-width: 40px;
+}
+
+.builder-empty {
+    padding: 8px 4px;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.builder-action-row textarea {
+    min-height: 64px;
+    resize: vertical;
+}
+
+.builder-code-preview summary {
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+.script-code-preview {
+    margin-top: 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background-color: var(--bg-secondary);
+    padding: 10px;
+    font-size: 12px;
+    color: var(--text-primary);
+    white-space: pre;
+    overflow: auto;
+    max-height: 240px;
+}
+
 /* Stats Cards */
 .stats-grid {
     display: grid;

@@ -11,28 +11,64 @@ class ScriptRunner {
         this.db = db;
         this.whatsapp = whatsapp;
         this.runningScripts = new Map();
+        this.warnedMissingScope = new Set();
     }
 
     setWhatsApp(whatsapp) {
         this.whatsapp = whatsapp;
     }
 
+    parseTriggerFilter(script) {
+        if (!script || !script.trigger_filter) return null;
+        if (typeof script.trigger_filter !== 'string') return null;
+        try {
+            const parsed = JSON.parse(script.trigger_filter);
+            return parsed && typeof parsed === 'object' ? parsed : null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    getAllowedChatIds(script) {
+        const triggerType = script?.trigger_type || 'message';
+        const filter = this.parseTriggerFilter(script);
+        const raw = filter?.chatIds ?? filter?.chat_ids;
+        if (raw === undefined || raw === null) {
+            return triggerType === 'message' ? [] : null;
+        }
+        const list = Array.isArray(raw) ? raw : [raw];
+        const normalized = list
+            .map((value) => (typeof value === 'string' ? value.trim() : String(value || '').trim()))
+            .filter(Boolean);
+        return Array.from(new Set(normalized));
+    }
+
     // Create sandboxed context for script execution
-    createContext(scriptId, triggerData) {
+    createContext(script, triggerData) {
         const self = this;
+        const scriptId = script?.id || 0;
         
         // Create a null-prototype object to prevent prototype chain attacks
         const context = Object.create(null);
+        const allowedChatIds = self.getAllowedChatIds(script);
+        const allowedChatSet = Array.isArray(allowedChatIds) ? new Set(allowedChatIds) : null;
 
         // Define properties directly on the null-prototype object
         Object.defineProperties(context, {
             // Messaging
             sendMessage: {
                 value: async (chatId, message) => {
+                    const targetChatId = typeof chatId === 'string' ? chatId.trim() : '';
+                    if (!targetChatId) {
+                        throw new Error('chatId gerekli');
+                    }
+                    if (allowedChatSet && !allowedChatSet.has(targetChatId)) {
+                        throw new Error('Kapsam engeli: Bu script sadece secilen sohbetlere mesaj gonderebilir');
+                    }
                     if (!self.whatsapp || !self.whatsapp.isReady()) {
                         throw new Error('WhatsApp not connected');
                     }
-                    return await self.whatsapp.sendMessage(chatId, message);
+                    return await self.whatsapp.sendMessage(targetChatId, message);
                 },
                 writable: false, configurable: false
             },
@@ -41,6 +77,9 @@ class ScriptRunner {
                 value: async (message) => {
                     if (!triggerData || !triggerData.chatId) {
                         throw new Error('No chat context for reply');
+                    }
+                    if (allowedChatSet && !allowedChatSet.has(triggerData.chatId)) {
+                        throw new Error('Kapsam engeli: Bu sohbete yanit gonderilemez');
                     }
                     return await self.whatsapp.sendMessage(triggerData.chatId, message);
                 },
@@ -64,6 +103,11 @@ class ScriptRunner {
             // Trigger data
             msg: { value: triggerData, writable: false, configurable: false },
             message: { value: triggerData, writable: false, configurable: false },
+            allowedChats: {
+                value: Array.isArray(allowedChatIds) ? Object.freeze([...allowedChatIds]) : Object.freeze([]),
+                writable: false,
+                configurable: false
+            },
 
             // Utilities
             console: {
@@ -176,7 +220,7 @@ class ScriptRunner {
         const startTime = Date.now();
 
         try {
-            const context = this.createContext(script.id, triggerData);
+            const context = this.createContext(script, triggerData);
             vm.createContext(context);
 
             // Wrap code in async function to support await
@@ -221,10 +265,22 @@ class ScriptRunner {
 
         for (const script of scripts) {
             try {
-                // Check filter if exists
-                if (script.trigger_filter) {
-                    const filter = JSON.parse(script.trigger_filter);
+                const filter = this.parseTriggerFilter(script);
+                const chatIds = this.getAllowedChatIds(script);
+                if (!Array.isArray(chatIds) || chatIds.length === 0) {
+                    if (!this.warnedMissingScope.has(script.id)) {
+                        this.warnedMissingScope.add(script.id);
+                        this.scriptLog(script.id, 'warn', 'Script hedef sohbet secilmedigi icin calistirilmadi');
+                    }
+                    continue;
+                }
 
+                if (!chatIds.includes(msgData.chatId)) {
+                    continue;
+                }
+
+                // Check filter if exists
+                if (filter) {
                     // Filter by sender
                     if (filter.from && !msgData.from.includes(filter.from)) continue;
 

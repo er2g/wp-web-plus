@@ -4,7 +4,7 @@ const { z } = require('zod');
 
 const { requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
-const { LIMITS } = require('../../lib/apiValidation');
+const { LIMITS, validateChatId } = require('../../lib/apiValidation');
 const { queryLimit } = require('../../lib/zodHelpers');
 const { sendError } = require('../../lib/httpResponses');
 
@@ -51,6 +51,42 @@ const scriptLogsQuerySchema = z.object({
     limit: queryLimit({ defaultValue: 50, max: LIMITS.PAGINATION.SCRIPT_LOGS })
 });
 
+function parseFilterJson(raw) {
+    if (!raw) return null;
+    if (typeof raw !== 'string') return null;
+    try {
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+function normalizeChatIds(raw) {
+    const list = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+    const normalized = list
+        .map((value) => (typeof value === 'string' ? value.trim() : String(value || '').trim()))
+        .filter(Boolean);
+
+    const unique = Array.from(new Set(normalized));
+    return unique;
+}
+
+function ensureMessageChatScope(filterObj) {
+    const rawChatIds = filterObj?.chatIds ?? filterObj?.chat_ids;
+    const chatIds = normalizeChatIds(rawChatIds);
+    if (!chatIds.length) {
+        return { ok: false, error: 'Mesaj scripti icin en az 1 hedef sohbet secmelisiniz' };
+    }
+    const invalid = chatIds.find((id) => !validateChatId(id));
+    if (invalid) {
+        return { ok: false, error: `Gecersiz sohbet id: ${invalid}` };
+    }
+    const nextFilter = { ...(filterObj || {}), chatIds };
+    delete nextFilter.chat_ids;
+    return { ok: true, filter: nextFilter };
+}
+
 router.get('/', requireRole(['admin']), (req, res) => {
     res.json(req.account.db.scripts.getAll.all());
 });
@@ -63,12 +99,22 @@ router.get('/:id', requireRole(['admin']), (req, res) => {
 
 router.post('/', requireRole(['admin']), validate({ body: scriptUpsertSchema }), (req, res) => {
     const { name, description, code, trigger_type, trigger_filter, is_active } = req.validatedBody;
-    const filterJson = trigger_filter ? JSON.stringify(trigger_filter) : null;
+    const resolvedTriggerType = trigger_type || 'message';
+    let resolvedFilter = trigger_filter || null;
+    if (resolvedTriggerType === 'message') {
+        const scope = ensureMessageChatScope(resolvedFilter);
+        if (!scope.ok) {
+            return sendError(req, res, 400, scope.error);
+        }
+        resolvedFilter = scope.filter;
+    }
+
+    const filterJson = resolvedFilter ? JSON.stringify(resolvedFilter) : null;
     const result = req.account.db.scripts.create.run(
         name,
         description || '',
         code,
-        trigger_type || 'message',
+        resolvedTriggerType,
         filterJson,
         is_active !== false ? 1 : 0
     );
@@ -85,12 +131,24 @@ router.put('/:id', requireRole(['admin']), validate({ body: scriptUpsertSchema }
 
     const resolvedTriggerType = trigger_type || existing.trigger_type || 'message';
     const resolvedDescription = description === undefined ? (existing.description || '') : description;
-    const resolvedFilterJson = trigger_filter === undefined
+    let resolvedFilterJson = trigger_filter === undefined
         ? existing.trigger_filter
         : trigger_filter === null
             ? null
             : JSON.stringify(trigger_filter);
     const resolvedIsActive = is_active === undefined ? existing.is_active : (is_active ? 1 : 0);
+
+    if (resolvedTriggerType === 'message') {
+        const filterObj = trigger_filter === undefined
+            ? parseFilterJson(existing.trigger_filter)
+            : trigger_filter;
+
+        const scope = ensureMessageChatScope(filterObj);
+        if (!scope.ok) {
+            return sendError(req, res, 400, scope.error);
+        }
+        resolvedFilterJson = JSON.stringify(scope.filter);
+    }
 
     req.account.db.scripts.update.run(
         name,
