@@ -1298,7 +1298,29 @@ class WhatsAppClient {
                         if (!contact) {
                             try {
                                 const models = window.Store?.Contact?.getModelsArray?.() || [];
-                                contact = models.find((c) => c?.id?._serialized === contactId) || null;
+                                const matchesWid = (value) => {
+                                    if (!value) return false;
+                                    if (typeof value === 'string') return value === contactId;
+                                    if (typeof value._serialized === 'string') return value._serialized === contactId;
+                                    if (value.id && typeof value.id._serialized === 'string') return value.id._serialized === contactId;
+                                    return false;
+                                };
+                                contact = models.find((c) => {
+                                    if (!c || typeof c !== 'object') return false;
+                                    if (c?.id?._serialized === contactId) return true;
+                                    if (matchesWid(c?.lid)) return true;
+                                    if (matchesWid(c?._lid)) return true;
+                                    if (matchesWid(c?.phoneNumber)) return true;
+                                    if (matchesWid(c?.wid)) return true;
+                                    try {
+                                        const entries = Object.entries(c);
+                                        for (let i = 0; i < entries.length && i < 25; i++) {
+                                            const [, value] = entries[i];
+                                            if (matchesWid(value)) return true;
+                                        }
+                                    } catch (e) {}
+                                    return false;
+                                }) || null;
                             } catch (e) {
                                 contact = null;
                             }
@@ -1338,27 +1360,25 @@ class WhatsAppClient {
             this.contactCache.set(chatId, contact);
             return contact;
         } catch (e) {
-            if (chatId.endsWith('@lid')) {
-                const model = await this.getContactModelFallback(chatId);
-                if (model) {
-                    const serializedId = typeof model.id === 'string'
-                        ? model.id
-                        : (model.id && typeof model.id._serialized === 'string' ? model.id._serialized : chatId);
-                    const userid = model.userid !== undefined && model.userid !== null ? String(model.userid) : '';
-                    const number = userid ? userid.replace(/[^\d]/g, '') : null;
-                    const contact = {
-                        id: { _serialized: serializedId },
-                        name: model.name || null,
-                        shortName: model.shortName || null,
-                        pushname: model.pushname || null,
-                        verifiedName: model.verifiedName || null,
-                        number: number || null,
-                        isMyContact: Boolean(model.isMyContact),
-                        isWAContact: Boolean(model.isWAContact)
-                    };
-                    this.contactCache.set(chatId, contact);
-                    return contact;
-                }
+            const model = await this.getContactModelFallback(chatId);
+            if (model) {
+                const serializedId = typeof model.id === 'string'
+                    ? model.id
+                    : (model.id && typeof model.id._serialized === 'string' ? model.id._serialized : chatId);
+                const userid = model.userid !== undefined && model.userid !== null ? String(model.userid) : '';
+                const number = userid ? userid.replace(/[^\d]/g, '') : null;
+                const contact = {
+                    id: { _serialized: serializedId },
+                    name: model.name || null,
+                    shortName: model.shortName || null,
+                    pushname: model.pushname || null,
+                    verifiedName: model.verifiedName || null,
+                    number: number || null,
+                    isMyContact: Boolean(model.isMyContact),
+                    isWAContact: Boolean(model.isWAContact)
+                };
+                this.contactCache.set(chatId, contact);
+                return contact;
             }
             return null;
         }
