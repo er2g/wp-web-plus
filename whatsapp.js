@@ -22,7 +22,15 @@ const CONSTANTS = {
     PROGRESS_THROTTLE_MS: 500,
     SYNC_CHAT_MAX_RETRIES: 3,
     SYNC_CHAT_BACKOFF_BASE_MS: 1500,
-    SYNC_CHAT_BACKOFF_MAX_MS: 15000
+    SYNC_CHAT_BACKOFF_MAX_MS: 15000,
+    FULL_SYNC_LOCK_TTL_MS: 5 * 60 * 1000,
+    FULL_SYNC_LOCK_RENEW_MS: 30 * 1000,
+    FULL_SYNC_CHAT_CONCURRENCY: 1,
+    FULL_SYNC_MEDIA_CONCURRENCY: 2,
+    FULL_SYNC_PROFILE_CONCURRENCY: 2,
+    FULL_SYNC_PAGE_LIMIT: 250,
+    FULL_SYNC_MAX_MEDIA_ATTEMPTS: 5,
+    FULL_SYNC_MAX_PROFILE_ATTEMPTS: 5
 };
 
 class WhatsAppClient {
@@ -52,7 +60,10 @@ class WhatsAppClient {
         this.contactCache = new Map();
         this.chatProfileCache = new Map();
         this.lastProgressEmit = 0;
-        this.syncState = null;
+        this.fullSyncPromise = null;
+        this.fullSyncRunId = null;
+        this.fullSyncLockOwner = null;
+        this.fullSyncLockTimer = null;
 
         this.mediaQueue = [];
         this.mediaQueueIds = new Set();
@@ -501,41 +512,63 @@ class WhatsAppClient {
         console.log('[' + level.toUpperCase() + '] [' + category + '] ' + message);
     }
 
-    loadSyncState() {
-        try {
-            const state = this.db?.whatsappSyncState?.get?.get();
-            this.syncState = state || null;
-            return this.syncState;
-        } catch (e) {
-            this.syncState = null;
-            return null;
+    getFullSyncConfig() {
+        return {
+            chatConcurrency: Number(this.config.SYNC_CHAT_CONCURRENCY) || CONSTANTS.FULL_SYNC_CHAT_CONCURRENCY,
+            mediaConcurrency: Number(this.config.SYNC_MEDIA_CONCURRENCY) || CONSTANTS.FULL_SYNC_MEDIA_CONCURRENCY,
+            profileConcurrency: Number(this.config.SYNC_PROFILE_CONCURRENCY) || CONSTANTS.FULL_SYNC_PROFILE_CONCURRENCY,
+            pageLimit: Math.max(50, Number(this.config.SYNC_PAGE_LIMIT) || CONSTANTS.FULL_SYNC_PAGE_LIMIT),
+            lockTtlMs: Number(this.config.SYNC_LOCK_TTL_MS) || CONSTANTS.FULL_SYNC_LOCK_TTL_MS,
+            lockRenewMs: Number(this.config.SYNC_LOCK_RENEW_MS) || CONSTANTS.FULL_SYNC_LOCK_RENEW_MS,
+            maxMediaAttempts: Number(this.config.SYNC_MAX_MEDIA_ATTEMPTS) || CONSTANTS.FULL_SYNC_MAX_MEDIA_ATTEMPTS,
+            maxProfileAttempts: Number(this.config.SYNC_MAX_PROFILE_ATTEMPTS) || CONSTANTS.FULL_SYNC_MAX_PROFILE_ATTEMPTS,
+            cutoffDate: this.config.SYNC_CUTOFF_DATE || null
+        };
+    }
+
+    parseCutoffMs(cutoffDate) {
+        if (!cutoffDate) return null;
+        const parsed = Date.parse(String(cutoffDate));
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    acquireFullSyncLock() {
+        const ownerId = `${this.config.INSTANCE_ID || process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+        const now = Date.now();
+        const expiresAt = now + this.getFullSyncConfig().lockTtlMs;
+        const result = this.db.locks.acquire.run('whatsapp_full_sync', ownerId, now, expiresAt);
+        if (result.changes > 0) {
+            this.fullSyncLockOwner = ownerId;
+            return true;
         }
+        return false;
     }
 
-    persistSyncState({ phase, lastChatId = null, lastMessageTs = null, attemptCount = 0, lastError = null }) {
-        try {
-            this.db?.whatsappSyncState?.upsert?.run(
-                phase,
-                lastChatId,
-                lastMessageTs,
-                attemptCount,
-                lastError
-            );
-            this.syncState = {
-                phase,
-                last_chat_id: lastChatId,
-                last_message_ts: lastMessageTs,
-                attempt_count: attemptCount,
-                last_error: lastError
-            };
-        } catch (e) {}
+    startFullSyncLockRenewal() {
+        if (!this.fullSyncLockOwner) return;
+        const { lockTtlMs, lockRenewMs } = this.getFullSyncConfig();
+        if (this.fullSyncLockTimer) clearInterval(this.fullSyncLockTimer);
+        this.fullSyncLockTimer = setInterval(() => {
+            try {
+                const now = Date.now();
+                const expiresAt = now + lockTtlMs;
+                this.db.locks.acquire.run('whatsapp_full_sync', this.fullSyncLockOwner, now, expiresAt);
+            } catch (e) {
+                this.log('warn', 'sync', 'Failed to renew full sync lock: ' + e.message);
+            }
+        }, lockRenewMs);
     }
 
-    clearSyncState() {
+    releaseFullSyncLock() {
+        if (this.fullSyncLockTimer) {
+            clearInterval(this.fullSyncLockTimer);
+            this.fullSyncLockTimer = null;
+        }
+        if (!this.fullSyncLockOwner) return;
         try {
-            this.db?.whatsappSyncState?.clear?.run();
-            this.syncState = null;
+            this.db.locks.release.run('whatsapp_full_sync', this.fullSyncLockOwner);
         } catch (e) {}
+        this.fullSyncLockOwner = null;
     }
 
     enqueueMediaDownload(messageId) {
@@ -1510,16 +1543,12 @@ class WhatsAppClient {
 
     async executeFullSyncRun(runId) {
         try {
-            this.contactCache.clear();
-            const existingState = this.loadSyncState();
-            const resumedPhase = existingState?.phase && existingState.phase !== 'done' && existingState.phase !== 'error'
-                ? existingState.phase
-                : null;
-            const attemptCount = (existingState?.attempt_count || 0) + 1;
+            if (!this.isReady()) {
+                throw new Error('WhatsApp not connected');
+            }
 
-            this.syncProgress = { syncing: true, current: 0, total: 0, chat: 'Loading chats...', phase: resumedPhase || 'loading' };
-            this.emit('sync_progress', this.syncProgress);
-            this.log('info', 'sync', 'Starting optimized sync...');
+            const config = this.getFullSyncConfig();
+            const cutoffMs = this.parseCutoffMs(config.cutoffDate);
 
             const chats = await this.client.getChats();
             chats.sort((a, b) => {
@@ -1527,43 +1556,53 @@ class WhatsAppClient {
                 const bId = b?.id?._serialized || '';
                 return aId.localeCompare(bId);
             });
-            const lastChatId = existingState?.last_chat_id || null;
-            const findResumeIndex = (list, id) => {
-                if (!id) return 0;
-                const idx = list.findIndex(chat => chat?.id?._serialized === id);
-                return idx >= 0 ? idx + 1 : 0;
-            };
 
-            this.syncProgress.total = chats.length;
-            this.syncProgress.current = 0;
-            this.syncProgress.phase = resumedPhase || 'index';
-            this.syncProgress.chat = 'Indexing chats...';
-            this.emitProgress();
+            const totals = { chatsTotal: chats.length, chatsIndexed: 0, chatsBackfilled: 0 };
+            this.db.syncRuns.update.run('running', 'indexing', null, JSON.stringify(totals), runId);
 
-            // Phase 1: Quickly index chats so UI can render the full list early.
-            if (!resumedPhase || resumedPhase === 'index') {
-                const startIndex = resumedPhase === 'index' ? findResumeIndex(chats, lastChatId) : 0;
-                for (let i = startIndex; i < chats.length; i += 1) {
-                    const chat = chats[i];
-                    const chatId = chat?.id?._serialized || null;
-                    this.indexChat(chat);
-                    this.syncProgress.current += 1;
-                    this.syncProgress.chat = chat?.name || chat?.id?.user || 'Indexing...';
-                    this.persistSyncState({
-                        phase: 'index',
-                        lastChatId: chatId,
-                        lastMessageTs: chat?.lastMessage?.timestamp ? chat.lastMessage.timestamp * 1000 : null,
-                        attemptCount,
-                        lastError: null
-                    });
-                    this.emitProgress();
-                    await new Promise(resolve => setImmediate(resolve));
+            for (const chat of chats) {
+                const chatId = chat?.id?._serialized;
+                if (!chatId) continue;
+                const existingState = this.db.chatSyncState.getByChatIdAny.get(chatId);
+                if (!existingState || existingState.run_id !== runId) {
+                    this.db.chatSyncState.upsert.run(
+                        chatId,
+                        runId,
+                        'pending',
+                        null,
+                        null,
+                        null,
+                        null,
+                        0,
+                        null
+                    );
                 }
+
+                this.indexChat(chat);
+                totals.chatsIndexed += 1;
+                this.db.syncRuns.updateTotals.run(JSON.stringify(totals), runId);
+                await new Promise(resolve => setImmediate(resolve));
             }
 
-            if (!resumedPhase || resumedPhase === 'index') {
-                this.emit('sync_chats_indexed', { chats: chats.length });
-            }
+            this.emit('sync_chats_indexed', { chats: chats.length });
+
+            this.db.syncRuns.updatePhase.run('backfill', runId);
+
+            const chatConcurrency = Math.max(1, config.chatConcurrency);
+            const queue = chats.slice();
+            const workers = Array.from({ length: chatConcurrency }, () => (async () => {
+                while (queue.length) {
+                    const chat = queue.shift();
+                    if (!chat) return;
+                    const chatId = chat?.id?._serialized;
+                    if (!chatId) continue;
+
+                    const existing = this.db.chatSyncState.getByChatId.get(chatId, runId);
+                    if (existing?.done_history) {
+                        totals.chatsBackfilled += 1;
+                        this.db.syncRuns.updateTotals.run(JSON.stringify(totals), runId);
+                        continue;
+                    }
 
                     try {
                         await this.backfillChatHistory(chat, runId, config, cutoffMs);
@@ -1588,39 +1627,102 @@ class WhatsAppClient {
 
             await Promise.all(workers);
 
-            const processChunk = async (chunk) => {
-                const results = await Promise.all(chunk.map(chat => this.syncChat(chat)));
-                return results.reduce((sum, result) => sum + (result?.count || 0), 0);
-            };
+            this.db.syncRuns.updatePhase.run('media', runId);
+            await this.processMediaTasks(config);
 
-            const messageStartIndex = resumedPhase === 'messages'
-                ? findResumeIndex(chats, lastChatId)
-                : 0;
+            this.db.syncRuns.updatePhase.run('profile_pics', runId);
+            await this.processProfilePicTasks(config);
 
-            for (let i = messageStartIndex; i < chats.length; i += CONSTANTS.PARALLEL_CHATS) {
-                const chunk = chats.slice(i, i + CONSTANTS.PARALLEL_CHATS);
-                if (chunk.length) {
-                    this.syncProgress.chat = chunk[0].name || chunk[0].id.user || 'Syncing...';
-                    this.emitProgress();
+            this.db.syncRuns.update.run('done', 'done', null, JSON.stringify(totals), runId);
+            this.log('info', 'sync', `Full sync complete (run ${runId})`);
+        } catch (error) {
+            this.db.syncRuns.markError.run('error', error.message, runId);
+            throw error;
+        }
+    }
+
+    async backfillChatHistory(chat, runId, config, cutoffMs) {
+        const chatId = chat?.id?._serialized;
+        if (!chatId) return;
+
+        let state = this.db.chatSyncState.getByChatId.get(chatId, runId);
+        if (!state) {
+            this.db.chatSyncState.upsert.run(chatId, runId, 'pending', null, null, null, null, 0, null);
+            state = this.db.chatSyncState.getByChatId.get(chatId, runId);
+        }
+
+        if (state.done_history) return;
+
+        this.db.chatSyncState.upsert.run(
+            chatId,
+            runId,
+            'running',
+            state.cursor_type || null,
+            state.cursor_value || null,
+            state.oldest_msg_id || null,
+            state.newest_msg_id || null,
+            0,
+            null
+        );
+
+        let cursor = state.cursor_value || null;
+        let newestMsgId = state.newest_msg_id || null;
+        let oldestMsgId = state.oldest_msg_id || null;
+        let reachedEnd = false;
+
+        while (!reachedEnd) {
+            const page = await this.fetchMessagesWithRetry(chat, cursor, config.pageLimit);
+            if (!Array.isArray(page) || page.length === 0) {
+                break;
+            }
+
+            const pageOldest = page[page.length - 1];
+            const pageNewest = page[0];
+            if (!newestMsgId && pageNewest?.id?._serialized) {
+                newestMsgId = pageNewest.id._serialized;
+            }
+            if (pageOldest?.id?._serialized) {
+                oldestMsgId = pageOldest.id._serialized;
+            }
+
+            let filteredMessages = page;
+            if (cutoffMs) {
+                filteredMessages = page.filter(msg => (msg.timestamp * 1000) >= cutoffMs);
+                if (pageOldest?.timestamp && pageOldest.timestamp * 1000 < cutoffMs) {
+                    reachedEnd = true;
                 }
             }
 
-                const lastChunkChat = chunk[chunk.length - 1];
-                const lastChunkChatId = lastChunkChat?.id?._serialized || null;
-                const lastChunkMessageTs = lastChunkChat?.lastMessage?.timestamp
-                    ? lastChunkChat.lastMessage.timestamp * 1000
-                    : null;
+            const lastMsg = chat.lastMessage || pageNewest || null;
+            const lastPreview = lastMsg
+                ? (this.getMessageBody(lastMsg) || (lastMsg.hasMedia ? (lastMsg.type === 'document' ? '[Dosya]' : '[Medya]') : ''))
+                : '';
+            const lastAt = lastMsg?.timestamp
+                ? lastMsg.timestamp * 1000
+                : (chat.timestamp ? chat.timestamp * 1000 : Date.now());
+            const existingChat = this.db.chats.getById.get(chatId);
+            const profilePic = existingChat?.profile_pic || this.chatProfileCache.get(chatId) || null;
 
-                this.persistSyncState({
-                    phase: 'messages',
-                    lastChatId: lastChunkChatId,
-                    lastMessageTs: lastChunkMessageTs,
-                    attemptCount,
-                    lastError: null
-                });
-
-                this.syncProgress.current = processed;
-                this.emitProgress();
+            const syncTx = this.db.db.transaction(() => {
+                for (const msg of filteredMessages) {
+                    const body = this.getMessageBody(msg);
+                    this.db.messages.save.run(
+                        msg.id._serialized,
+                        chatId,
+                        msg.fromMe ? (this.info?.wid?.user || this.extractPhoneFromId(msg.from)) : this.getSenderNumber(null, msg),
+                        msg.to,
+                        msg.fromMe ? (this.info ? this.info.pushname : 'Me') : this.getSenderName(null, msg),
+                        body,
+                        msg.type,
+                        null,
+                        null,
+                        msg.mimetype || msg._data?.mimetype,
+                        chat.isGroup ? 1 : 0,
+                        msg.fromMe ? 1 : 0,
+                        msg.ack || 0,
+                        msg.timestamp * 1000
+                    );
+                }
 
                 this.db.chats.upsert.run(
                     chatId,
@@ -1642,12 +1744,19 @@ class WhatsAppClient {
             }
             this.db.profilePicTasks.upsert.run(chatId);
 
-            this.contactCache.clear();
-            this.syncProgress = { syncing: false, current: 0, total: 0, chat: '', phase: 'done' };
-            this.emit('sync_progress', this.syncProgress);
-            this.emit('sync_complete', { chats: chats.length, messages: totalMessages });
-            this.log('info', 'sync', 'Sync complete: ' + chats.length + ' chats, ' + totalMessages + ' messages');
-            this.clearSyncState();
+            cursor = pageOldest?.id?._serialized || null;
+
+            this.db.chatSyncState.upsert.run(
+                chatId,
+                runId,
+                'running',
+                'before_id',
+                cursor,
+                oldestMsgId,
+                newestMsgId,
+                0,
+                null
+            );
 
             if (!cursor) {
                 break;
@@ -1699,7 +1808,7 @@ class WhatsAppClient {
         const concurrency = Math.max(1, config.mediaConcurrency);
         const maxAttempts = Math.max(1, config.maxMediaAttempts);
 
-        while (true) {
+        for (;;) {
             const tasks = this.db.mediaTasks.getRunnable.all(concurrency);
             if (!tasks.length) break;
 
@@ -1741,7 +1850,7 @@ class WhatsAppClient {
         const concurrency = Math.max(1, config.profileConcurrency);
         const maxAttempts = Math.max(1, config.maxProfileAttempts);
 
-        while (true) {
+        for (;;) {
             const tasks = this.db.profilePicTasks.getRunnable.all(concurrency);
             if (!tasks.length) break;
 
@@ -1791,17 +1900,7 @@ class WhatsAppClient {
         try {
             totals = run.totals_json ? JSON.parse(run.totals_json) : {};
         } catch (e) {
-            this.syncProgress = { syncing: false, current: 0, total: 0, chat: '', phase: 'error' };
-            this.emit('sync_progress', this.syncProgress);
-            this.log('error', 'sync', 'Sync failed: ' + e.message);
-            this.persistSyncState({
-                phase: this.syncState?.phase || 'error',
-                lastChatId: this.syncState?.last_chat_id || null,
-                lastMessageTs: this.syncState?.last_message_ts || null,
-                attemptCount: (this.syncState?.attempt_count || 0) + 1,
-                lastError: e.message
-            });
-            return { success: false, error: e.message };
+            totals = {};
         }
 
         const chatsTotal = totals.chatsTotal || this.db.chatSyncState.countByRun.get(run.id).total;

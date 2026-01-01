@@ -238,13 +238,47 @@ function createDatabase(config) {
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
-    CREATE TABLE IF NOT EXISTS whatsapp_sync_state (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
+    CREATE TABLE IF NOT EXISTS sync_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        status TEXT NOT NULL,
         phase TEXT NOT NULL,
-        last_chat_id TEXT,
-        last_message_ts INTEGER,
-        attempt_count INTEGER DEFAULT 0,
+        started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        error TEXT,
+        totals_json TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS chat_sync_state (
+        chat_id TEXT PRIMARY KEY,
+        run_id INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        cursor_type TEXT,
+        cursor_value TEXT,
+        oldest_msg_id TEXT,
+        newest_msg_id TEXT,
+        done_history INTEGER DEFAULT 0,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        last_error TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS media_tasks (
+        message_id TEXT PRIMARY KEY,
+        chat_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        attempts INTEGER DEFAULT 0,
+        next_attempt_at DATETIME,
         last_error TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS profile_pic_tasks (
+        chat_id TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        attempts INTEGER DEFAULT 0,
+        next_attempt_at DATETIME,
+        last_error TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -387,6 +421,57 @@ function createDatabase(config) {
                         last_message_ts INTEGER,
                         attempt_count INTEGER DEFAULT 0,
                         last_error TEXT,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    );
+                `);
+            }
+        },
+        {
+            version: 11,
+            name: 'add_full_sync_tables',
+            apply: () => {
+                db.exec(`
+                    CREATE TABLE IF NOT EXISTS sync_runs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        status TEXT NOT NULL,
+                        phase TEXT NOT NULL,
+                        started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        error TEXT,
+                        totals_json TEXT
+                    );
+
+                    CREATE TABLE IF NOT EXISTS chat_sync_state (
+                        chat_id TEXT PRIMARY KEY,
+                        run_id INTEGER NOT NULL,
+                        status TEXT NOT NULL,
+                        cursor_type TEXT,
+                        cursor_value TEXT,
+                        oldest_msg_id TEXT,
+                        newest_msg_id TEXT,
+                        done_history INTEGER DEFAULT 0,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        last_error TEXT
+                    );
+
+                    CREATE TABLE IF NOT EXISTS media_tasks (
+                        message_id TEXT PRIMARY KEY,
+                        chat_id TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        attempts INTEGER DEFAULT 0,
+                        next_attempt_at DATETIME,
+                        last_error TEXT,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE TABLE IF NOT EXISTS profile_pic_tasks (
+                        chat_id TEXT PRIMARY KEY,
+                        status TEXT NOT NULL,
+                        attempts INTEGER DEFAULT 0,
+                        next_attempt_at DATETIME,
+                        last_error TEXT,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                     );
                 `);
@@ -707,21 +792,197 @@ function createDatabase(config) {
         `)
     };
 
-    const whatsappSyncState = {
-        get: db.prepare('SELECT * FROM whatsapp_sync_state WHERE id = 1'),
+    const syncRuns = {
+        create: db.prepare(`
+            INSERT INTO sync_runs (status, phase, started_at, updated_at, error, totals_json)
+            VALUES (?, ?, datetime('now'), datetime('now'), ?, ?)
+        `),
+        getRunning: db.prepare(`
+            SELECT * FROM sync_runs
+            WHERE status = 'running'
+            ORDER BY started_at DESC
+            LIMIT 1
+        `),
+        getLatest: db.prepare(`
+            SELECT * FROM sync_runs
+            ORDER BY started_at DESC
+            LIMIT 1
+        `),
+        getById: db.prepare('SELECT * FROM sync_runs WHERE id = ?'),
+        update: db.prepare(`
+            UPDATE sync_runs
+            SET status = ?, phase = ?, error = ?, totals_json = ?, updated_at = datetime('now')
+            WHERE id = ?
+        `),
+        updatePhase: db.prepare(`
+            UPDATE sync_runs
+            SET phase = ?, updated_at = datetime('now')
+            WHERE id = ?
+        `),
+        updateTotals: db.prepare(`
+            UPDATE sync_runs
+            SET totals_json = ?, updated_at = datetime('now')
+            WHERE id = ?
+        `),
+        markError: db.prepare(`
+            UPDATE sync_runs
+            SET status = 'failed',
+                phase = ?,
+                error = ?,
+                updated_at = datetime('now')
+            WHERE id = ?
+        `)
+    };
+
+    const chatSyncState = {
+        getByChatId: db.prepare(`
+            SELECT * FROM chat_sync_state WHERE chat_id = ? AND run_id = ?
+        `),
+        getByChatIdAny: db.prepare(`
+            SELECT * FROM chat_sync_state WHERE chat_id = ?
+        `),
         upsert: db.prepare(`
-            INSERT INTO whatsapp_sync_state
-                (id, phase, last_chat_id, last_message_ts, attempt_count, last_error, updated_at)
-            VALUES (1, ?, ?, ?, ?, ?, datetime('now'))
-            ON CONFLICT(id) DO UPDATE SET
-                phase = excluded.phase,
-                last_chat_id = excluded.last_chat_id,
-                last_message_ts = excluded.last_message_ts,
-                attempt_count = excluded.attempt_count,
+            INSERT INTO chat_sync_state
+                (chat_id, run_id, status, cursor_type, cursor_value, oldest_msg_id, newest_msg_id, done_history, updated_at, last_error)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)
+            ON CONFLICT(chat_id) DO UPDATE SET
+                run_id = excluded.run_id,
+                status = excluded.status,
+                cursor_type = excluded.cursor_type,
+                cursor_value = excluded.cursor_value,
+                oldest_msg_id = excluded.oldest_msg_id,
+                newest_msg_id = excluded.newest_msg_id,
+                done_history = excluded.done_history,
                 last_error = excluded.last_error,
                 updated_at = datetime('now')
         `),
-        clear: db.prepare('DELETE FROM whatsapp_sync_state WHERE id = 1')
+        countByRun: db.prepare(`
+            SELECT COUNT(*) as total
+            FROM chat_sync_state
+            WHERE run_id = ?
+        `),
+        countDoneHistory: db.prepare(`
+            SELECT COUNT(*) as total
+            FROM chat_sync_state
+            WHERE run_id = ? AND done_history = 1
+        `)
+    };
+
+    const mediaTasks = {
+        upsert: db.prepare(`
+            INSERT INTO media_tasks
+                (message_id, chat_id, status, attempts, next_attempt_at, last_error, created_at, updated_at)
+            VALUES (?, ?, 'pending', 0, NULL, NULL, datetime('now'), datetime('now'))
+            ON CONFLICT(message_id) DO UPDATE SET
+                chat_id = excluded.chat_id,
+                status = CASE
+                    WHEN media_tasks.status IN ('done', 'failed') THEN media_tasks.status
+                    ELSE excluded.status
+                END,
+                updated_at = datetime('now')
+        `),
+        getRunnable: db.prepare(`
+            SELECT * FROM media_tasks
+            WHERE status IN ('pending', 'running')
+              AND (next_attempt_at IS NULL OR datetime(next_attempt_at) <= datetime('now'))
+            ORDER BY updated_at ASC
+            LIMIT ?
+        `),
+        markRunning: db.prepare(`
+            UPDATE media_tasks
+            SET status = 'running', updated_at = datetime('now')
+            WHERE message_id = ? AND status IN ('pending', 'running')
+        `),
+        markDone: db.prepare(`
+            UPDATE media_tasks
+            SET status = 'done',
+                attempts = ?,
+                next_attempt_at = NULL,
+                last_error = NULL,
+                updated_at = datetime('now')
+            WHERE message_id = ?
+        `),
+        reschedule: db.prepare(`
+            UPDATE media_tasks
+            SET status = 'pending',
+                attempts = ?,
+                next_attempt_at = ?,
+                last_error = ?,
+                updated_at = datetime('now')
+            WHERE message_id = ?
+        `),
+        markFailed: db.prepare(`
+            UPDATE media_tasks
+            SET status = 'failed',
+                attempts = ?,
+                next_attempt_at = NULL,
+                last_error = ?,
+                updated_at = datetime('now')
+            WHERE message_id = ?
+        `),
+        countByStatus: db.prepare(`
+            SELECT status, COUNT(*) as total
+            FROM media_tasks
+            GROUP BY status
+        `)
+    };
+
+    const profilePicTasks = {
+        upsert: db.prepare(`
+            INSERT INTO profile_pic_tasks
+                (chat_id, status, attempts, next_attempt_at, last_error, created_at, updated_at)
+            VALUES (?, 'pending', 0, NULL, NULL, datetime('now'), datetime('now'))
+            ON CONFLICT(chat_id) DO UPDATE SET
+                status = CASE
+                    WHEN profile_pic_tasks.status IN ('done', 'failed') THEN profile_pic_tasks.status
+                    ELSE excluded.status
+                END,
+                updated_at = datetime('now')
+        `),
+        getRunnable: db.prepare(`
+            SELECT * FROM profile_pic_tasks
+            WHERE status IN ('pending', 'running')
+              AND (next_attempt_at IS NULL OR datetime(next_attempt_at) <= datetime('now'))
+            ORDER BY updated_at ASC
+            LIMIT ?
+        `),
+        markRunning: db.prepare(`
+            UPDATE profile_pic_tasks
+            SET status = 'running', updated_at = datetime('now')
+            WHERE chat_id = ? AND status IN ('pending', 'running')
+        `),
+        markDone: db.prepare(`
+            UPDATE profile_pic_tasks
+            SET status = 'done',
+                attempts = ?,
+                next_attempt_at = NULL,
+                last_error = NULL,
+                updated_at = datetime('now')
+            WHERE chat_id = ?
+        `),
+        reschedule: db.prepare(`
+            UPDATE profile_pic_tasks
+            SET status = 'pending',
+                attempts = ?,
+                next_attempt_at = ?,
+                last_error = ?,
+                updated_at = datetime('now')
+            WHERE chat_id = ?
+        `),
+        markFailed: db.prepare(`
+            UPDATE profile_pic_tasks
+            SET status = 'failed',
+                attempts = ?,
+                next_attempt_at = NULL,
+                last_error = ?,
+                updated_at = datetime('now')
+            WHERE chat_id = ?
+        `),
+        countByStatus: db.prepare(`
+            SELECT status, COUNT(*) as total
+            FROM profile_pic_tasks
+            GROUP BY status
+        `)
     };
 
     const maintenance = {
@@ -961,7 +1222,10 @@ function createDatabase(config) {
         contactTags,
         notes,
         whatsappSettings,
-        whatsappSyncState,
+        syncRuns,
+        chatSyncState,
+        mediaTasks,
+        profilePicTasks,
         maintenance,
         reports
     };
