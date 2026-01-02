@@ -13,7 +13,7 @@ class AiService {
         this.baseUrl = 'https://generativelanguage.googleapis.com/v1beta/models';
     }
 
-    async generateText({ prompt, apiKey, model, maxOutputTokens = 2048, temperature = 0.3 }) {
+    async generateText({ prompt, apiKey, model, maxOutputTokens = 4096, temperature = 0.3 }) {
         const effectiveKey = apiKey || this.apiKey;
         const effectiveModel = model || this.model;
         if (!effectiveKey) {

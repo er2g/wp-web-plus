@@ -423,6 +423,20 @@ async function saveChatAnalysisConfig() {
     }
 }
 
+async function persistChatAnalysisModel(model) {
+    const trimmed = String(model || '').trim();
+    if (!trimmed) return false;
+    if (chatAnalysisState.savedModel === trimmed) return true;
+    try {
+        const result = await api('api/ai/config', 'POST', { model: trimmed });
+        chatAnalysisState.savedModel = String(result?.model || trimmed);
+        return true;
+    } catch (err) {
+        showToast('Model kaydedilemedi: ' + err.message, 'error');
+        return false;
+    }
+}
+
 async function runChatAnalysis() {
     const activeChatId = (typeof currentChat !== 'undefined' ? currentChat : null);
     if (!activeChatId) {
@@ -445,6 +459,8 @@ async function runChatAnalysis() {
         showToast('Model secin', 'info');
         return;
     }
+
+    await persistChatAnalysisModel(model);
 
     if (countInput) countInput.value = String(messageCount);
 

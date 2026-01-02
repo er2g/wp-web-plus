@@ -140,7 +140,7 @@ router.post('/analyze-chat', requireRole(['admin']), validate({ body: aiChatAnal
             prompt: payloadText,
             apiKey,
             model: selectedModel,
-            maxOutputTokens: 2048,
+            maxOutputTokens: 4096,
             temperature: 0.3
         });
 
