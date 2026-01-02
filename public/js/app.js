@@ -48,6 +48,7 @@ let uiPreferences = {
     fontSize: '14.2',
     interfaceScale: 100,
     messageBubbleScale: 100,
+    chatMediaSize: 420,
     edgeToEdgeLayout: false,
     compactMode: false,
     bubbleStyle: 'rounded',
@@ -225,6 +226,11 @@ function loadLocalPreferences() {
         const parsed = Number.parseInt(bubbleScale, 10);
         if (Number.isFinite(parsed)) uiPreferences.messageBubbleScale = Math.max(60, Math.min(160, parsed));
     }
+    const chatMediaSize = localStorage.getItem('uiChatMediaSize');
+    if (chatMediaSize !== null) {
+        const parsed = Number.parseInt(chatMediaSize, 10);
+        if (Number.isFinite(parsed)) uiPreferences.chatMediaSize = Math.max(180, Math.min(520, parsed));
+    }
     uiPreferences.edgeToEdgeLayout = localStorage.getItem('uiEdgeToEdgeLayout') === 'true';
     uiPreferences.compactMode = localStorage.getItem('uiCompactMode') === 'true';
     uiPreferences.bubbleStyle = localStorage.getItem('uiBubbleStyle') || uiPreferences.bubbleStyle;
@@ -268,6 +274,7 @@ function applyCustomizations() {
     applyTextColors();
     applyInterfaceScale(uiPreferences.interfaceScale);
     applyMessageBubbleScale(uiPreferences.messageBubbleScale);
+    applyChatMediaSize(uiPreferences.chatMediaSize);
     applyEdgeToEdgeLayout(uiPreferences.edgeToEdgeLayout);
     applyDesktopBackgroundSettings();
     applyAppSurfaceOpacity(uiPreferences.appSurfaceOpacity);
@@ -292,6 +299,7 @@ async function saveUserPreferences() {
         localStorage.setItem('uiFontSize', uiPreferences.fontSize);
         localStorage.setItem('uiInterfaceScale', String(uiPreferences.interfaceScale));
         localStorage.setItem('uiMessageBubbleScale', String(uiPreferences.messageBubbleScale));
+        localStorage.setItem('uiChatMediaSize', String(uiPreferences.chatMediaSize));
         localStorage.setItem('uiEdgeToEdgeLayout', String(Boolean(uiPreferences.edgeToEdgeLayout)));
         localStorage.setItem('uiCompactMode', uiPreferences.compactMode);
         localStorage.setItem('uiBubbleStyle', uiPreferences.bubbleStyle);
@@ -378,6 +386,14 @@ function updateCustomizationUI() {
         const clamped = Number.isFinite(parsed) ? Math.max(60, Math.min(160, parsed)) : 100;
         if (messageBubbleScaleRange) messageBubbleScaleRange.value = String(clamped);
         if (messageBubbleScaleValue) messageBubbleScaleValue.textContent = String(clamped) + '%';
+    }
+    const chatMediaSizeRange = document.getElementById('chatMediaSizeRange');
+    const chatMediaSizeValue = document.getElementById('chatMediaSizeValue');
+    {
+        const parsed = Number.parseInt(String(uiPreferences.chatMediaSize ?? '420'), 10);
+        const clamped = Number.isFinite(parsed) ? Math.max(180, Math.min(520, parsed)) : 420;
+        if (chatMediaSizeRange) chatMediaSizeRange.value = String(clamped);
+        if (chatMediaSizeValue) chatMediaSizeValue.textContent = String(clamped) + 'px';
     }
     const toggleEdgeToEdgeLayout = document.getElementById('toggleEdgeToEdgeLayout');
     if (toggleEdgeToEdgeLayout) {
@@ -735,6 +751,23 @@ function applyMessageBubbleScale(value) {
     const clamped = Number.isFinite(parsed) ? Math.max(60, Math.min(160, parsed)) : 100;
     const scale = clamped / 100;
     document.documentElement.style.setProperty('--message-bubble-scale', String(scale));
+}
+
+function updateChatMediaSize(value) {
+    const parsed = Number.parseInt(value, 10);
+    const clamped = Number.isFinite(parsed) ? Math.max(180, Math.min(520, parsed)) : 420;
+    uiPreferences.chatMediaSize = clamped;
+    applyChatMediaSize(clamped);
+    updateCustomizationUI();
+    saveUserPreferences();
+}
+
+function applyChatMediaSize(value) {
+    const parsed = Number.parseInt(String(value ?? '420'), 10);
+    const clamped = Number.isFinite(parsed) ? Math.max(180, Math.min(520, parsed)) : 420;
+    const stickerSize = Math.max(140, Math.min(260, Math.round(clamped * 0.5)));
+    document.documentElement.style.setProperty('--chat-media-max-size', clamped + 'px');
+    document.documentElement.style.setProperty('--chat-sticker-max-size', stickerSize + 'px');
 }
 
 function updateAppSurfaceOpacity(opacity) {
@@ -2096,14 +2129,17 @@ function buildChatMessageRow(message, context = {}, options = {}) {
     let mediaHtml = '';
     const type = message.type || 'chat';
     const mediaUrl = message.media_url || message.mediaUrl;
-    const mediaTypes = ['image', 'video', 'audio', 'ptt', 'document', 'sticker'];
+    const isSticker = type === 'sticker';
+    const mediaTypes = ['image', 'video', 'audio', 'ptt', 'document'];
     const hasMediaType = mediaTypes.includes(type);
 
     if (mediaUrl) {
         const safeMediaUrl = sanitizeUrl(mediaUrl);
         if (safeMediaUrl) {
-            if (type === 'image' || type === 'sticker') {
+            if (type === 'image') {
                 mediaHtml = '<div class="message-media"><img src="' + safeMediaUrl + '" onclick="openMediaLightbox(this.src)" loading="lazy" alt=""></div>';
+            } else if (type === 'sticker') {
+                mediaHtml = '<div class="message-media message-sticker"><img src="' + safeMediaUrl + '" onclick="openMediaLightbox(this.src)" loading="lazy" alt=""></div>';
             } else if (type === 'video') {
                 mediaHtml = '<div class="message-media"><video src="' + safeMediaUrl + '" controls></video></div>';
             } else if (type === 'audio' || type === 'ptt') {
@@ -2118,7 +2154,7 @@ function buildChatMessageRow(message, context = {}, options = {}) {
         }
     }
 
-    const isSystem = !mediaHtml && !message.body && !hasMediaType && type !== 'chat';
+    const isSystem = !mediaHtml && !message.body && !hasMediaType && !isSticker && type !== 'chat';
     let textHtml = '';
 
     if (message.body && (type === 'chat' || (mediaUrl && message.body && type !== 'document'))) {
@@ -2126,7 +2162,7 @@ function buildChatMessageRow(message, context = {}, options = {}) {
     } else if (type === 'document' && mediaUrl) {
         const fileName = message.body || 'Belge';
         textHtml = '<div class="message-text muted">[Dosya] ' + escapeHtml(fileName) + '</div>';
-    } else if (hasMediaType && !mediaUrl) {
+    } else if ((hasMediaType || isSticker) && !mediaUrl) {
         // Loading State
         let iconClass = 'bi-file-earmark';
         let label = 'Dosya';
@@ -2151,6 +2187,8 @@ function buildChatMessageRow(message, context = {}, options = {}) {
         </div>`;
     } else if (hasMediaType) {
         textHtml = '<div class="message-text muted">[Medya]</div>';
+    } else if (isSticker) {
+        textHtml = '<div class="message-text muted">[Sticker]</div>';
     } else if (isSystem) {
         textHtml = '<div class="message-text muted">[Sistem: ' + escapeHtml(type) + ']</div>';
     } else if (!mediaHtml) {
@@ -2506,7 +2544,8 @@ function setReplyTarget(messageId) {
         } else {
             const type = msg.type || 'chat';
             if (type === 'document') previewText = '[Dosya]';
-            else if (['image', 'video', 'audio', 'ptt', 'sticker'].includes(type)) previewText = '[Medya]';
+            else if (type === 'sticker') previewText = '[Sticker]';
+            else if (['image', 'video', 'audio', 'ptt'].includes(type)) previewText = '[Medya]';
         }
     }
 
@@ -2914,13 +2953,18 @@ function appendNewMessage(msg) {
     const isMine = msg.isFromMe === true || msg.isFromMe === 1;
     let mediaHtml = '';
     const mediaUrl = msg.mediaUrl;
+    const type = msg.type || 'chat';
+    const isSticker = type === 'sticker';
+    const mediaTypes = ['image', 'video', 'audio', 'ptt', 'document'];
+    const hasMediaType = mediaTypes.includes(type);
 
     if (mediaUrl) {
         const safeMediaUrl = sanitizeUrl(mediaUrl);
         if (safeMediaUrl) {
-            const type = msg.type || 'chat';
-            if (type === 'image' || type === 'sticker') {
+            if (type === 'image') {
                 mediaHtml = '<div class="message-media"><img src="' + safeMediaUrl + '" onclick="openMediaLightbox(this.src)" loading="lazy" alt=""></div>';
+            } else if (type === 'sticker') {
+                mediaHtml = '<div class="message-media message-sticker"><img src="' + safeMediaUrl + '" onclick="openMediaLightbox(this.src)" loading="lazy" alt=""></div>';
             } else if (type === 'video') {
                 mediaHtml = '<div class="message-media"><video src="' + safeMediaUrl + '" controls></video></div>';
             } else if (type === 'audio' || type === 'ptt') {
@@ -2929,10 +2973,7 @@ function appendNewMessage(msg) {
         }
     }
 
-    const type = msg.type || 'chat';
-    const mediaTypes = ['image', 'video', 'audio', 'ptt', 'document', 'sticker'];
-    const hasMediaType = mediaTypes.includes(type);
-    const isSystem = !mediaHtml && !msg.body && !hasMediaType && type !== 'chat';
+    const isSystem = !mediaHtml && !msg.body && !hasMediaType && !isSticker && type !== 'chat';
     let textHtml = '';
     
     if (msg.body && (type === 'chat' || type === undefined)) {
@@ -2940,11 +2981,12 @@ function appendNewMessage(msg) {
     } else if (type === 'document' && mediaUrl) {
         const fileName = msg.body || 'Belge';
         textHtml = '<div class="message-text muted">[Dosya] ' + escapeHtml(fileName) + '</div>';
-    } else if (hasMediaType && !mediaUrl) {
+    } else if ((hasMediaType || isSticker) && !mediaUrl) {
          // Loading State
          let iconClass = 'bi-file-earmark';
          let label = 'Dosya';
          if (type === 'image') { iconClass = 'bi-image'; label = 'Fotograf'; }
+         else if (type === 'sticker') { iconClass = 'bi-sticky-fill'; label = 'Sticker'; }
          else if (type === 'video') { iconClass = 'bi-camera-video'; label = 'Video'; }
          else if (type === 'audio' || type === 'ptt') { iconClass = 'bi-mic'; label = 'Ses'; }
          
@@ -2959,11 +3001,13 @@ function appendNewMessage(msg) {
                  </div>
              </div>
              <div class="progress-track">
-                 <div class="progress-bar"></div>
-             </div>
-         </div>`;
+             <div class="progress-bar"></div>
+         </div>
+     </div>`;
     } else if (hasMediaType) {
         textHtml = '<div class="message-text muted">[Medya]</div>';
+    } else if (isSticker) {
+        textHtml = '<div class="message-text muted">[Sticker]</div>';
     } else if (isSystem) {
         textHtml = '<div class="message-text muted">[Sistem: ' + escapeHtml(type) + ']</div>';
     } else if (!mediaHtml) {
@@ -3509,22 +3553,25 @@ function handleMediaDownloaded(payload) {
     const bubble = row.querySelector('.message-bubble');
     if (!bubble) return;
     
-    // Remove existing "Media" or "Dosya" text if simple placeholder
+    // Remove existing placeholder labels if present
     const mutedText = bubble.querySelector('.message-text.muted');
     const loadingEl = bubble.querySelector('.media-loading');
     
-    if (mutedText && mutedText.textContent.includes('[Medya]')) {
+    if (mutedText && (mutedText.textContent.includes('[Medya]') || mutedText.textContent.includes('[Sticker]'))) {
         mutedText.remove();
     }
     
     // Insert new media content
     let mediaHtml = '';
     const type = item ? item.type : 'image'; // fallback
+    const isSticker = type === 'sticker';
     const safeMediaUrl = sanitizeUrl(mediaUrl);
     
     if (safeMediaUrl) {
-        if (type === 'image' || type === 'sticker') {
+        if (type === 'image') {
             mediaHtml = `<div class="message-media"><img src="${safeMediaUrl}" onclick="openMediaLightbox(this.src)" loading="lazy" alt=""></div>`;
+        } else if (isSticker) {
+            mediaHtml = `<div class="message-media message-sticker"><img src="${safeMediaUrl}" onclick="openMediaLightbox(this.src)" loading="lazy" alt=""></div>`;
         } else if (type === 'video') {
             mediaHtml = `<div class="message-media"><video src="${safeMediaUrl}" controls></video></div>`;
         } else if (type === 'audio' || type === 'ptt') {
@@ -5794,7 +5841,8 @@ function getMessagePreviewText(message) {
     if (body) return body;
     const type = message.type || 'chat';
     if (type === 'document') return '[Dosya]';
-    if (['image', 'video', 'audio', 'ptt', 'sticker'].includes(type)) return '[Medya]';
+    if (type === 'sticker') return '[Sticker]';
+    if (['image', 'video', 'audio', 'ptt'].includes(type)) return '[Medya]';
     if (type && type !== 'chat') return '[Sistem: ' + type + ']';
     return '[Bos mesaj]';
 }
@@ -6238,6 +6286,7 @@ Object.assign(window, {
     toggleCompactMode,
     updateBubbleStyle,
     updateMessageBubbleScale,
+    updateChatMediaSize,
     toggleChatMetaPanel,
     updateAppSurfaceOpacity,
     updateDesktopBackgroundType,

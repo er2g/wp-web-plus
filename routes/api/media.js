@@ -132,6 +132,8 @@ router.get('/items', validate({ query: mediaItemsQuerySchema }), (req, res) => {
             where.push(`(m.type IS NULL OR m.type = '' OR m.type NOT IN (${knownTypes.map(() => '?').join(',')}))`);
             params.push(...knownTypes);
         }
+    } else {
+        where.push(`(m.type IS NULL OR m.type != 'sticker')`);
     }
 
     const whereSql = where.length ? ('WHERE ' + where.join(' AND ')) : '';

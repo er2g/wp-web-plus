@@ -632,6 +632,17 @@
                         <span id="messageBubbleScaleValue" style="font-size: 12px; color: var(--text-secondary); min-width: 38px; text-align: right;">100%</span>
                     </div>
                 </div>
+                <div class="settings-item">
+                    <i class="icon bi bi-images"></i>
+                    <div class="info">
+                        <div class="title">Medya Boyutu</div>
+                        <div class="subtitle">Sohbet medyalari icin maksimum boyut</div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <input type="range" id="chatMediaSizeRange" min="180" max="520" step="10" oninput="updateChatMediaSize(this.value)" style="width: 120px;">
+                        <span id="chatMediaSizeValue" style="font-size: 12px; color: var(--text-secondary); min-width: 46px; text-align: right;">420px</span>
+                    </div>
+                </div>
                 <div class="settings-item" onclick="toggleCompactMode()">
                     <i class="icon bi bi-list-task"></i>
                     <div class="info">
