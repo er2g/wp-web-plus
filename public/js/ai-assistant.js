@@ -93,6 +93,10 @@ function toggleAiAssistantAutoReply(force) {
     if (personaRow) {
         personaRow.style.display = next ? 'flex' : 'none';
     }
+    const historyRow = document.getElementById('aiAssistantHistoryRow');
+    if (historyRow) {
+        historyRow.style.display = next ? 'flex' : 'none';
+    }
 }
 
 function isAiAssistantAutoReplyEnabled() {
@@ -102,6 +106,16 @@ function isAiAssistantAutoReplyEnabled() {
 
 function aiAssistantGetSelectedChatIds() {
     return Array.from(aiAssistantState.selectedChatIds || []);
+}
+
+function getAiAssistantHistoryLimit() {
+    const input = document.getElementById('aiAssistantHistoryLimit');
+    const raw = input ? Number.parseInt(String(input.value || ''), 10) : NaN;
+    const value = Number.isFinite(raw)
+        ? Math.max(10, Math.min(200, raw))
+        : 40;
+    if (input) input.value = String(value);
+    return value;
 }
 
 function aiAssistantRenderChatPicker() {
@@ -195,10 +209,16 @@ function buildAiAssistantPrompt(basePrompt, options = {}) {
     if (basePrompt) segments.push(basePrompt.trim());
 
     if (options.autoReply) {
+        const historyLimit = Number.isFinite(options.historyLimit) ? options.historyLimit : 40;
         segments.push('');
         segments.push('Ek kurallar:');
         segments.push('- Gelen mesajlara Gemini ile cevap uret (aiGenerate fonksiyonunu kullan).');
         segments.push('- Sadece gelen mesajlarda calis; kendi mesajlarina cevap verme.');
+        segments.push(`- Cevap yazmadan once getMessages(msg.chatId, ${historyLimit}) ile son ${historyLimit} mesaji cek.`);
+        segments.push('- Mesajlari kronolojik siraya koy (eskiden yeniye).');
+        segments.push('- Her mesaji "isim | tarih saat | mesaj" formatinda prompta ekle.');
+        segments.push('- isim icin msg.isFromMe ise "Sen", degilse from_name/from_number kullan.');
+        segments.push('- tarih saat icin new Date(m.timestamp).toLocaleString() kullan.');
         segments.push('- Cevaplari dogal, kisa ve anlasilir tut.');
         if (options.persona) {
             segments.push('- Asistan tavri: ' + options.persona.trim());
@@ -266,6 +286,14 @@ function openGeminiAssistant() {
                             <div class="subtitle">Asistanin konusma tarzi</div>
                         </div>
                         <textarea class="form-input" id="aiAssistantPersonaInput" rows="2" placeholder="Ornek: Samimi, kisa ve nazik cevaplar ver."></textarea>
+                    </div>
+                    <div class="settings-item" id="aiAssistantHistoryRow" style="display: none;">
+                        <i class="icon bi bi-clock-history"></i>
+                        <div class="info">
+                            <div class="title">Gecmis mesaj sayisi</div>
+                            <div class="subtitle">AI'a verilecek son mesaj adedi</div>
+                        </div>
+                        <input type="number" class="form-input" id="aiAssistantHistoryLimit" min="10" max="200" step="5" value="40" style="width: 120px;">
                     </div>
                 </div>
                 <div class="settings-section" style="margin-bottom: 16px;">
@@ -447,7 +475,8 @@ async function generateAiScript() {
     const personaInput = document.getElementById('aiAssistantPersonaInput');
     const persona = String(personaInput?.value || '').trim();
     const autoReply = isAiAssistantAutoReplyEnabled();
-    const finalPrompt = buildAiAssistantPrompt(prompt, { autoReply, persona });
+    const historyLimit = getAiAssistantHistoryLimit();
+    const finalPrompt = buildAiAssistantPrompt(prompt, { autoReply, persona, historyLimit });
     const historyNote = autoReply && persona
         ? (prompt + '\n\nTavir: ' + persona)
         : prompt;
