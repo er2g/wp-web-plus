@@ -809,6 +809,13 @@ function createDatabase(config) {
         LEFT JOIN roles ON roles.id = user_roles.role_id
         WHERE users.username = ?
     `),
+        getFirstAiConfig: db.prepare(`
+        SELECT ai_api_key as apiKey, ai_model as model, ai_max_tokens as maxTokens
+        FROM users
+        WHERE ai_api_key IS NOT NULL AND ai_api_key != ''
+        ORDER BY id ASC
+        LIMIT 1
+    `),
         create: db.prepare('INSERT INTO users (username, display_name, password_hash, password_salt, is_active, preferences) VALUES (?, ?, ?, ?, ?, ?)'),
         updatePreferences: db.prepare('UPDATE users SET preferences = ? WHERE id = ?'),
         updateAiConfig: db.prepare('UPDATE users SET ai_api_key = ?, ai_model = ?, ai_max_tokens = ? WHERE id = ?'),

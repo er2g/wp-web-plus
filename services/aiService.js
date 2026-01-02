@@ -92,12 +92,17 @@ Available ScriptRunner API (these are the ONLY functions/objects you can rely on
     - returns: { ok, status, json(), text() }
     - blocks localhost/private/internal addresses and unsafe URLs
 
-4) State + logging
+4) AI
+  - \`await aiGenerate(prompt, options)\`
+    - \`options\`: { model, maxTokens, temperature }
+    - returns: generated text
+
+5) State + logging
   - \`storage.get(key)\`, \`storage.set(key, value)\`, \`storage.delete(key)\`, \`storage.clear()\`
   - \`console.log/info/warn/error(...)\` (goes to script logs)
   - \`log(...)\` alias (same as \`console.log\`)
 
-5) Timing
+6) Timing
   - \`setTimeout(fn, ms)\` (ms is capped at 30000)
 
 Trigger context:

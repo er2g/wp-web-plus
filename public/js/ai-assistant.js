@@ -2,7 +2,224 @@
  * WhatsApp Web Panel - AI Assistant Frontend Logic
  */
 
-/* global api, showToast, loadScriptsData */
+/* global api, showToast, loadScriptsData, escapeHtml, formatDateTime, renderAvatarContent, chats, archivedChats, archivedChatsLoaded, currentChat */
+
+const AI_ASSISTANT_HISTORY_KEY = 'aiAssistantHistoryV1';
+const AI_ASSISTANT_HISTORY_LIMIT = 40;
+
+let aiAssistantState = {
+    chats: [],
+    chatSearch: '',
+    selectedChatIds: new Set(),
+    history: []
+};
+
+function aiAssistantLoadHistory() {
+    try {
+        const raw = localStorage.getItem(AI_ASSISTANT_HISTORY_KEY);
+        const parsed = raw ? JSON.parse(raw) : [];
+        aiAssistantState.history = Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+        aiAssistantState.history = [];
+    }
+}
+
+function aiAssistantSaveHistory(list) {
+    try {
+        localStorage.setItem(AI_ASSISTANT_HISTORY_KEY, JSON.stringify(list));
+    } catch (e) {
+        // Ignore storage errors
+    }
+}
+
+function aiAssistantRenderHistory() {
+    const container = document.getElementById('aiAssistantHistory');
+    if (!container) return;
+
+    const history = Array.isArray(aiAssistantState.history) ? aiAssistantState.history : [];
+    if (!history.length) {
+        container.innerHTML = '<div class="ai-chat-empty">Henuz mesaj yok. AI ile script olusturmaya basla.</div>';
+        return;
+    }
+
+    const rows = history.map((entry) => {
+        const role = entry?.role === 'assistant' ? 'assistant' : 'user';
+        const text = String(entry?.text || '').trim();
+        const safe = (typeof escapeHtml === 'function') ? escapeHtml(text) : text;
+        const withBreaks = safe.replace(/\n/g, '<br>');
+        const ts = entry?.ts ? new Date(entry.ts) : null;
+        const timeText = ts
+            ? (typeof formatDateTime === 'function' ? formatDateTime(ts.getTime()) : ts.toLocaleString())
+            : '';
+        return '' +
+            '<div class="ai-chat-row ' + role + '">' +
+                '<div class="ai-chat-bubble">' +
+                    '<div class="ai-chat-text">' + withBreaks + '</div>' +
+                    (timeText ? '<div class="ai-chat-meta">' + timeText + '</div>' : '') +
+                '</div>' +
+            '</div>';
+    }).join('');
+
+    container.innerHTML = rows;
+    container.scrollTop = container.scrollHeight;
+}
+
+function aiAssistantAppendHistory(role, text) {
+    const safeRole = role === 'assistant' ? 'assistant' : 'user';
+    const trimmed = String(text || '').trim();
+    if (!trimmed) return;
+    const next = Array.isArray(aiAssistantState.history) ? [...aiAssistantState.history] : [];
+    next.push({ role: safeRole, text: trimmed, ts: Date.now() });
+    const limited = next.slice(-AI_ASSISTANT_HISTORY_LIMIT);
+    aiAssistantState.history = limited;
+    aiAssistantSaveHistory(limited);
+    aiAssistantRenderHistory();
+}
+
+function clearAiAssistantHistory() {
+    aiAssistantState.history = [];
+    aiAssistantSaveHistory([]);
+    aiAssistantRenderHistory();
+}
+
+function toggleAiAssistantAutoReply(force) {
+    const toggleEl = document.getElementById('aiAssistantAutoReplyToggle');
+    if (!toggleEl) return;
+    const next = (typeof force === 'boolean')
+        ? force
+        : !toggleEl.classList.contains('active');
+    toggleEl.classList.toggle('active', next);
+    const personaRow = document.getElementById('aiAssistantPersonaRow');
+    if (personaRow) {
+        personaRow.style.display = next ? 'flex' : 'none';
+    }
+}
+
+function isAiAssistantAutoReplyEnabled() {
+    const toggleEl = document.getElementById('aiAssistantAutoReplyToggle');
+    return Boolean(toggleEl && toggleEl.classList.contains('active'));
+}
+
+function aiAssistantGetSelectedChatIds() {
+    return Array.from(aiAssistantState.selectedChatIds || []);
+}
+
+function aiAssistantRenderChatPicker() {
+    const listEl = document.getElementById('aiAssistantChatPickerList');
+    const countEl = document.getElementById('aiAssistantChatSelectedCount');
+    if (!listEl) return;
+
+    const selected = aiAssistantState.selectedChatIds || new Set();
+    const totalSelected = selected.size;
+    if (countEl) {
+        countEl.textContent = totalSelected + ' sohbet secildi';
+    }
+
+    const query = (aiAssistantState.chatSearch || '').trim().toLowerCase();
+    const chatsList = Array.isArray(aiAssistantState.chats) ? aiAssistantState.chats : [];
+
+    if (!chatsList.length) {
+        listEl.innerHTML = '<div style="padding: 12px; color: var(--text-secondary);">Sohbet listesi yukleniyor...</div>';
+        return;
+    }
+
+    const filtered = query
+        ? chatsList.filter((chat) => {
+            const name = String(chat.name || '').toLowerCase();
+            const id = String(chat.chat_id || '').toLowerCase();
+            return name.includes(query) || id.includes(query);
+        })
+        : chatsList;
+
+    if (!filtered.length) {
+        listEl.innerHTML = '<div style="padding: 12px; color: var(--text-secondary);">Eslesen sohbet yok</div>';
+        return;
+    }
+
+    listEl.innerHTML = filtered.map((chat) => {
+        const chatId = chat.chat_id || '';
+        const isChecked = selected.has(chatId);
+        const isGroup = typeof chatId === 'string' && chatId.includes('@g.us');
+        const isArchived = chat?.is_archived === 1 || chat?.isArchived === 1 || chat?.isArchived === true || chat?.is_archived === true;
+        const name = chat.name || chatId || 'Sohbet';
+        const avatar = '<div class="chat-scope-avatar' + (isGroup ? ' group' : '') + '">' +
+            (typeof renderAvatarContent === 'function' ? renderAvatarContent(chat) : '<i class="bi bi-person-fill"></i>') +
+            '</div>';
+        const metaText = String(chatId || '') + (isArchived ? ' • Arsiv' : '');
+        return '<label class="chat-scope-item">' +
+            '<input class="chat-scope-checkbox" type="checkbox" data-chat-id="' + escapeHtml(chatId) + '"' + (isChecked ? ' checked' : '') + '>' +
+            avatar +
+            '<div class="chat-scope-info">' +
+                '<div class="chat-scope-name">' + escapeHtml(name) + '</div>' +
+                '<div class="chat-scope-meta">' + escapeHtml(metaText) + '</div>' +
+            '</div>' +
+        '</label>';
+    }).join('');
+}
+
+async function aiAssistantLoadChats() {
+    try {
+        const hasLocalChats = (typeof chats !== 'undefined') && Array.isArray(chats) && chats.length;
+        const activePromise = hasLocalChats ? Promise.resolve(chats) : api('api/chats');
+        const archivedPromise = (typeof archivedChatsLoaded !== 'undefined' && archivedChatsLoaded && Array.isArray(archivedChats))
+            ? Promise.resolve(archivedChats)
+            : api('api/chats?archived=1').catch(() => []);
+        const [activeRaw, archivedRaw] = await Promise.all([activePromise, archivedPromise]);
+        const activeList = Array.isArray(activeRaw) ? activeRaw : [];
+        const archivedList = Array.isArray(archivedRaw) ? archivedRaw : [];
+
+        const merged = [];
+        const seen = new Set();
+        const pushUnique = (item) => {
+            if (!item || !item.chat_id) return;
+            const id = String(item.chat_id);
+            if (seen.has(id)) return;
+            seen.add(id);
+            merged.push(item);
+        };
+        activeList.forEach(pushUnique);
+        archivedList.forEach(pushUnique);
+        aiAssistantState.chats = merged;
+    } catch (e) {
+        aiAssistantState.chats = [];
+    }
+
+    if (aiAssistantState.selectedChatIds.size === 0 && typeof currentChat !== 'undefined' && currentChat) {
+        aiAssistantState.selectedChatIds.add(String(currentChat));
+    }
+    aiAssistantRenderChatPicker();
+}
+
+function buildAiAssistantPrompt(basePrompt, options = {}) {
+    const segments = [];
+    if (basePrompt) segments.push(basePrompt.trim());
+
+    if (options.autoReply) {
+        segments.push('');
+        segments.push('Ek kurallar:');
+        segments.push('- Gelen mesajlara Gemini ile cevap uret (aiGenerate fonksiyonunu kullan).');
+        segments.push('- Sadece gelen mesajlarda calis; kendi mesajlarina cevap verme.');
+        segments.push('- Cevaplari dogal, kisa ve anlasilir tut.');
+        if (options.persona) {
+            segments.push('- Asistan tavri: ' + options.persona.trim());
+        }
+    }
+
+    return segments.filter(Boolean).join('\n');
+}
+
+function mergeAiAssistantTriggerFilter(filter, chatIds) {
+    const base = (filter && typeof filter === 'object' && !Array.isArray(filter))
+        ? { ...filter }
+        : {};
+    const uniqueIds = Array.isArray(chatIds)
+        ? Array.from(new Set(chatIds.map((id) => String(id || '').trim()).filter(Boolean)))
+        : [];
+    if (uniqueIds.length) {
+        base.chatIds = uniqueIds;
+    }
+    return base;
+}
 
 function openGeminiAssistant() {
     const existing = document.getElementById('aiAssistantOverlay');
@@ -24,8 +241,47 @@ function openGeminiAssistant() {
                 <p style="color: var(--text-secondary); margin-bottom: 12px;">
                     Ne tur bir script istediginizi yazin. AI, Script Runner icin kod uretir ve siz onaylarsaniz kaydeder.
                 </p>
+                <div class="ai-chat-history" id="aiAssistantHistory"></div>
+                <div class="ai-chat-footer">
+                    <button class="btn btn-secondary btn-sm" type="button" onclick="clearAiAssistantHistory()">Gecmisi temizle</button>
+                </div>
                 <div class="form-group">
-                    <textarea class="form-input" id="aiPromptInput" rows="4" placeholder="Ornek: Gelen mesaj 'merhaba' iceriyorsa, gonderene 'Hosgeldiniz' cevabi ver."></textarea>
+                    <label class="form-label">Mesajin</label>
+                    <textarea class="form-input" id="aiPromptInput" rows="3" placeholder="Ornek: Gelen mesaj 'merhaba' iceriyorsa, gonderene 'Hosgeldiniz' cevabi ver."></textarea>
+                </div>
+                <div class="settings-section" style="margin-bottom: 16px;">
+                    <div class="settings-section-title">AI Asistan Modu</div>
+                    <div class="settings-item">
+                        <i class="icon bi bi-robot"></i>
+                        <div class="info">
+                            <div class="title">AI ile otomatik cevap</div>
+                            <div class="subtitle">Gelen mesajlara Gemini ile yanit uretir</div>
+                        </div>
+                        <div class="toggle" id="aiAssistantAutoReplyToggle" onclick="toggleAiAssistantAutoReply()"></div>
+                    </div>
+                    <div class="settings-item" id="aiAssistantPersonaRow" style="display: none;">
+                        <i class="icon bi bi-brush"></i>
+                        <div class="info">
+                            <div class="title">Tavir / Rol</div>
+                            <div class="subtitle">Asistanin konusma tarzi</div>
+                        </div>
+                        <textarea class="form-input" id="aiAssistantPersonaInput" rows="2" placeholder="Ornek: Samimi, kisa ve nazik cevaplar ver."></textarea>
+                    </div>
+                </div>
+                <div class="settings-section" style="margin-bottom: 16px;">
+                    <div class="settings-section-title">Hedef Sohbetler</div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label class="form-label">Mesaj scriptleri icin zorunlu</label>
+                        <input type="text" class="form-input" id="aiAssistantChatSearch" placeholder="Sohbet ara (isim / id)">
+                        <div class="chat-scope-picker" id="aiAssistantChatPickerList"></div>
+                        <div class="chat-scope-footer">
+                            <div id="aiAssistantChatSelectedCount" style="color: var(--text-secondary); font-size: 13px;">0 sohbet secildi</div>
+                            <div style="display:flex; gap:8px;">
+                                <button class="btn btn-secondary btn-sm" type="button" id="aiAssistantChatSelectAllBtn">Hepsini sec</button>
+                                <button class="btn btn-secondary btn-sm" type="button" id="aiAssistantChatClearBtn">Temizle</button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
                 <div class="settings-section" style="margin-bottom: 16px;">
                     <div class="settings-section-title">Gemini Ayarlari</div>
@@ -81,6 +337,7 @@ function openGeminiAssistant() {
                             <div><code>getMessages(chatId, limit)</code> - Chat mesajlari</div>
                             <div><code>searchMessages(query)</code> - Mesaj arama</div>
                             <div><code>fetch(url, options)</code> - Guvenli HTTP istegi (dis kaynak)</div>
+                            <div><code>await aiGenerate(prompt, options)</code> - Gemini ile yanit uret</div>
                             <div><code>storage.get/set/delete/clear</code> - Basit key-value</div>
                             <div><code>msg</code> / <code>message</code> - Tetikleyici mesaj verisi</div>
                         </div>
@@ -109,7 +366,52 @@ function openGeminiAssistant() {
 
     document.body.appendChild(modal);
     document.getElementById('aiPromptInput').focus();
+    aiAssistantLoadHistory();
+    aiAssistantRenderHistory();
+    toggleAiAssistantAutoReply(false);
+    aiAssistantLoadChats();
     loadAiAssistantConfig();
+
+    const chatSearchEl = document.getElementById('aiAssistantChatSearch');
+    if (chatSearchEl) {
+        chatSearchEl.addEventListener('input', (e) => {
+            aiAssistantState.chatSearch = e.target.value || '';
+            aiAssistantRenderChatPicker();
+        });
+    }
+
+    const chatPickerEl = document.getElementById('aiAssistantChatPickerList');
+    if (chatPickerEl) {
+        chatPickerEl.addEventListener('change', (e) => {
+            const input = e.target;
+            if (!input || input.tagName !== 'INPUT') return;
+            const chatId = input.getAttribute('data-chat-id') || '';
+            if (!chatId) return;
+            if (input.checked) {
+                aiAssistantState.selectedChatIds.add(chatId);
+            } else {
+                aiAssistantState.selectedChatIds.delete(chatId);
+            }
+            aiAssistantRenderChatPicker();
+        });
+    }
+
+    const selectAllBtn = document.getElementById('aiAssistantChatSelectAllBtn');
+    if (selectAllBtn) {
+        selectAllBtn.addEventListener('click', () => {
+            const chatsList = Array.isArray(aiAssistantState.chats) ? aiAssistantState.chats : [];
+            chatsList.forEach((c) => { if (c?.chat_id) aiAssistantState.selectedChatIds.add(c.chat_id); });
+            aiAssistantRenderChatPicker();
+        });
+    }
+
+    const clearBtn = document.getElementById('aiAssistantChatClearBtn');
+    if (clearBtn) {
+        clearBtn.addEventListener('click', () => {
+            aiAssistantState.selectedChatIds.clear();
+            aiAssistantRenderChatPicker();
+        });
+    }
 }
 
 // Backward compatibility (older UI code)
@@ -123,6 +425,12 @@ async function generateAiScript() {
     const prompt = document.getElementById('aiPromptInput').value.trim();
     if (!prompt) return;
 
+    const selectedChatIds = aiAssistantGetSelectedChatIds();
+    if (!selectedChatIds.length) {
+        showToast('Mesaj scripti icin en az 1 hedef sohbet secin', 'info');
+        return;
+    }
+
     const model = getAiAssistantModelValue();
     if (!model) {
         showToast('Model secin', 'info');
@@ -135,6 +443,15 @@ async function generateAiScript() {
         : null;
     const saved = await persistChatAnalysisSettings(model, maxTokens);
     if (!saved) return;
+
+    const personaInput = document.getElementById('aiAssistantPersonaInput');
+    const persona = String(personaInput?.value || '').trim();
+    const autoReply = isAiAssistantAutoReplyEnabled();
+    const finalPrompt = buildAiAssistantPrompt(prompt, { autoReply, persona });
+    const historyNote = autoReply && persona
+        ? (prompt + '\n\nTavir: ' + persona)
+        : prompt;
+    aiAssistantAppendHistory('user', historyNote);
 
     const loading = document.getElementById('aiLoading');
     const resultDiv = document.getElementById('aiResult');
@@ -154,26 +471,27 @@ async function generateAiScript() {
     lastGeneratedScript = null;
 
     try {
-        const response = await api('api/ai/generate-script', 'POST', { prompt });
+        const response = await api('api/ai/generate-script', 'POST', { prompt: finalPrompt });
         if (response.success && response.script) {
-            lastGeneratedScript = response.script;
+            const mergedFilter = mergeAiAssistantTriggerFilter(response.script.trigger_filter, selectedChatIds);
+            lastGeneratedScript = { ...response.script, trigger_filter: mergedFilter };
 
-            const triggerType = response.script.trigger_type || 'message';
+            const triggerType = lastGeneratedScript.trigger_type || 'message';
             const triggerText = 'Tetik: ' + triggerType;
 
-            document.getElementById('aiResultName').textContent = response.script.name || 'Script';
-            document.getElementById('aiResultDesc').textContent = response.script.description || '';
-            document.getElementById('aiResultCode').textContent = response.script.code || '';
+            document.getElementById('aiResultName').textContent = lastGeneratedScript.name || 'Script';
+            document.getElementById('aiResultDesc').textContent = lastGeneratedScript.description || '';
+            document.getElementById('aiResultCode').textContent = lastGeneratedScript.code || '';
             document.getElementById('aiResultTrigger').textContent = triggerText;
 
             const filterWrap = document.getElementById('aiResultFilterWrap');
             const filterEl = document.getElementById('aiResultFilter');
-            if (filterWrap && filterEl && response.script.trigger_filter) {
+            if (filterWrap && filterEl && lastGeneratedScript.trigger_filter) {
                 filterWrap.style.display = 'block';
                 try {
-                    filterEl.textContent = JSON.stringify(response.script.trigger_filter, null, 2);
+                    filterEl.textContent = JSON.stringify(lastGeneratedScript.trigger_filter, null, 2);
                 } catch (e) {
-                    filterEl.textContent = String(response.script.trigger_filter);
+                    filterEl.textContent = String(lastGeneratedScript.trigger_filter);
                 }
             } else if (filterWrap) {
                 filterWrap.style.display = 'none';
@@ -184,6 +502,12 @@ async function generateAiScript() {
             btnReject.style.display = 'inline-flex';
             btnTest.style.display = 'inline-flex';
             btnGenerate.innerHTML = '<i class="bi bi-stars"></i> Tekrar Olustur';
+
+            const summaryParts = [];
+            summaryParts.push('Script: ' + (lastGeneratedScript.name || 'Yeni Script'));
+            if (lastGeneratedScript.description) summaryParts.push(lastGeneratedScript.description);
+            summaryParts.push(triggerText);
+            aiAssistantAppendHistory('assistant', summaryParts.join('\n'));
         }
     } catch (err) {
         showToast('AI hatasi: ' + err.message, 'error');
@@ -255,12 +579,19 @@ async function acceptAiScript() {
     if (!lastGeneratedScript) return;
 
     try {
+        const triggerType = lastGeneratedScript.trigger_type || 'message';
+        const selectedChatIds = aiAssistantGetSelectedChatIds();
+        if (triggerType === 'message' && selectedChatIds.length === 0) {
+            showToast('Mesaj scripti icin en az 1 hedef sohbet secin', 'error');
+            return;
+        }
+        const mergedFilter = mergeAiAssistantTriggerFilter(lastGeneratedScript.trigger_filter, selectedChatIds);
         const payload = {
             name: lastGeneratedScript.name,
             description: lastGeneratedScript.description,
             code: lastGeneratedScript.code,
-            trigger_type: lastGeneratedScript.trigger_type || 'message',
-            trigger_filter: lastGeneratedScript.trigger_filter
+            trigger_type: triggerType,
+            trigger_filter: mergedFilter
         };
 
         await api('api/scripts', 'POST', payload);
@@ -669,6 +1000,8 @@ Object.assign(window, {
     rejectAiScript,
     testAiScript,
     closeAiAssistant,
+    clearAiAssistantHistory,
+    toggleAiAssistantAutoReply,
     toggleAiAssistantModelInput,
     openChatAnalysis,
     closeChatAnalysis,

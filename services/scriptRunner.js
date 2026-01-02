@@ -5,6 +5,25 @@
 const vm = require('vm');
 const { logger } = require('./logger');
 const { isSafeExternalUrl } = require('../lib/urlSafety');
+const aiService = require('./aiService');
+
+const AI_DEPRECATED_MODELS = new Set(['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash']);
+const AI_DEFAULT_MODEL = 'gemini-2.5-flash';
+
+function resolveAiModel(...candidates) {
+    for (const candidate of candidates) {
+        if (typeof candidate !== 'string') continue;
+        const trimmed = candidate.trim();
+        if (!trimmed) continue;
+        if (AI_DEPRECATED_MODELS.has(trimmed)) continue;
+        return trimmed;
+    }
+    const fallback = aiService.model || AI_DEFAULT_MODEL;
+    if (typeof fallback === 'string' && fallback.trim() && !AI_DEPRECATED_MODELS.has(fallback.trim())) {
+        return fallback.trim();
+    }
+    return AI_DEFAULT_MODEL;
+}
 
 class ScriptRunner {
     constructor(db, whatsapp) {
@@ -41,6 +60,49 @@ class ScriptRunner {
             .map((value) => (typeof value === 'string' ? value.trim() : String(value || '').trim()))
             .filter(Boolean);
         return Array.from(new Set(normalized));
+    }
+
+    getAiSettings(script) {
+        const filter = this.parseTriggerFilter(script);
+        const candidate = filter?.ai;
+        if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return {};
+        return candidate;
+    }
+
+    resolveAiConfig(script, overrides = {}) {
+        const filterAi = this.getAiSettings(script);
+        const userAi = this.db?.users?.getFirstAiConfig?.get?.();
+
+        const rawApiKey = (typeof overrides.apiKey === 'string' ? overrides.apiKey.trim() : '')
+            || (typeof filterAi.apiKey === 'string' ? filterAi.apiKey.trim() : '')
+            || (typeof userAi?.apiKey === 'string' ? userAi.apiKey.trim() : '')
+            || (typeof aiService.apiKey === 'string' ? aiService.apiKey.trim() : '');
+
+        const model = resolveAiModel(
+            overrides.model,
+            filterAi.model,
+            userAi?.model,
+            aiService.model
+        );
+
+        const maxTokensCandidate = overrides.maxTokens ?? filterAi.maxTokens ?? userAi?.maxTokens;
+        const maxTokensParsed = Number.parseInt(String(maxTokensCandidate ?? ''), 10);
+        const maxTokens = Number.isFinite(maxTokensParsed)
+            ? Math.max(256, Math.min(8192, maxTokensParsed))
+            : 1024;
+
+        const tempCandidate = overrides.temperature ?? filterAi.temperature;
+        const tempParsed = Number.parseFloat(String(tempCandidate ?? ''));
+        const temperature = Number.isFinite(tempParsed)
+            ? Math.max(0, Math.min(1, tempParsed))
+            : 0.3;
+
+        return {
+            apiKey: rawApiKey || null,
+            model,
+            maxTokens,
+            temperature
+        };
     }
 
     // Create sandboxed context for script execution
@@ -171,6 +233,27 @@ class ScriptRunner {
                             text: async () => error.message
                         };
                     }
+                },
+                writable: false, configurable: false
+            },
+
+            aiGenerate: {
+                value: async (prompt, options = {}) => {
+                    const textPrompt = String(prompt || '').trim();
+                    if (!textPrompt) {
+                        throw new Error('Prompt is required');
+                    }
+                    const resolved = self.resolveAiConfig(script, options || {});
+                    if (!resolved.apiKey) {
+                        throw new Error('AI API key is not configured');
+                    }
+                    return await aiService.generateText({
+                        prompt: textPrompt,
+                        apiKey: resolved.apiKey,
+                        model: resolved.model,
+                        maxOutputTokens: resolved.maxTokens,
+                        temperature: resolved.temperature
+                    });
                 },
                 writable: false, configurable: false
             },

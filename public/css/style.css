@@ -2249,6 +2249,68 @@ body.compact .message-row.stacked {
     gap: 10px;
 }
 
+.ai-chat-history {
+    border: 1px solid var(--border-color);
+    background-color: var(--bg-secondary);
+    border-radius: 12px;
+    padding: 12px;
+    max-height: 220px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.ai-chat-footer {
+    margin-top: 6px;
+    display: flex;
+    justify-content: flex-end;
+}
+
+.ai-chat-row {
+    display: flex;
+}
+
+.ai-chat-row.user {
+    justify-content: flex-end;
+}
+
+.ai-chat-row.assistant {
+    justify-content: flex-start;
+}
+
+.ai-chat-bubble {
+    max-width: 78%;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+    background-color: var(--bubble-in);
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--text-primary);
+}
+
+.ai-chat-row.user .ai-chat-bubble {
+    background-color: var(--bubble-out);
+}
+
+.ai-chat-text {
+    white-space: pre-wrap;
+}
+
+.ai-chat-meta {
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.ai-chat-empty {
+    padding: 12px;
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
 .builder-section {
     margin-bottom: 14px;
 }
