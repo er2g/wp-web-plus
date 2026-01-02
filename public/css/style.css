@@ -955,6 +955,18 @@ body.compact .message-row.stacked {
     word-break: break-word;
 }
 
+.message-bubble.media-compact {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-start;
+    width: fit-content;
+}
+
+.message-bubble.media-compact .message-media {
+    width: fit-content;
+    max-width: var(--chat-media-max-size);
+}
+
 .message-bubble.deleted-for-everyone {
     outline: 1px dashed color-mix(in srgb, var(--text-secondary) 55%, transparent);
     outline-offset: 1px;

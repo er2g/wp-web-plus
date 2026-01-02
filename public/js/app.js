@@ -2132,6 +2132,7 @@ function buildChatMessageRow(message, context = {}, options = {}) {
     const isSticker = type === 'sticker';
     const mediaTypes = ['image', 'video', 'audio', 'ptt', 'document'];
     const hasMediaType = mediaTypes.includes(type);
+    const bodyText = typeof message.body === 'string' ? message.body.trim() : message.body;
 
     if (mediaUrl) {
         const safeMediaUrl = sanitizeUrl(mediaUrl);
@@ -2195,6 +2196,11 @@ function buildChatMessageRow(message, context = {}, options = {}) {
         textHtml = '<div class="message-text muted">[Bos mesaj]</div>';
     }
 
+    const isCompactMedia = Boolean(
+        mediaHtml &&
+        !bodyText &&
+        ['image', 'video', 'audio', 'ptt', 'sticker'].includes(type)
+    );
     const showSenderNames = isGroupChatId(chatId);
     const canShowGroupSender = showSenderNames && !isMine && !isSystem;
     const displayName = canShowGroupSender ? getDisplayNameFromMessage(message, chatId) : '';
@@ -2267,7 +2273,9 @@ function buildChatMessageRow(message, context = {}, options = {}) {
 
     const bubbleClass = isSystem
         ? 'message-bubble system'
-        : ('message-bubble ' + (isMine ? 'sent' : 'received') + (isDeletedForEveryone ? ' deleted-for-everyone' : ''));
+        : ('message-bubble ' + (isMine ? 'sent' : 'received') +
+            (isDeletedForEveryone ? ' deleted-for-everyone' : '') +
+            (isCompactMedia ? ' media-compact' : ''));
     const replyBtn = (!isSystem && messageId && !isPending)
         ? '<button class="message-action reply-btn" type="button" onclick="setReplyTargetFromButton(this); event.stopPropagation();" title="Yanıtla">' +
             '<i class="bi bi-reply"></i>' +
@@ -2957,6 +2965,7 @@ function appendNewMessage(msg) {
     const isSticker = type === 'sticker';
     const mediaTypes = ['image', 'video', 'audio', 'ptt', 'document'];
     const hasMediaType = mediaTypes.includes(type);
+    const bodyText = typeof msg.body === 'string' ? msg.body.trim() : msg.body;
 
     if (mediaUrl) {
         const safeMediaUrl = sanitizeUrl(mediaUrl);
@@ -3014,6 +3023,11 @@ function appendNewMessage(msg) {
         textHtml = '<div class="message-text muted">[Bos mesaj]</div>';
     }
 
+    const isCompactMedia = Boolean(
+        mediaHtml &&
+        !bodyText &&
+        ['image', 'video', 'audio', 'ptt', 'sticker'].includes(type)
+    );
     const displayName = getDisplayNameFromMessage(msg);
     const showSenderNames = isGroupChatId(msg.chatId || msg.chat_id || currentChat);
     const senderHtml = (!isMine && displayName && showSenderNames) ?
@@ -3024,7 +3038,7 @@ function appendNewMessage(msg) {
     const messageIdAttr = escapeHtml(msg.messageId || msg.message_id || '');
 
     const messageHtml = '<div class="message-row ' + (isMine ? 'sent' : 'received') + '" data-message-id="' + messageIdAttr + '">' +
-        '<div class="message-bubble ' + (isMine ? 'sent' : 'received') + '">' +
+        '<div class="message-bubble ' + (isMine ? 'sent' : 'received') + (isCompactMedia ? ' media-compact' : '') + '">' +
         senderHtml + mediaHtml + textHtml +
         '<div class="message-footer"><span class="message-time">' + time + '</span>' + checkIcon + '</div>' +
         '</div></div>';
@@ -3565,6 +3579,7 @@ function handleMediaDownloaded(payload) {
     let mediaHtml = '';
     const type = item ? item.type : 'image'; // fallback
     const isSticker = type === 'sticker';
+    const bodyText = typeof item?.body === 'string' ? item.body.trim() : item?.body;
     const safeMediaUrl = sanitizeUrl(mediaUrl);
     
     if (safeMediaUrl) {
@@ -3628,6 +3643,15 @@ function handleMediaDownloaded(payload) {
                 }
             }
         }
+    }
+
+    const isCompactMedia = Boolean(
+        mediaHtml &&
+        !bodyText &&
+        ['image', 'video', 'audio', 'ptt', 'sticker'].includes(type)
+    );
+    if (isCompactMedia) {
+        bubble.classList.add('media-compact');
     }
 
     if (container && shouldStickToBottom) {
