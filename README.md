@@ -1,86 +1,90 @@
 # WhatsApp Web Panel
 
-Node.js + Express tabanlı WhatsApp yönetim paneli (multi-account, SQLite, Socket.IO).
+A Node.js + Express dashboard for managing WhatsApp Web sessions (multi-account, SQLite, Socket.IO).
 
-## Gereksinimler
+## Requirements
 
 - Node.js 18+
-- WhatsApp Web bağlantısı için Puppeteer/Chromium bağımlılıkları (sunucu ortamına göre değişir)
+- Puppeteer/Chromium dependencies for WhatsApp Web (varies by server OS)
 
-## Kurulum
+## Setup
 
-1. `.env` oluştur:
+1. Create `.env`:
    - `cp .env.example .env`
-   - `CORS_ORIGINS`, `SESSION_SECRET`, `SITE_PASSWORD`/`ADMIN_BOOTSTRAP_PASSWORD` değerlerini güncelle
-2. Bağımlılıkları yükle: `npm ci`
-3. Çalıştır: `npm start`
+   - Update `CORS_ORIGINS`, `SESSION_SECRET`, and `SITE_PASSWORD` / `ADMIN_BOOTSTRAP_PASSWORD`
+2. Install dependencies: `npm ci`
+3. Start: `npm start`
 
-## PM2 ile Çalıştırma
+## Run with PM2
 
-Önerilen kullanım:
+Recommended:
 
 ```bash
 pm2 start ecosystem.config.cjs --env production
 ```
 
-Not: `whatsapp-web.js` oturum dizinini (LocalAuth) ve `express-session`’ı paylaşımlı hale getirmeden **cluster/multi-instance** çalıştırmak önerilmez. Eğer yine de birden çok instance çalıştıracaksan:
+Note: Running in **cluster/multi-instance** mode is not recommended unless the
+`whatsapp-web.js` session directory (LocalAuth) and `express-session` are shared.
+If you still plan to run multiple instances:
 
-- Session store (örn. Redis) + sticky session (Socket.IO) kur
-- Socket.IO adapter (örn. Redis adapter) kullan
-- Arka plan job’ları için leader seçim mekanizması SQLite lock ile var (`ENABLE_BACKGROUND_JOBS=true` kalabilir)
+- Use a shared session store (for example, Redis) and sticky sessions (Socket.IO)
+- Enable a Socket.IO adapter (for example, Redis adapter)
+- Background jobs already use a SQLite lock for leader election
+  (`ENABLE_BACKGROUND_JOBS=true` can remain enabled)
 
-Örnek PM2 dosyası: `ecosystem.config.cjs`
+Example PM2 file: `ecosystem.config.cjs`
 
-## Redis (Opsiyonel ama Önerilir)
+## Redis (Optional but Recommended)
 
-`REDIS_URL` set edilirse:
+If `REDIS_URL` is set:
 
-- `express-session` store Redis’e taşınır (restart sonrası login korunur, multi-instance için hazır olur)
-- Socket.IO Redis adapter devreye girer (broadcast/room event’leri instance’lar arası yayılır)
-- Login denemesi rate-limit’i Redis üzerinden çalışır (multi-instance tutarlı olur)
+- `express-session` is stored in Redis (logins survive restarts; ready for multi-instance)
+- Socket.IO Redis adapter is enabled (broadcast/room events across instances)
+- Login attempt rate-limiting uses Redis (consistent across instances)
 
-Multi-instance için ayrıca **sticky session** gerekir (PM2 tarafında sticky veya Nginx/LB ile).
+Multi-instance setups still require **sticky sessions** (PM2 sticky or Nginx/LB).
 
-## Sağlık Kontrolü
+## Health Checks
 
-- `GET /healthz` → `{ ok: true, ... }`
-- `GET /readyz` → bağımlılıklar hazırsa `200`, değilse `503`
-- Shutdown sırasında `/readyz` otomatik `503` döner (`shuttingDown=true`).
+- `GET /healthz` -> `{ ok: true, ... }`
+- `GET /readyz` -> `200` when dependencies are ready, `503` otherwise
+- During shutdown, `/readyz` returns `503` automatically (`shuttingDown=true`)
 
 ## Observability
 
-- `GET /openapi.json` → OpenAPI spec (`docs/openapi.json`)
-- `GET /docs/` → Swagger UI (sadece `admin`)
-- `GET /metrics` → Prometheus metrics (`METRICS_ENABLED=true` ile açılır; prod ortamında `METRICS_TOKEN` kullanman önerilir)
+- `GET /openapi.json` -> OpenAPI spec (`docs/openapi.json`)
+- `GET /docs/` -> Swagger UI (admin only)
+- `GET /metrics` -> Prometheus metrics (enable with `METRICS_ENABLED=true`;
+  `METRICS_TOKEN` is recommended in production)
 
-## Test
+## Tests
 
 ```bash
 npm test
 ```
 
-## Kalite Kontrol
+## Quality Checks
 
 ```bash
 npm run lint
 npm run check
 ```
 
-## Önemli Ortam Değişkenleri
+## Key Environment Variables
 
-Detaylar için `.env.example`.
+See `.env.example` for full details.
 
-- `CORS_ORIGINS` (zorunlu)
-- `SESSION_SECRET` (prod’da zorunlu)
-- `ADMIN_BOOTSTRAP_USERNAME` / `ADMIN_BOOTSTRAP_PASSWORD` (ilk admin kullanıcı)
+- `CORS_ORIGINS` (required)
+- `SESSION_SECRET` (required in production)
+- `ADMIN_BOOTSTRAP_USERNAME` / `ADMIN_BOOTSTRAP_PASSWORD` (initial admin user)
 - `ENABLE_BACKGROUND_JOBS` (scheduler/cleanup)
-- `DATA_DIR`, `LOGS_DIR` (opsiyonel dizin override)
+- `DATA_DIR`, `LOGS_DIR` (optional directory overrides)
 - `SHUTDOWN_TIMEOUT_MS` (graceful shutdown timeout)
-- `METRICS_ENABLED`, `METRICS_TOKEN` (opsiyonel; `/metrics`)
-- `API_RATE_LIMIT_*` (opsiyonel; `/api` rate limit ayarları)
-- `PASSWORD_*` (opsiyonel; parola politikası)
-- `LOG_RETENTION_DAYS`, `MESSAGE_RETENTION_DAYS` (opsiyonel; retention/cleanup)
+- `METRICS_ENABLED`, `METRICS_TOKEN` (optional; `/metrics`)
+- `API_RATE_LIMIT_*` (optional; `/api` rate limit settings)
+- `PASSWORD_*` (optional; password policy)
+- `LOG_RETENTION_DAYS`, `MESSAGE_RETENTION_DAYS` (optional; retention/cleanup)
 
 ## Roadmap
 
-Best-practice yol haritası: `docs/ROADMAP.md`
+Best-practice roadmap: `docs/ROADMAP.md`
