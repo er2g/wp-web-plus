@@ -38,6 +38,14 @@ const aiConfigSchema = z.object({
     model: z.preprocess(
         (value) => (typeof value === 'string' ? value.trim() : value),
         z.string().max(80).optional()
+    ),
+    maxTokens: z.preprocess(
+        (value) => {
+            if (value === undefined || value === null || value === '') return undefined;
+            const parsed = parseInt(String(value), 10);
+            return Number.isFinite(parsed) ? parsed : value;
+        },
+        z.number().int().min(256).max(8192).optional()
     )
 }).strict();
 
@@ -51,8 +59,35 @@ const aiChatAnalysisSchema = z.object({
 
 router.post('/generate-script', requireRole(['admin']), validate({ body: generateScriptSchema }), async (req, res) => {
     try {
+        const userId = req.session?.userId;
+        if (!userId) {
+            return sendError(req, res, 401, 'Not authenticated');
+        }
+        const db = accountManager.getAccountContext(accountManager.getDefaultAccountId()).db;
+        const user = db.users.getById.get(userId);
+        if (!user) {
+            return sendError(req, res, 404, 'User not found');
+        }
+
         const { prompt } = req.validatedBody;
-        const rawScript = await aiService.generateScript(prompt);
+        const apiKey = user.ai_api_key || aiService.apiKey || null;
+        if (!apiKey) {
+            return sendError(req, res, 400, 'Gemini API anahtari kaydedilmedi');
+        }
+        const selectedModel = user.ai_model || aiService.model || 'gemini-1.5-flash';
+        const maxTokensParsed = Number.isFinite(user.ai_max_tokens)
+            ? user.ai_max_tokens
+            : parseInt(String(user.ai_max_tokens || ''), 10);
+        const maxTokens = Number.isFinite(maxTokensParsed)
+            ? Math.max(256, Math.min(8192, maxTokensParsed))
+            : 2048;
+
+        const rawScript = await aiService.generateScript(prompt, {
+            apiKey,
+            model: selectedModel,
+            maxOutputTokens: maxTokens,
+            temperature: 0.2
+        });
         const parsed = aiScriptSchema.parse(rawScript);
         const script = {
             name: parsed.name,
@@ -79,7 +114,8 @@ router.get('/config', requireRole(['admin']), (req, res) => {
     }
     return res.json({
         hasKey: Boolean(user.ai_api_key),
-        model: user.ai_model || ''
+        model: user.ai_model || '',
+        maxTokens: user.ai_max_tokens || null
     });
 });
 
@@ -96,15 +132,20 @@ router.post('/config', requireRole(['admin']), validate({ body: aiConfigSchema }
 
     const apiKeyRaw = req.validatedBody.apiKey;
     const modelRaw = req.validatedBody.model;
+    const maxTokensRaw = req.validatedBody.maxTokens;
 
     const nextKey = (apiKeyRaw !== undefined) ? (apiKeyRaw ? apiKeyRaw.trim() : null) : (user.ai_api_key || null);
     const nextModel = (modelRaw !== undefined) ? (modelRaw ? modelRaw.trim() : null) : (user.ai_model || null);
+    const nextMaxTokens = (maxTokensRaw !== undefined)
+        ? (Number.isFinite(maxTokensRaw) ? maxTokensRaw : null)
+        : (user.ai_max_tokens || null);
 
-    db.users.updateAiConfig.run(nextKey, nextModel, userId);
+    db.users.updateAiConfig.run(nextKey, nextModel, nextMaxTokens, userId);
     return res.json({
         success: true,
         hasKey: Boolean(nextKey),
-        model: nextModel || ''
+        model: nextModel || '',
+        maxTokens: nextMaxTokens || null
     });
 });
 
@@ -126,6 +167,12 @@ router.post('/analyze-chat', requireRole(['admin']), validate({ body: aiChatAnal
         if (!apiKey) {
             return sendError(req, res, 400, 'Gemini API anahtari kaydedilmedi');
         }
+        const maxTokensParsed = Number.isFinite(user.ai_max_tokens)
+            ? user.ai_max_tokens
+            : parseInt(String(user.ai_max_tokens || ''), 10);
+        const maxTokens = Number.isFinite(maxTokensParsed)
+            ? Math.max(256, Math.min(8192, maxTokensParsed))
+            : 4096;
 
         const header = chatName
             ? `Sohbet: ${chatName} (${chatId})`
@@ -140,7 +187,7 @@ router.post('/analyze-chat', requireRole(['admin']), validate({ body: aiChatAnal
             prompt: payloadText,
             apiKey,
             model: selectedModel,
-            maxOutputTokens: 4096,
+            maxOutputTokens: maxTokens,
             temperature: 0.3
         });
 

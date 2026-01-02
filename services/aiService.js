@@ -56,8 +56,13 @@ class AiService {
         }
     }
 
-    async generateScript(prompt) {
-        if (!this.apiKey) {
+    async generateScript(prompt, options = {}) {
+        const apiKey = options.apiKey || this.apiKey;
+        const model = options.model || this.model;
+        const maxOutputTokens = Number.isFinite(options.maxOutputTokens) ? options.maxOutputTokens : 2048;
+        const temperature = (typeof options.temperature === 'number') ? options.temperature : 0.2;
+
+        if (!apiKey) {
             throw new Error('GEMINI_API_KEY is not configured');
         }
 
@@ -139,17 +144,17 @@ ${prompt}
 
         try {
             const response = await axios.post(
-                `${this.baseUrl}/${this.model}:generateContent?key=${this.apiKey}`,
+                `${this.baseUrl}/${model}:generateContent?key=${apiKey}`,
                 {
                     contents: [{
                         role: 'user',
                         parts: [{ text: systemPrompt }]
                     }],
                     generationConfig: {
-                        temperature: 0.2,
+                        temperature,
                         topK: 40,
                         topP: 0.95,
-                        maxOutputTokens: 2048,
+                        maxOutputTokens,
                         responseMimeType: "application/json"
                     }
                 }

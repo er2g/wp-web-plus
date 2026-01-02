@@ -241,7 +241,8 @@ function closeAiAssistant() {
 
 let chatAnalysisState = {
     hasKey: false,
-    savedModel: ''
+    savedModel: '',
+    savedMaxTokens: null
 };
 
 function openChatAnalysis() {
@@ -304,6 +305,14 @@ function openChatAnalysis() {
                             </select>
                             <input type="text" class="form-input" id="chatAnalysisModelCustomInput" placeholder="gemini-1.5-flash-latest" style="display:none;">
                         </div>
+                    </div>
+                    <div class="settings-item">
+                        <i class="icon bi bi-sliders"></i>
+                        <div class="info">
+                            <div class="title">Maksimum Token</div>
+                            <div class="subtitle">Daha yuksek deger daha uzun cevap verir</div>
+                        </div>
+                        <input type="number" class="form-input" id="chatAnalysisMaxTokens" min="256" max="8192" step="128" value="4096" style="width: 120px;">
                     </div>
                 </div>
                 <div class="settings-section" style="margin-bottom: 16px;">
@@ -373,6 +382,8 @@ async function loadChatAnalysisConfig() {
         const result = await api('api/ai/config');
         chatAnalysisState.hasKey = Boolean(result?.hasKey);
         chatAnalysisState.savedModel = String(result?.model || '');
+        const maxTokensParsed = Number.parseInt(String(result?.maxTokens || ''), 10);
+        chatAnalysisState.savedMaxTokens = Number.isFinite(maxTokensParsed) ? maxTokensParsed : null;
 
         if (statusEl) {
             statusEl.textContent = chatAnalysisState.hasKey ? 'Anahtar kayitli' : 'Anahtar kayitli degil';
@@ -391,6 +402,12 @@ async function loadChatAnalysisConfig() {
                 if (customInput) customInput.value = chatAnalysisState.savedModel;
             }
         }
+        const maxTokensInput = document.getElementById('chatAnalysisMaxTokens');
+        if (maxTokensInput) {
+            const fallback = 4096;
+            const value = Number.isFinite(chatAnalysisState.savedMaxTokens) ? chatAnalysisState.savedMaxTokens : fallback;
+            maxTokensInput.value = String(value);
+        }
     } catch (err) {
         if (statusEl) statusEl.textContent = 'AI ayarlari okunamadi';
     }
@@ -400,12 +417,18 @@ async function saveChatAnalysisConfig() {
     const apiKeyInput = document.getElementById('chatAnalysisApiKeyInput');
     const apiKey = String(apiKeyInput?.value || '').trim();
     const model = getChatAnalysisModelValue();
+    const maxTokensInput = document.getElementById('chatAnalysisMaxTokens');
+    const maxTokensRaw = maxTokensInput ? Number.parseInt(String(maxTokensInput.value || ''), 10) : NaN;
+    const maxTokens = Number.isFinite(maxTokensRaw)
+        ? Math.max(256, Math.min(8192, maxTokensRaw))
+        : null;
 
     const payload = {};
     if (apiKey) payload.apiKey = apiKey;
     if (model) payload.model = model;
+    if (maxTokens) payload.maxTokens = maxTokens;
 
-    if (!payload.apiKey && !payload.model) {
+    if (!payload.apiKey && !payload.model && !payload.maxTokens) {
         showToast('Kaydedilecek veri yok', 'info');
         return;
     }
@@ -414,6 +437,10 @@ async function saveChatAnalysisConfig() {
         const result = await api('api/ai/config', 'POST', payload);
         chatAnalysisState.hasKey = Boolean(result?.hasKey);
         chatAnalysisState.savedModel = String(result?.model || '');
+        const maxTokensParsed = Number.parseInt(String(result?.maxTokens || ''), 10);
+        chatAnalysisState.savedMaxTokens = Number.isFinite(maxTokensParsed)
+            ? maxTokensParsed
+            : chatAnalysisState.savedMaxTokens;
         if (apiKeyInput) apiKeyInput.value = '';
         const statusEl = document.getElementById('chatAnalysisKeyStatus');
         if (statusEl) statusEl.textContent = chatAnalysisState.hasKey ? 'Anahtar kayitli' : 'Anahtar kayitli degil';
@@ -423,16 +450,31 @@ async function saveChatAnalysisConfig() {
     }
 }
 
-async function persistChatAnalysisModel(model) {
+async function persistChatAnalysisSettings(model, maxTokens) {
     const trimmed = String(model || '').trim();
-    if (!trimmed) return false;
-    if (chatAnalysisState.savedModel === trimmed) return true;
+    const tokens = Number.isFinite(maxTokens) ? Math.max(256, Math.min(8192, maxTokens)) : null;
+    const needsModel = trimmed && chatAnalysisState.savedModel !== trimmed;
+    const needsTokens = tokens && chatAnalysisState.savedMaxTokens !== tokens;
+    if (!needsModel && !needsTokens) return true;
+
+    const payload = {};
+    if (needsModel) payload.model = trimmed;
+    if (needsTokens) payload.maxTokens = tokens;
+
     try {
-        const result = await api('api/ai/config', 'POST', { model: trimmed });
-        chatAnalysisState.savedModel = String(result?.model || trimmed);
+        const result = await api('api/ai/config', 'POST', payload);
+        if (needsModel) {
+            chatAnalysisState.savedModel = String(result?.model || trimmed);
+        }
+        if (needsTokens) {
+            const maxTokensParsed = Number.parseInt(String(result?.maxTokens || ''), 10);
+            chatAnalysisState.savedMaxTokens = Number.isFinite(maxTokensParsed)
+                ? maxTokensParsed
+                : tokens;
+        }
         return true;
     } catch (err) {
-        showToast('Model kaydedilemedi: ' + err.message, 'error');
+        showToast('AI ayarlari kaydedilemedi: ' + err.message, 'error');
         return false;
     }
 }
@@ -460,7 +502,10 @@ async function runChatAnalysis() {
         return;
     }
 
-    await persistChatAnalysisModel(model);
+    const maxTokensInput = document.getElementById('chatAnalysisMaxTokens');
+    const maxTokensRaw = maxTokensInput ? Number.parseInt(String(maxTokensInput.value || ''), 10) : NaN;
+    const maxTokens = Number.isFinite(maxTokensRaw) ? maxTokensRaw : null;
+    await persistChatAnalysisSettings(model, maxTokens);
 
     if (countInput) countInput.value = String(messageCount);
 

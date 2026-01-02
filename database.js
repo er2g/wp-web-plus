@@ -196,6 +196,7 @@ function createDatabase(config) {
         preferences TEXT,
         ai_api_key TEXT,
         ai_model TEXT,
+        ai_max_tokens INTEGER,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -533,6 +534,15 @@ function createDatabase(config) {
                     db.exec('ALTER TABLE users ADD COLUMN ai_model TEXT');
                 }
             }
+        },
+        {
+            version: 16,
+            name: 'add_ai_max_tokens_to_users',
+            apply: () => {
+                if (!columnExists('users', 'ai_max_tokens')) {
+                    db.exec('ALTER TABLE users ADD COLUMN ai_max_tokens INTEGER');
+                }
+            }
         }
     ];
 
@@ -801,7 +811,7 @@ function createDatabase(config) {
     `),
         create: db.prepare('INSERT INTO users (username, display_name, password_hash, password_salt, is_active, preferences) VALUES (?, ?, ?, ?, ?, ?)'),
         updatePreferences: db.prepare('UPDATE users SET preferences = ? WHERE id = ?'),
-        updateAiConfig: db.prepare('UPDATE users SET ai_api_key = ?, ai_model = ? WHERE id = ?'),
+        updateAiConfig: db.prepare('UPDATE users SET ai_api_key = ?, ai_model = ?, ai_max_tokens = ? WHERE id = ?'),
         delete: db.prepare('DELETE FROM users WHERE id = ?'),
         count: db.prepare('SELECT COUNT(*) as count FROM users')
     };
