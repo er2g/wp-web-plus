@@ -14,6 +14,363 @@ let aiAssistantState = {
     history: []
 };
 
+let aiAssistantFlow = null;
+
+function resetAiAssistantFlow() {
+    aiAssistantFlow = {
+        step: 'idle',
+        intent: '',
+        autoReply: false,
+        includeHistory: null,
+        historyLimit: 40,
+        persona: null,
+        chatIds: [],
+        pendingChatMatches: []
+    };
+}
+
+function aiAssistantRespond(text) {
+    aiAssistantAppendHistory('assistant', text);
+}
+
+function aiAssistantParseYesNo(text) {
+    const lowered = String(text || '').toLowerCase();
+    if (/(evet|olur|tamam|onay|ok|yes|aynen)/.test(lowered)) return true;
+    if (/(hayir|hayır|istemiyorum|olmasin|olmasın|yok|no)/.test(lowered)) return false;
+    return null;
+}
+
+function aiAssistantParseHistoryAnswer(text) {
+    const lowered = String(text || '').toLowerCase();
+    if (/(hayir|hayır|yok|dahil etme|ekleme|istemiyorum|gerek yok)/.test(lowered)) {
+        return { includeHistory: false };
+    }
+    const numberMatch = lowered.match(/\b(\d{1,3})\b/);
+    if (numberMatch) {
+        const parsed = Number.parseInt(numberMatch[1], 10);
+        if (Number.isFinite(parsed)) {
+            const bounded = Math.max(10, Math.min(200, parsed));
+            return { includeHistory: true, historyLimit: bounded };
+        }
+    }
+    if (/(evet|olur|dahil|ekle)/.test(lowered)) {
+        return { includeHistory: true };
+    }
+    return null;
+}
+
+function aiAssistantParsePersona(text) {
+    const lowered = String(text || '').toLowerCase();
+    if (/(farketmez|normal|standart|default|bosver)/.test(lowered)) return '';
+    return String(text || '').trim();
+}
+
+function aiAssistantDetectAutoReplyIntent(text) {
+    const lowered = String(text || '').toLowerCase();
+    return /(yapay zeka|\bai\b|asistan|bot|otomatik|cevap|yazsin|yazsın|sen cevap ver|sohbeti sen)/.test(lowered);
+}
+
+function aiAssistantMatchChatsByText(text) {
+    const lowered = String(text || '').toLowerCase();
+    const chatsList = Array.isArray(aiAssistantState.chats) ? aiAssistantState.chats : [];
+    const matches = [];
+    const seen = new Set();
+
+    const quoted = lowered.match(/["'“”‘’]([^"'“”‘’]{2,})["'“”‘’]/);
+    const quotedToken = quoted ? quoted[1].trim() : '';
+
+    chatsList.forEach((chat) => {
+        const name = String(chat.name || '').trim();
+        const id = String(chat.chat_id || '').trim();
+        if (!id || seen.has(id)) return;
+
+        const nameLower = name.toLowerCase();
+        const idLower = id.toLowerCase();
+
+        const nameHit = nameLower.length >= 3 && lowered.includes(nameLower);
+        const idHit = idLower && lowered.includes(idLower);
+        const quotedHit = quotedToken && nameLower.includes(quotedToken.toLowerCase());
+
+        if (nameHit || idHit || quotedHit) {
+            matches.push(chat);
+            seen.add(id);
+        }
+    });
+
+    return matches;
+}
+
+function aiAssistantFormatChatMatches(matches) {
+    return matches.map((chat, idx) => {
+        const name = String(chat?.name || chat?.chat_id || 'Sohbet');
+        const id = String(chat?.chat_id || '').trim();
+        const label = id ? `${name} (${id})` : name;
+        return `${idx + 1}) ${label}`;
+    }).join('\n');
+}
+
+function aiAssistantResolveChatSelection(text) {
+    const lowered = String(text || '').toLowerCase();
+    if (/(hepsi|tum sohbetler|tumunu|tumu)/.test(lowered)) {
+        const all = (Array.isArray(aiAssistantState.chats) ? aiAssistantState.chats : [])
+            .map((chat) => String(chat?.chat_id || '').trim())
+            .filter(Boolean);
+        return { chatIds: Array.from(new Set(all)) };
+    }
+
+    if (/(bu sohbet|su sohbet|burasi|burası)/.test(lowered) && typeof currentChat !== 'undefined' && currentChat) {
+        return { chatIds: [String(currentChat)] };
+    }
+
+    const idMatch = lowered.match(/([0-9]{5,}@c\.us|[0-9a-zA-Z._-]+@g\.us)/);
+    if (idMatch) {
+        return { chatIds: [idMatch[1]] };
+    }
+
+    if (aiAssistantFlow && aiAssistantFlow.pendingChatMatches && aiAssistantFlow.pendingChatMatches.length) {
+        const indexMatch = lowered.match(/\b(\d{1,2})\b/);
+        if (indexMatch) {
+            const idx = Number.parseInt(indexMatch[1], 10) - 1;
+            const match = aiAssistantFlow.pendingChatMatches[idx];
+            if (match?.chat_id) {
+                return { chatIds: [String(match.chat_id)] };
+            }
+        }
+
+        const fallback = aiAssistantFlow.pendingChatMatches.find((chat) => {
+            const name = String(chat?.name || '').toLowerCase();
+            return name && lowered.includes(name);
+        });
+        if (fallback?.chat_id) {
+            return { chatIds: [String(fallback.chat_id)] };
+        }
+    }
+
+    const matches = aiAssistantMatchChatsByText(text);
+    if (matches.length === 1) {
+        return { chatIds: [String(matches[0].chat_id)] };
+    }
+    if (matches.length > 1) {
+        return { matches };
+    }
+
+    return { matches: [] };
+}
+
+function aiAssistantAskForChat() {
+    aiAssistantFlow.step = 'awaiting_chat';
+    aiAssistantRespond('Hangi sohbet(ler) icin kurayim? Sohbet adini yaz veya ID paylas. Istersen "hepsi" yazabilirsin.');
+}
+
+function aiAssistantAskForHistory() {
+    aiAssistantFlow.step = 'awaiting_history';
+    aiAssistantRespond('Sohbet gecmisini dahil edeyim mi? Kac mesaj olsun? (Ornek: 40). "Hayir" yazarsan eklemem.');
+}
+
+function aiAssistantAskForPersona() {
+    aiAssistantFlow.step = 'awaiting_persona';
+    aiAssistantRespond('Konusma tavri nasil olsun? (Ornek: samimi, resmi, kisa, esprili). "Farketmez" yazabilirsin.');
+}
+
+function aiAssistantAskForConfirm() {
+    aiAssistantFlow.step = 'awaiting_confirm';
+    const chatNames = aiAssistantFlow.chatIds
+        .map((id) => {
+            const match = (Array.isArray(aiAssistantState.chats) ? aiAssistantState.chats : []).find((c) => c?.chat_id === id);
+            return match?.name || id;
+        })
+        .join(', ');
+    const lines = [];
+    lines.push('Ayarlar hazir:');
+    lines.push(`- Sohbet: ${chatNames || 'Belirsiz'}`);
+    lines.push(`- Mod: ${aiAssistantFlow.autoReply ? 'AI otomatik cevap' : 'Script'}`);
+    if (aiAssistantFlow.autoReply) {
+        const historyText = aiAssistantFlow.includeHistory
+            ? `${aiAssistantFlow.historyLimit} mesaj`
+            : 'Kapali';
+        const personaText = aiAssistantFlow.persona ? aiAssistantFlow.persona : 'Standart';
+        lines.push(`- Gecmis: ${historyText}`);
+        lines.push(`- Tavir: ${personaText}`);
+    }
+    lines.push('Botu aktif edeyim mi? (evet/hayir)');
+    aiAssistantRespond(lines.join('\n'));
+}
+
+function aiAssistantAdvanceFlow() {
+    if (!aiAssistantFlow) return;
+    if (!aiAssistantFlow.chatIds.length) {
+        return aiAssistantAskForChat();
+    }
+    if (aiAssistantFlow.autoReply) {
+        if (aiAssistantFlow.includeHistory === null) {
+            return aiAssistantAskForHistory();
+        }
+        if (aiAssistantFlow.persona === null) {
+            return aiAssistantAskForPersona();
+        }
+    }
+    return aiAssistantAskForConfirm();
+}
+
+function aiAssistantHandleCommand(text) {
+    const lowered = String(text || '').toLowerCase();
+    if (/(sifirla|reset|yeni basla)/.test(lowered)) {
+        resetAiAssistantFlow();
+        aiAssistantRespond('Tamam, sifirladim. Ne yapmak istersin?');
+        return true;
+    }
+    if (/(iptal|vazgec|vazgeç)/.test(lowered)) {
+        resetAiAssistantFlow();
+        aiAssistantRespond('Tamam, islemi iptal ettim. Yeni bir istek yazabilirsin.');
+        return true;
+    }
+    if (/((gecmis|history).*temizle|temizle gecmis|temizle history)/.test(lowered)) {
+        clearAiAssistantHistory();
+        aiAssistantRespond('Sohbet gecmisini temizledim. Yeni bir istek yazabilirsin.');
+        return true;
+    }
+    return false;
+}
+
+async function aiAssistantFinalizeScript() {
+    const loading = document.getElementById('aiLoading');
+    const sendBtn = document.getElementById('btnAiSend');
+    if (loading) loading.style.display = 'block';
+    if (sendBtn) sendBtn.disabled = true;
+
+    try {
+        const finalPrompt = buildAiAssistantPrompt(aiAssistantFlow.intent, {
+            autoReply: aiAssistantFlow.autoReply,
+            persona: aiAssistantFlow.persona || '',
+            includeHistory: aiAssistantFlow.includeHistory,
+            historyLimit: aiAssistantFlow.historyLimit
+        });
+
+        const response = await api('api/ai/generate-script', 'POST', { prompt: finalPrompt });
+        if (!response?.success || !response?.script) {
+            aiAssistantRespond('Script olusturulamadi. Lutfen tekrar deneyelim.');
+            return;
+        }
+
+        const mergedFilter = mergeAiAssistantTriggerFilter(response.script.trigger_filter, aiAssistantFlow.chatIds);
+        if (aiAssistantFlow.autoReply) {
+            mergedFilter.incoming = true;
+            delete mergedFilter.outgoing;
+        }
+
+        lastGeneratedScript = { ...response.script, trigger_filter: mergedFilter };
+
+        const payload = {
+            name: response.script.name,
+            description: response.script.description,
+            code: response.script.code,
+            trigger_type: response.script.trigger_type || 'message',
+            trigger_filter: mergedFilter,
+            is_active: true
+        };
+
+        await api('api/scripts', 'POST', payload);
+        aiAssistantRespond(`Script olusturuldu ve aktif edildi: ${payload.name || 'Yeni Script'}`);
+        loadScriptsData();
+        resetAiAssistantFlow();
+    } catch (err) {
+        aiAssistantRespond('Olusturma hatasi: ' + err.message);
+    } finally {
+        if (loading) loading.style.display = 'none';
+        if (sendBtn) sendBtn.disabled = false;
+    }
+}
+
+async function sendAiAssistantMessage() {
+    const input = document.getElementById('aiPromptInput');
+    if (!input) return;
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = '';
+    aiAssistantAppendHistory('user', text);
+
+    if (!aiAssistantFlow) resetAiAssistantFlow();
+
+    if (aiAssistantHandleCommand(text)) return;
+
+    if (aiAssistantFlow.step === 'awaiting_chat') {
+        const selection = aiAssistantResolveChatSelection(text);
+        if (selection.chatIds && selection.chatIds.length) {
+            aiAssistantFlow.chatIds = selection.chatIds;
+            aiAssistantFlow.pendingChatMatches = [];
+            aiAssistantAdvanceFlow();
+            return;
+        }
+        if (selection.matches && selection.matches.length > 1) {
+            aiAssistantFlow.pendingChatMatches = selection.matches;
+            aiAssistantRespond('Birden fazla sohbet buldum:\n' + aiAssistantFormatChatMatches(selection.matches) + '\nLutfen numara yaz.');
+            return;
+        }
+        aiAssistantRespond('Sohbeti bulamadim. Sohbet adini veya ID bilgisini tekrar yazar misin?');
+        return;
+    }
+
+    if (aiAssistantFlow.step === 'awaiting_history') {
+        const parsed = aiAssistantParseHistoryAnswer(text);
+        if (!parsed) {
+            aiAssistantRespond('Anlayamadim. Ornek: "40" ya da "hayir" yazabilirsin.');
+            return;
+        }
+        aiAssistantFlow.includeHistory = parsed.includeHistory;
+        if (parsed.historyLimit) aiAssistantFlow.historyLimit = parsed.historyLimit;
+        aiAssistantAdvanceFlow();
+        return;
+    }
+
+    if (aiAssistantFlow.step === 'awaiting_persona') {
+        const persona = aiAssistantParsePersona(text);
+        aiAssistantFlow.persona = persona;
+        aiAssistantAdvanceFlow();
+        return;
+    }
+
+    if (aiAssistantFlow.step === 'awaiting_confirm') {
+        const answer = aiAssistantParseYesNo(text);
+        if (answer === null) {
+            aiAssistantRespond('Lutfen "evet" veya "hayir" yaz.');
+            return;
+        }
+        if (!answer) {
+            resetAiAssistantFlow();
+            aiAssistantRespond('Tamam, iptal ettim. Yeni bir istek yazabilirsin.');
+            return;
+        }
+        await aiAssistantFinalizeScript();
+        return;
+    }
+
+    const autoReply = aiAssistantDetectAutoReplyIntent(text);
+    resetAiAssistantFlow();
+    aiAssistantFlow.intent = text;
+    aiAssistantFlow.autoReply = autoReply;
+    if (!autoReply) {
+        aiAssistantFlow.includeHistory = false;
+        aiAssistantFlow.persona = '';
+    }
+
+    const historyParsed = autoReply ? aiAssistantParseHistoryAnswer(text) : null;
+    if (historyParsed) {
+        aiAssistantFlow.includeHistory = historyParsed.includeHistory;
+        if (historyParsed.historyLimit) aiAssistantFlow.historyLimit = historyParsed.historyLimit;
+    }
+
+    const selection = aiAssistantResolveChatSelection(text);
+    if (selection.chatIds && selection.chatIds.length) {
+        aiAssistantFlow.chatIds = selection.chatIds;
+    } else if (selection.matches && selection.matches.length > 1) {
+        aiAssistantFlow.pendingChatMatches = selection.matches;
+        aiAssistantFlow.step = 'awaiting_chat';
+        aiAssistantRespond('Birden fazla sohbet buldum:\n' + aiAssistantFormatChatMatches(selection.matches) + '\nLutfen numara yaz.');
+        return;
+    }
+
+    aiAssistantAdvanceFlow();
+}
 function aiAssistantLoadHistory() {
     try {
         const raw = localStorage.getItem(AI_ASSISTANT_HISTORY_KEY);
@@ -105,6 +462,9 @@ function isAiAssistantAutoReplyEnabled() {
 }
 
 function aiAssistantGetSelectedChatIds() {
+    if (aiAssistantFlow && Array.isArray(aiAssistantFlow.chatIds) && aiAssistantFlow.chatIds.length) {
+        return [...aiAssistantFlow.chatIds];
+    }
     return Array.from(aiAssistantState.selectedChatIds || []);
 }
 
@@ -210,15 +570,20 @@ function buildAiAssistantPrompt(basePrompt, options = {}) {
 
     if (options.autoReply) {
         const historyLimit = Number.isFinite(options.historyLimit) ? options.historyLimit : 40;
+        const includeHistory = options.includeHistory !== false;
         segments.push('');
         segments.push('Ek kurallar:');
         segments.push('- Gelen mesajlara Gemini ile cevap uret (aiGenerate fonksiyonunu kullan).');
         segments.push('- Sadece gelen mesajlarda calis; kendi mesajlarina cevap verme.');
-        segments.push(`- Cevap yazmadan once getMessages(msg.chatId, ${historyLimit}) ile son ${historyLimit} mesaji cek.`);
-        segments.push('- Mesajlari kronolojik siraya koy (eskiden yeniye).');
-        segments.push('- Her mesaji "isim | tarih saat | mesaj" formatinda prompta ekle.');
-        segments.push('- isim icin msg.isFromMe ise "Sen", degilse from_name/from_number kullan.');
-        segments.push('- tarih saat icin new Date(m.timestamp).toLocaleString() kullan.');
+        if (includeHistory) {
+            segments.push(`- Cevap yazmadan once getMessages(msg.chatId, ${historyLimit}) ile son ${historyLimit} mesaji cek.`);
+            segments.push('- Mesajlari kronolojik siraya koy (eskiden yeniye).');
+            segments.push('- Her mesaji "isim | tarih saat | mesaj" formatinda prompta ekle.');
+            segments.push('- isim icin msg.isFromMe ise "Sen", degilse from_name/from_number kullan.');
+            segments.push('- tarih saat icin new Date(m.timestamp).toLocaleString() kullan.');
+        } else {
+            segments.push('- Sohbet gecmisini kullanma; sadece gelen mesaji prompta ekle.');
+        }
         segments.push('- Cevaplari dogal, kisa ve anlasilir tut.');
         if (options.persona) {
             segments.push('- Asistan tavri: ' + options.persona.trim());
@@ -252,193 +617,52 @@ function openGeminiAssistant() {
     modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
 
     modal.innerHTML = `
-        <div class="modal" style="max-width: 600px;">
+        <div class="modal" style="max-width: 640px;">
             <div class="modal-header">
                 <h3><i class="bi bi-magic"></i> AI Asistan</h3>
                 <i class="bi bi-x-lg close-btn" onclick="this.closest('.modal-overlay').remove()"></i>
             </div>
             <div class="modal-body">
                 <p style="color: var(--text-secondary); margin-bottom: 12px;">
-                    Ne tur bir script istediginizi yazin. AI, Script Runner icin kod uretir ve siz onaylarsaniz kaydeder.
+                    Scripti robotla sohbet ederek kur. Hedef sohbeti, gecmis miktarini ve tavri birlikte belirleriz.
                 </p>
                 <div class="ai-chat-history" id="aiAssistantHistory"></div>
-                <div class="ai-chat-footer">
-                    <button class="btn btn-secondary btn-sm" type="button" onclick="clearAiAssistantHistory()">Gecmisi temizle</button>
+                <div class="form-group" style="margin-top: 12px;">
+                    <textarea class="form-input" id="aiPromptInput" rows="2" placeholder="Mesajini yaz... (Enter gonderir, Shift+Enter satir ekler)"></textarea>
                 </div>
-                <div class="form-group">
-                    <label class="form-label">Mesajin</label>
-                    <textarea class="form-input" id="aiPromptInput" rows="3" placeholder="Ornek: Gelen mesaj 'merhaba' iceriyorsa, gonderene 'Hosgeldiniz' cevabi ver."></textarea>
-                </div>
-                <div class="settings-section" style="margin-bottom: 16px;">
-                    <div class="settings-section-title">AI Asistan Modu</div>
-                    <div class="settings-item">
-                        <i class="icon bi bi-robot"></i>
-                        <div class="info">
-                            <div class="title">AI ile otomatik cevap</div>
-                            <div class="subtitle">Gelen mesajlara Gemini ile yanit uretir</div>
-                        </div>
-                        <div class="toggle" id="aiAssistantAutoReplyToggle" onclick="toggleAiAssistantAutoReply()"></div>
-                    </div>
-                    <div class="settings-item" id="aiAssistantPersonaRow" style="display: none;">
-                        <i class="icon bi bi-brush"></i>
-                        <div class="info">
-                            <div class="title">Tavir / Rol</div>
-                            <div class="subtitle">Asistanin konusma tarzi</div>
-                        </div>
-                        <textarea class="form-input" id="aiAssistantPersonaInput" rows="2" placeholder="Ornek: Samimi, kisa ve nazik cevaplar ver."></textarea>
-                    </div>
-                    <div class="settings-item" id="aiAssistantHistoryRow" style="display: none;">
-                        <i class="icon bi bi-clock-history"></i>
-                        <div class="info">
-                            <div class="title">Gecmis mesaj sayisi</div>
-                            <div class="subtitle">AI'a verilecek son mesaj adedi</div>
-                        </div>
-                        <input type="number" class="form-input" id="aiAssistantHistoryLimit" min="10" max="200" step="5" value="40" style="width: 120px;">
-                    </div>
-                </div>
-                <div class="settings-section" style="margin-bottom: 16px;">
-                    <div class="settings-section-title">Hedef Sohbetler</div>
-                    <div class="form-group" style="margin-bottom: 0;">
-                        <label class="form-label">Mesaj scriptleri icin zorunlu</label>
-                        <input type="text" class="form-input" id="aiAssistantChatSearch" placeholder="Sohbet ara (isim / id)">
-                        <div class="chat-scope-picker" id="aiAssistantChatPickerList"></div>
-                        <div class="chat-scope-footer">
-                            <div id="aiAssistantChatSelectedCount" style="color: var(--text-secondary); font-size: 13px;">0 sohbet secildi</div>
-                            <div style="display:flex; gap:8px;">
-                                <button class="btn btn-secondary btn-sm" type="button" id="aiAssistantChatSelectAllBtn">Hepsini sec</button>
-                                <button class="btn btn-secondary btn-sm" type="button" id="aiAssistantChatClearBtn">Temizle</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div class="settings-section" style="margin-bottom: 16px;">
-                    <div class="settings-section-title">Gemini Ayarlari</div>
-                    <div class="settings-item">
-                        <i class="icon bi bi-cpu"></i>
-                        <div class="info">
-                            <div class="title">Model</div>
-                            <div class="subtitle">Script olusturmada kullanilacak Gemini modeli</div>
-                        </div>
-                        <div style="display: flex; flex-direction: column; gap: 8px; width: 50%;">
-                            <select id="aiAssistantModelSelect" class="select-input" onchange="toggleAiAssistantModelInput(this.value)">
-                                <option value="gemini-2.5-flash">gemini-2.5-flash</option>
-                                <option value="gemini-2.5-pro">gemini-2.5-pro</option>
-                                <option value="custom">Ozel</option>
-                            </select>
-                            <input type="text" class="form-input" id="aiAssistantModelCustomInput" placeholder="gemini-2.5-flash-latest" style="display:none;">
-                        </div>
-                    </div>
-                    <div class="settings-item">
-                        <i class="icon bi bi-sliders"></i>
-                        <div class="info">
-                            <div class="title">Maksimum Token</div>
-                            <div class="subtitle">Daha yuksek deger daha uzun kod uretilmesine izin verir</div>
-                        </div>
-                        <input type="number" class="form-input" id="aiAssistantMaxTokens" min="256" max="8192" step="128" value="2048" style="width: 120px;">
-                    </div>
-                </div>
-                <div id="aiLoading" style="display: none; text-align: center; margin: 20px 0;">
+                <div id="aiLoading" style="display: none; text-align: center; margin: 16px 0;">
                     <div class="spinner"></div>
-                    <p style="margin-top: 8px; color: var(--text-secondary);">Script olusturuluyor...</p>
-                </div>
-                <div id="aiResult" style="display: none; margin-top: 20px;">
-                    <div style="background: var(--bg-secondary); padding: 12px; border-radius: 8px; border: 1px solid var(--border-color);">
-                        <div style="display:flex; align-items: center; justify-content: space-between; gap: 12px;">
-                            <h4 id="aiResultName" style="margin-bottom: 4px;">Script Adi</h4>
-                            <span id="aiResultTrigger" style="font-size: 12px; color: var(--text-secondary);"></span>
-                        </div>
-                        <p id="aiResultDesc" style="color: var(--text-secondary); font-size: 13px; margin-bottom: 12px;">Aciklama</p>
-                        <div id="aiResultFilterWrap" style="display:none; margin-bottom: 12px;">
-                            <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 6px;">Filtre</div>
-                            <pre id="aiResultFilter" style="background: var(--bg-primary); padding: 8px; border-radius: 4px; overflow-x: auto; font-family: monospace; font-size: 12px;"></pre>
-                        </div>
-                        <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 6px;">Kod</div>
-                        <pre id="aiResultCode" style="background: var(--bg-primary); padding: 8px; border-radius: 4px; overflow-x: auto; font-family: monospace; font-size: 12px;"></pre>
-                        <div id="aiTestResult" style="display:none; margin-top: 10px; font-size: 12px;"></div>
-                    </div>
-                    <details style="margin-top: 14px;">
-                        <summary style="cursor: pointer; color: var(--text-secondary); font-size: 12px;">Script icinde kullanabilecegin fonksiyonlar</summary>
-                        <div style="margin-top: 8px; font-size: 12px; color: var(--text-secondary); line-height: 1.5;">
-                            <div><code>await sendMessage(chatId, text)</code> - Sohbete mesaj gonder</div>
-                            <div><code>await reply(text)</code> - Tetikleyen mesaja cevap yaz</div>
-                            <div><code>getChats()</code> - Chat listesi</div>
-                            <div><code>getMessages(chatId, limit)</code> - Chat mesajlari</div>
-                            <div><code>searchMessages(query)</code> - Mesaj arama</div>
-                            <div><code>fetch(url, options)</code> - Guvenli HTTP istegi (dis kaynak)</div>
-                            <div><code>await aiGenerate(prompt, options)</code> - Gemini ile yanit uret</div>
-                            <div><code>storage.get/set/delete/clear</code> - Basit key-value</div>
-                            <div><code>msg</code> / <code>message</code> - Tetikleyici mesaj verisi</div>
-                        </div>
-                    </details>
+                    <p style="margin-top: 8px; color: var(--text-secondary);">AI hazirlaniyor...</p>
                 </div>
             </div>
             <div class="modal-footer" style="justify-content: space-between;">
                 <button class="btn btn-secondary" onclick="closeAiAssistant()"><i class="bi bi-x"></i> Kapat</button>
-                <div style="display:flex; gap: 12px;">
-                    <button class="btn btn-secondary" id="btnAiTest" onclick="testAiScript()" style="display: none;">
-                        <i class="bi bi-play"></i> Test
-                    </button>
-                    <button class="btn btn-danger" id="btnAiReject" onclick="rejectAiScript()" style="display: none;">
-                        <i class="bi bi-x-lg"></i> Reddet
-                    </button>
-                    <button class="btn btn-primary" id="btnAiAccept" onclick="acceptAiScript()" style="display: none;">
-                        <i class="bi bi-check-lg"></i> Kabul Et
-                    </button>
-                    <button class="btn btn-primary" id="btnAiGenerate" onclick="generateAiScript()">
-                        <i class="bi bi-stars"></i> Olustur
-                    </button>
-                </div>
+                <button class="btn btn-primary" id="btnAiSend" onclick="sendAiAssistantMessage()">
+                    <i class="bi bi-send"></i> Gonder
+                </button>
             </div>
         </div>
     `;
 
     document.body.appendChild(modal);
-    document.getElementById('aiPromptInput').focus();
+    const input = document.getElementById('aiPromptInput');
+    if (input) {
+        input.focus();
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendAiAssistantMessage();
+            }
+        });
+    }
     aiAssistantLoadHistory();
     aiAssistantRenderHistory();
-    toggleAiAssistantAutoReply(false);
+    resetAiAssistantFlow();
     aiAssistantLoadChats();
     loadAiAssistantConfig();
 
-    const chatSearchEl = document.getElementById('aiAssistantChatSearch');
-    if (chatSearchEl) {
-        chatSearchEl.addEventListener('input', (e) => {
-            aiAssistantState.chatSearch = e.target.value || '';
-            aiAssistantRenderChatPicker();
-        });
-    }
-
-    const chatPickerEl = document.getElementById('aiAssistantChatPickerList');
-    if (chatPickerEl) {
-        chatPickerEl.addEventListener('change', (e) => {
-            const input = e.target;
-            if (!input || input.tagName !== 'INPUT') return;
-            const chatId = input.getAttribute('data-chat-id') || '';
-            if (!chatId) return;
-            if (input.checked) {
-                aiAssistantState.selectedChatIds.add(chatId);
-            } else {
-                aiAssistantState.selectedChatIds.delete(chatId);
-            }
-            aiAssistantRenderChatPicker();
-        });
-    }
-
-    const selectAllBtn = document.getElementById('aiAssistantChatSelectAllBtn');
-    if (selectAllBtn) {
-        selectAllBtn.addEventListener('click', () => {
-            const chatsList = Array.isArray(aiAssistantState.chats) ? aiAssistantState.chats : [];
-            chatsList.forEach((c) => { if (c?.chat_id) aiAssistantState.selectedChatIds.add(c.chat_id); });
-            aiAssistantRenderChatPicker();
-        });
-    }
-
-    const clearBtn = document.getElementById('aiAssistantChatClearBtn');
-    if (clearBtn) {
-        clearBtn.addEventListener('click', () => {
-            aiAssistantState.selectedChatIds.clear();
-            aiAssistantRenderChatPicker();
-        });
+    if (!aiAssistantState.history.length) {
+        aiAssistantRespond('Merhaba! Hangi sohbette AI otomatik cevap yazsin?');
     }
 }
 
@@ -450,100 +674,7 @@ function openAiAssistant() {
 let lastGeneratedScript = null;
 
 async function generateAiScript() {
-    const prompt = document.getElementById('aiPromptInput').value.trim();
-    if (!prompt) return;
-
-    const selectedChatIds = aiAssistantGetSelectedChatIds();
-    if (!selectedChatIds.length) {
-        showToast('Mesaj scripti icin en az 1 hedef sohbet secin', 'info');
-        return;
-    }
-
-    const model = getAiAssistantModelValue();
-    if (!model) {
-        showToast('Model secin', 'info');
-        return;
-    }
-    const maxTokensInput = document.getElementById('aiAssistantMaxTokens');
-    const maxTokensRaw = maxTokensInput ? Number.parseInt(String(maxTokensInput.value || ''), 10) : NaN;
-    const maxTokens = Number.isFinite(maxTokensRaw)
-        ? Math.max(256, Math.min(8192, maxTokensRaw))
-        : null;
-    const saved = await persistChatAnalysisSettings(model, maxTokens);
-    if (!saved) return;
-
-    const personaInput = document.getElementById('aiAssistantPersonaInput');
-    const persona = String(personaInput?.value || '').trim();
-    const autoReply = isAiAssistantAutoReplyEnabled();
-    const historyLimit = getAiAssistantHistoryLimit();
-    const finalPrompt = buildAiAssistantPrompt(prompt, { autoReply, persona, historyLimit });
-    const historyNote = autoReply && persona
-        ? (prompt + '\n\nTavir: ' + persona)
-        : prompt;
-    aiAssistantAppendHistory('user', historyNote);
-
-    const loading = document.getElementById('aiLoading');
-    const resultDiv = document.getElementById('aiResult');
-    const btnGenerate = document.getElementById('btnAiGenerate');
-    const btnAccept = document.getElementById('btnAiAccept');
-    const btnReject = document.getElementById('btnAiReject');
-    const btnTest = document.getElementById('btnAiTest');
-    const testResult = document.getElementById('aiTestResult');
-
-    loading.style.display = 'block';
-    resultDiv.style.display = 'none';
-    btnGenerate.disabled = true;
-    btnAccept.style.display = 'none';
-    btnReject.style.display = 'none';
-    btnTest.style.display = 'none';
-    if (testResult) testResult.style.display = 'none';
-    lastGeneratedScript = null;
-
-    try {
-        const response = await api('api/ai/generate-script', 'POST', { prompt: finalPrompt });
-        if (response.success && response.script) {
-            const mergedFilter = mergeAiAssistantTriggerFilter(response.script.trigger_filter, selectedChatIds);
-            lastGeneratedScript = { ...response.script, trigger_filter: mergedFilter };
-
-            const triggerType = lastGeneratedScript.trigger_type || 'message';
-            const triggerText = 'Tetik: ' + triggerType;
-
-            document.getElementById('aiResultName').textContent = lastGeneratedScript.name || 'Script';
-            document.getElementById('aiResultDesc').textContent = lastGeneratedScript.description || '';
-            document.getElementById('aiResultCode').textContent = lastGeneratedScript.code || '';
-            document.getElementById('aiResultTrigger').textContent = triggerText;
-
-            const filterWrap = document.getElementById('aiResultFilterWrap');
-            const filterEl = document.getElementById('aiResultFilter');
-            if (filterWrap && filterEl && lastGeneratedScript.trigger_filter) {
-                filterWrap.style.display = 'block';
-                try {
-                    filterEl.textContent = JSON.stringify(lastGeneratedScript.trigger_filter, null, 2);
-                } catch (e) {
-                    filterEl.textContent = String(lastGeneratedScript.trigger_filter);
-                }
-            } else if (filterWrap) {
-                filterWrap.style.display = 'none';
-            }
-
-            resultDiv.style.display = 'block';
-            btnAccept.style.display = 'inline-flex';
-            btnReject.style.display = 'inline-flex';
-            btnTest.style.display = 'inline-flex';
-            btnGenerate.innerHTML = '<i class="bi bi-stars"></i> Tekrar Olustur';
-
-            const summaryParts = [];
-            summaryParts.push('Script: ' + (lastGeneratedScript.name || 'Yeni Script'));
-            if (lastGeneratedScript.description) summaryParts.push(lastGeneratedScript.description);
-            summaryParts.push(triggerText);
-            aiAssistantAppendHistory('assistant', summaryParts.join('\n'));
-        }
-    } catch (err) {
-        showToast('AI hatasi: ' + err.message, 'error');
-    } finally {
-        loading.style.display = 'none';
-        btnGenerate.disabled = false;
-    }
+    return sendAiAssistantMessage();
 }
 
 function rejectAiScript() {
@@ -1025,6 +1156,7 @@ Object.assign(window, {
     openGeminiAssistant,
     openAiAssistant,
     generateAiScript,
+    sendAiAssistantMessage,
     acceptAiScript,
     rejectAiScript,
     testAiScript,

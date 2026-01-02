@@ -2254,7 +2254,7 @@ body.compact .message-row.stacked {
     background-color: var(--bg-secondary);
     border-radius: 12px;
     padding: 12px;
-    max-height: 220px;
+    max-height: 360px;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
