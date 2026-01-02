@@ -351,7 +351,7 @@ const run = async () => {
     prompt += 'Stil tohumu: ' + jitter + '\\n';
     prompt += 'Sadece yanit metnini yaz.\\n';
 
-    const response = await aiGenerate(prompt, { temperature: 0.7, maxTokens: 512 });
+    const response = await aiGenerate(prompt, { temperature: 0.7 });
     const replyText = String(response || '').trim();
     if (!replyText) return;
     await reply(replyText);

@@ -24,25 +24,66 @@ class AiService {
         }
 
         try {
-            const response = await axios.post(
-                `${this.baseUrl}/${effectiveModel}:generateContent?key=${effectiveKey}`,
-                {
-                    contents: [{
-                        role: 'user',
-                        parts: [{ text: prompt }]
-                    }],
-                    generationConfig: {
-                        temperature,
-                        topK: 40,
-                        topP: 0.95,
-                        maxOutputTokens
-                    }
-                }
-            );
+            const originalPrompt = String(prompt);
+            const maxContinuations = 3;
+            let accumulated = '';
+            let attemptPrompt = originalPrompt;
 
-            const candidate = response.data?.candidates?.[0];
-            const parts = candidate?.content?.parts || [];
-            const text = parts.map(part => part?.text || '').join('').trim();
+            for (let attempt = 0; attempt <= maxContinuations; attempt++) {
+                const response = await axios.post(
+                    `${this.baseUrl}/${effectiveModel}:generateContent?key=${effectiveKey}`,
+                    {
+                        contents: [{
+                            role: 'user',
+                            parts: [{ text: attemptPrompt }]
+                        }],
+                        generationConfig: {
+                            temperature,
+                            topK: 40,
+                            topP: 0.95,
+                            maxOutputTokens
+                        }
+                    }
+                );
+
+                const candidate = response.data?.candidates?.[0];
+                const parts = candidate?.content?.parts || [];
+                const chunk = parts.map(part => part?.text || '').join('');
+                if (chunk) {
+                    accumulated += chunk;
+                }
+
+                const finishReasonRaw = candidate?.finishReason ?? candidate?.finish_reason;
+                const finishReason = typeof finishReasonRaw === 'string'
+                    ? finishReasonRaw.trim().toUpperCase()
+                    : String(finishReasonRaw || '').trim().toUpperCase();
+
+                const isMaxTokens = finishReason === 'MAX_TOKENS'
+                    || finishReason === 'MAX_OUTPUT_TOKENS'
+                    || finishReason.includes('MAX_TOKENS');
+                if (!isMaxTokens || attempt >= maxContinuations) {
+                    break;
+                }
+
+                const tail = accumulated.slice(-2000);
+                attemptPrompt = [
+                    'Your previous response was cut off because it hit the maximum output token limit.',
+                    '',
+                    'Original request:',
+                    originalPrompt,
+                    '',
+                    'Partial answer so far (tail):',
+                    tail,
+                    '',
+                    'Continue EXACTLY from where you left off.',
+                    '- Do NOT repeat any text you already wrote.',
+                    '- Do NOT restart or summarize.',
+                    '- Do NOT add prefaces like "Sure" or "Continuing".',
+                    '- If the continuation starts a new word, include a leading space.'
+                ].join('\n');
+            }
+
+            const text = accumulated.trim();
             if (!text) {
                 throw new Error('No response from AI');
             }
