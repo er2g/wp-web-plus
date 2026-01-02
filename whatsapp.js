@@ -1079,6 +1079,9 @@ class WhatsAppClient {
                                 // Ignore partial downloads (crdownload, tmp, etc)
                                 if (file.name.endsWith('.crdownload') || file.name.endsWith('.tmp')) continue;
 
+                                // Ignore cached profile pictures saved into the same media folder
+                                if (/^profile_[a-f0-9]/i.test(file.name)) continue;
+
                                 // 1. Extension Check
                                 const ext = path.extname(file.name).toLowerCase();
                                 const isImage = ['.jpg', '.jpeg', '.png', '.webp'].includes(ext);
