@@ -27,6 +27,32 @@ function openGeminiAssistant() {
                 <div class="form-group">
                     <textarea class="form-input" id="aiPromptInput" rows="4" placeholder="Ornek: Gelen mesaj 'merhaba' iceriyorsa, gonderene 'Hosgeldiniz' cevabi ver."></textarea>
                 </div>
+                <div class="settings-section" style="margin-bottom: 16px;">
+                    <div class="settings-section-title">Gemini Ayarlari</div>
+                    <div class="settings-item">
+                        <i class="icon bi bi-cpu"></i>
+                        <div class="info">
+                            <div class="title">Model</div>
+                            <div class="subtitle">Script olusturmada kullanilacak Gemini modeli</div>
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 8px; width: 50%;">
+                            <select id="aiAssistantModelSelect" class="select-input" onchange="toggleAiAssistantModelInput(this.value)">
+                                <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+                                <option value="gemini-2.5-pro">gemini-2.5-pro</option>
+                                <option value="custom">Ozel</option>
+                            </select>
+                            <input type="text" class="form-input" id="aiAssistantModelCustomInput" placeholder="gemini-2.5-flash-latest" style="display:none;">
+                        </div>
+                    </div>
+                    <div class="settings-item">
+                        <i class="icon bi bi-sliders"></i>
+                        <div class="info">
+                            <div class="title">Maksimum Token</div>
+                            <div class="subtitle">Daha yuksek deger daha uzun kod uretilmesine izin verir</div>
+                        </div>
+                        <input type="number" class="form-input" id="aiAssistantMaxTokens" min="256" max="8192" step="128" value="2048" style="width: 120px;">
+                    </div>
+                </div>
                 <div id="aiLoading" style="display: none; text-align: center; margin: 20px 0;">
                     <div class="spinner"></div>
                     <p style="margin-top: 8px; color: var(--text-secondary);">Script olusturuluyor...</p>
@@ -83,6 +109,7 @@ function openGeminiAssistant() {
 
     document.body.appendChild(modal);
     document.getElementById('aiPromptInput').focus();
+    loadAiAssistantConfig();
 }
 
 // Backward compatibility (older UI code)
@@ -95,6 +122,19 @@ let lastGeneratedScript = null;
 async function generateAiScript() {
     const prompt = document.getElementById('aiPromptInput').value.trim();
     if (!prompt) return;
+
+    const model = getAiAssistantModelValue();
+    if (!model) {
+        showToast('Model secin', 'info');
+        return;
+    }
+    const maxTokensInput = document.getElementById('aiAssistantMaxTokens');
+    const maxTokensRaw = maxTokensInput ? Number.parseInt(String(maxTokensInput.value || ''), 10) : NaN;
+    const maxTokens = Number.isFinite(maxTokensRaw)
+        ? Math.max(256, Math.min(8192, maxTokensRaw))
+        : null;
+    const saved = await persistChatAnalysisSettings(model, maxTokens);
+    if (!saved) return;
 
     const loading = document.getElementById('aiLoading');
     const resultDiv = document.getElementById('aiResult');
@@ -239,6 +279,59 @@ function closeAiAssistant() {
     if (overlay) overlay.remove();
 }
 
+function toggleAiAssistantModelInput(value) {
+    const customInput = document.getElementById('aiAssistantModelCustomInput');
+    if (!customInput) return;
+    customInput.style.display = (value === 'custom') ? 'block' : 'none';
+}
+
+function getAiAssistantModelValue() {
+    const select = document.getElementById('aiAssistantModelSelect');
+    const customInput = document.getElementById('aiAssistantModelCustomInput');
+    if (!select) return '';
+    if (select.value === 'custom') {
+        return String(customInput?.value || '').trim();
+    }
+    return select.value;
+}
+
+async function loadAiAssistantConfig() {
+    try {
+        const result = await api('api/ai/config');
+        chatAnalysisState.hasKey = Boolean(result?.hasKey);
+        chatAnalysisState.savedModel = String(result?.model || '');
+        const maxTokensParsed = Number.parseInt(String(result?.maxTokens || ''), 10);
+        chatAnalysisState.savedMaxTokens = Number.isFinite(maxTokensParsed) ? maxTokensParsed : null;
+
+        const select = document.getElementById('aiAssistantModelSelect');
+        const customInput = document.getElementById('aiAssistantModelCustomInput');
+        if (select) {
+            const known = ['gemini-2.5-flash', 'gemini-2.5-pro'];
+            const deprecated = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash'];
+            const fallback = 'gemini-2.5-flash';
+            const effectiveModel = deprecated.includes(chatAnalysisState.savedModel)
+                ? fallback
+                : chatAnalysisState.savedModel;
+            if (effectiveModel && known.includes(effectiveModel)) {
+                select.value = effectiveModel;
+                toggleAiAssistantModelInput(select.value);
+            } else if (effectiveModel) {
+                select.value = 'custom';
+                toggleAiAssistantModelInput('custom');
+                if (customInput) customInput.value = effectiveModel;
+            }
+        }
+        const maxTokensInput = document.getElementById('aiAssistantMaxTokens');
+        if (maxTokensInput) {
+            const fallback = 2048;
+            const value = Number.isFinite(chatAnalysisState.savedMaxTokens) ? chatAnalysisState.savedMaxTokens : fallback;
+            maxTokensInput.value = String(value);
+        }
+    } catch (err) {
+        // Keep defaults if config is unavailable.
+    }
+}
+
 let chatAnalysisState = {
     hasKey: false,
     savedModel: '',
@@ -298,12 +391,11 @@ function openChatAnalysis() {
                         </div>
                         <div style="display: flex; flex-direction: column; gap: 8px; width: 50%;">
                             <select id="chatAnalysisModelSelect" class="select-input" onchange="toggleChatAnalysisModelInput(this.value)">
-                                <option value="gemini-1.5-flash">gemini-1.5-flash</option>
-                                <option value="gemini-1.5-pro">gemini-1.5-pro</option>
-                                <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+                                <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+                                <option value="gemini-2.5-pro">gemini-2.5-pro</option>
                                 <option value="custom">Ozel</option>
                             </select>
-                            <input type="text" class="form-input" id="chatAnalysisModelCustomInput" placeholder="gemini-1.5-flash-latest" style="display:none;">
+                            <input type="text" class="form-input" id="chatAnalysisModelCustomInput" placeholder="gemini-2.5-flash-latest" style="display:none;">
                         </div>
                     </div>
                     <div class="settings-item">
@@ -392,14 +484,19 @@ async function loadChatAnalysisConfig() {
         const select = document.getElementById('chatAnalysisModelSelect');
         const customInput = document.getElementById('chatAnalysisModelCustomInput');
         if (select) {
-            const known = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash'];
-            if (chatAnalysisState.savedModel && known.includes(chatAnalysisState.savedModel)) {
-                select.value = chatAnalysisState.savedModel;
+            const known = ['gemini-2.5-flash', 'gemini-2.5-pro'];
+            const deprecated = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash'];
+            const fallback = 'gemini-2.5-flash';
+            const effectiveModel = deprecated.includes(chatAnalysisState.savedModel)
+                ? fallback
+                : chatAnalysisState.savedModel;
+            if (effectiveModel && known.includes(effectiveModel)) {
+                select.value = effectiveModel;
                 toggleChatAnalysisModelInput(select.value);
-            } else if (chatAnalysisState.savedModel) {
+            } else if (effectiveModel) {
                 select.value = 'custom';
                 toggleChatAnalysisModelInput('custom');
-                if (customInput) customInput.value = chatAnalysisState.savedModel;
+                if (customInput) customInput.value = effectiveModel;
             }
         }
         const maxTokensInput = document.getElementById('chatAnalysisMaxTokens');
@@ -572,6 +669,7 @@ Object.assign(window, {
     rejectAiScript,
     testAiScript,
     closeAiAssistant,
+    toggleAiAssistantModelInput,
     openChatAnalysis,
     closeChatAnalysis,
     runChatAnalysis,

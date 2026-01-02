@@ -57,6 +57,24 @@ const aiChatAnalysisSchema = z.object({
     messages: z.array(z.string().trim().min(1).max(2000)).min(1).max(1000)
 }).strict();
 
+const DEPRECATED_MODELS = new Set(['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash']);
+const DEFAULT_MODEL = 'gemini-2.5-flash';
+
+function resolveModel(...candidates) {
+    for (const candidate of candidates) {
+        if (typeof candidate !== 'string') continue;
+        const trimmed = candidate.trim();
+        if (!trimmed) continue;
+        if (DEPRECATED_MODELS.has(trimmed)) continue;
+        return trimmed;
+    }
+    const fallback = aiService.model || DEFAULT_MODEL;
+    if (typeof fallback === 'string' && fallback.trim() && !DEPRECATED_MODELS.has(fallback.trim())) {
+        return fallback.trim();
+    }
+    return DEFAULT_MODEL;
+}
+
 router.post('/generate-script', requireRole(['admin']), validate({ body: generateScriptSchema }), async (req, res) => {
     try {
         const userId = req.session?.userId;
@@ -74,7 +92,7 @@ router.post('/generate-script', requireRole(['admin']), validate({ body: generat
         if (!apiKey) {
             return sendError(req, res, 400, 'Gemini API anahtari kaydedilmedi');
         }
-        const selectedModel = user.ai_model || aiService.model || 'gemini-1.5-flash';
+        const selectedModel = resolveModel(user.ai_model, aiService.model);
         const maxTokensParsed = Number.isFinite(user.ai_max_tokens)
             ? user.ai_max_tokens
             : parseInt(String(user.ai_max_tokens || ''), 10);
@@ -162,7 +180,7 @@ router.post('/analyze-chat', requireRole(['admin']), validate({ body: aiChatAnal
         }
 
         const { chatId, chatName, model, prompt, messages } = req.validatedBody;
-        const selectedModel = model || user.ai_model || 'gemini-1.5-flash';
+        const selectedModel = resolveModel(model, user.ai_model, aiService.model);
         const apiKey = user.ai_api_key || aiService.apiKey || null;
         if (!apiKey) {
             return sendError(req, res, 400, 'Gemini API anahtari kaydedilmedi');
