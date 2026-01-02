@@ -160,7 +160,13 @@ class AccountManager {
         const cleanup = createCleanupService(db, config, this.metrics, { accountId: resolvedId });
         const scheduler = createSchedulerService(db, whatsapp, config, this.metrics, { accountId: resolvedId });
         const webhook = createWebhookService(db, config, this.metrics, { accountId: resolvedId });
-        const scriptRunner = createScriptRunner(db, whatsapp);
+        const defaultAccountId = this.getDefaultAccountId();
+        const aiConfigProvider = () => {
+            if (resolvedId === defaultAccountId) return null;
+            const defaultContext = this.contexts.get(defaultAccountId) || this.getAccountContext(defaultAccountId);
+            return defaultContext?.db?.users?.getFirstAiConfig?.get?.() || null;
+        };
+        const scriptRunner = createScriptRunner(db, whatsapp, { aiConfigProvider });
         const messagePipeline = createMessagePipeline({ autoReply, webhook, scriptRunner, logger, metrics: this.metrics });
 
         const context = {

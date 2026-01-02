@@ -99,6 +99,7 @@ Available ScriptRunner API (these are the ONLY functions/objects you can rely on
 
 5) State + logging
   - \`storage.get(key)\`, \`storage.set(key, value)\`, \`storage.delete(key)\`, \`storage.clear()\`
+    - storage is per-script and persists in-memory across runs (resets on server restart)
   - \`console.log/info/warn/error(...)\` (goes to script logs)
   - \`log(...)\` alias (same as \`console.log\`)
 

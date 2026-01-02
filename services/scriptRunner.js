@@ -26,15 +26,36 @@ function resolveAiModel(...candidates) {
 }
 
 class ScriptRunner {
-    constructor(db, whatsapp) {
+    constructor(db, whatsapp, options = {}) {
         this.db = db;
         this.whatsapp = whatsapp;
         this.runningScripts = new Map();
         this.warnedMissingScope = new Set();
+        this.aiConfigProvider = typeof options.aiConfigProvider === 'function' ? options.aiConfigProvider : null;
+        this.scriptStorage = new Map();
     }
 
     setWhatsApp(whatsapp) {
         this.whatsapp = whatsapp;
+    }
+
+    getSharedAiConfig() {
+        if (typeof this.aiConfigProvider !== 'function') return null;
+        try {
+            const result = this.aiConfigProvider();
+            return result && typeof result === 'object' ? result : null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    getStorageBucket(scriptId) {
+        const parsed = Number.parseInt(String(scriptId ?? '0'), 10);
+        const id = Number.isFinite(parsed) ? parsed : 0;
+        if (!this.scriptStorage.has(id)) {
+            this.scriptStorage.set(id, new Map());
+        }
+        return this.scriptStorage.get(id);
     }
 
     parseTriggerFilter(script) {
@@ -71,7 +92,9 @@ class ScriptRunner {
 
     resolveAiConfig(script, overrides = {}) {
         const filterAi = this.getAiSettings(script);
-        const userAi = this.db?.users?.getFirstAiConfig?.get?.();
+        const localAi = this.db?.users?.getFirstAiConfig?.get?.();
+        const sharedAi = this.getSharedAiConfig();
+        const userAi = localAi || sharedAi;
 
         const rawApiKey = (typeof overrides.apiKey === 'string' ? overrides.apiKey.trim() : '')
             || (typeof filterAi.apiKey === 'string' ? filterAi.apiKey.trim() : '')
@@ -154,7 +177,7 @@ class ScriptRunner {
                 writable: false, configurable: false
             },
             getMessages: {
-                value: (chatId, limit = 50) => self.db.messages.getByChatId.all(chatId, limit),
+                value: (chatId, limit = 50, offset = 0) => self.db.messages.getByChatId.all(chatId, limit, offset),
                 writable: false, configurable: false
             },
             searchMessages: {
@@ -190,11 +213,24 @@ class ScriptRunner {
             // Storage
             storage: {
                 value: {
-                    _data: {},
-                    get: function(key) { return this._data[key]; },
-                    set: function(key, value) { this._data[key] = value; },
-                    delete: function(key) { delete this._data[key]; },
-                    clear: function() { this._data = {}; }
+                    get: function(key) {
+                        const storageKey = typeof key === 'string' ? key : String(key || '');
+                        if (!storageKey) return undefined;
+                        return self.getStorageBucket(scriptId).get(storageKey);
+                    },
+                    set: function(key, value) {
+                        const storageKey = typeof key === 'string' ? key : String(key || '');
+                        if (!storageKey) return;
+                        self.getStorageBucket(scriptId).set(storageKey, value);
+                    },
+                    delete: function(key) {
+                        const storageKey = typeof key === 'string' ? key : String(key || '');
+                        if (!storageKey) return;
+                        self.getStorageBucket(scriptId).delete(storageKey);
+                    },
+                    clear: function() {
+                        self.getStorageBucket(scriptId).clear();
+                    }
                 },
                 writable: false, configurable: false
             },
@@ -403,8 +439,8 @@ class ScriptRunner {
     }
 }
 
-function createScriptRunner(db, whatsapp) {
-    return new ScriptRunner(db, whatsapp);
+function createScriptRunner(db, whatsapp, options = {}) {
+    return new ScriptRunner(db, whatsapp, options);
 }
 
 module.exports = { createScriptRunner };

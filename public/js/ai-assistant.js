@@ -2,7 +2,7 @@
  * WhatsApp Web Panel - AI Assistant Frontend Logic
  */
 
-/* global api, showToast, loadScriptsData, escapeHtml, formatDateTime, renderAvatarContent, chats, archivedChats, archivedChatsLoaded, currentChat */
+/* global api, showToast, loadScriptsData, escapeHtml, formatDateTime, renderAvatarContent, chats, archivedChats, archivedChatsLoaded, currentChat, normalizeTimestamp, getDisplayNameFromMessage, formatSenderName, getMessagePreviewText */
 
 const AI_ASSISTANT_HISTORY_KEY = 'aiAssistantHistoryV1';
 const AI_ASSISTANT_HISTORY_LIMIT = 40;
@@ -24,6 +24,8 @@ function resetAiAssistantFlow() {
         includeHistory: null,
         historyLimit: 40,
         persona: null,
+        delayMinMs: 2000,
+        delayMaxMs: 6000,
         chatIds: [],
         pendingChatMatches: []
     };
@@ -65,9 +67,48 @@ function aiAssistantParsePersona(text) {
     return String(text || '').trim();
 }
 
+function aiAssistantParsePersonaHint(text) {
+    const lowered = String(text || '').toLowerCase();
+    if (/(samimi|kanka|muhabbet|sohbet|geyik)/.test(lowered)) {
+        return 'Samimi, muhabbetci ve akici bir dil';
+    }
+    if (/(resmi|ciddi|kurumsal|profesyonel)/.test(lowered)) {
+        return 'Resmi, net ve kisa bir dil';
+    }
+    if (/(esprili|komik|saka|ironik|eglenceli)/.test(lowered)) {
+        return 'Hafif esprili, sicak ve samimi bir dil';
+    }
+    if (/(kisa|oz|ozet|tek cumle)/.test(lowered)) {
+        return 'Kisa ve oz cevaplar';
+    }
+    return null;
+}
+
+function aiAssistantParseDelayHint(text) {
+    const lowered = String(text || '').toLowerCase();
+    if (/(hemen|cok hizli|acil|aninda)/.test(lowered)) {
+        return { delayMinMs: 300, delayMaxMs: 1500 };
+    }
+    if (/(bekle biraz|biraz bekle|yavas|acele etme|sonra)/.test(lowered)) {
+        return { delayMinMs: 3000, delayMaxMs: 9000 };
+    }
+    if (/(bekle|beklesin|dur|firsat bulunca)/.test(lowered)) {
+        return { delayMinMs: 5000, delayMaxMs: 12000 };
+    }
+    return null;
+}
+
+function aiAssistantClampDelayRange(minMs, maxMs) {
+    const rawMin = Number.isFinite(minMs) ? minMs : 0;
+    const rawMax = Number.isFinite(maxMs) ? maxMs : rawMin;
+    const clampedMin = Math.max(0, Math.min(30000, rawMin));
+    const clampedMax = Math.max(clampedMin, Math.min(30000, rawMax));
+    return { minMs: clampedMin, maxMs: clampedMax };
+}
+
 function aiAssistantDetectAutoReplyIntent(text) {
     const lowered = String(text || '').toLowerCase();
-    return /(yapay zeka|\bai\b|asistan|bot|otomatik|cevap|yazsin|yazsın|sen cevap ver|sohbeti sen)/.test(lowered);
+    return /(yapay zeka|\bai\b|asistan|bot|otomatik|cevap|cevapla|yazsin|yazsın|sen cevap ver|sen bak|bakarmisin|bakarmısın|bakar misin|bakar mısın|mesajlara bak|mesajlara cevap|sohbeti sen|sohbet et|muhabbet et|devam ettir)/.test(lowered);
 }
 
 function aiAssistantMatchChatsByText(text) {
@@ -189,8 +230,13 @@ function aiAssistantAskForConfirm() {
             ? `${aiAssistantFlow.historyLimit} mesaj`
             : 'Kapali';
         const personaText = aiAssistantFlow.persona ? aiAssistantFlow.persona : 'Standart';
+        const delay = aiAssistantClampDelayRange(aiAssistantFlow.delayMinMs, aiAssistantFlow.delayMaxMs);
+        const delayText = (delay.minMs || delay.maxMs)
+            ? `${Math.round(delay.minMs / 1000)}-${Math.round(delay.maxMs / 1000)} sn`
+            : 'Yok';
         lines.push(`- Gecmis: ${historyText}`);
         lines.push(`- Tavir: ${personaText}`);
+        lines.push(`- Gecikme: ${delayText}`);
     }
     lines.push('Botu aktif edeyim mi? (evet/hayir)');
     aiAssistantRespond(lines.join('\n'));
@@ -210,6 +256,121 @@ function aiAssistantAdvanceFlow() {
         }
     }
     return aiAssistantAskForConfirm();
+}
+
+function aiAssistantBuildAutoReplyScript() {
+    const chatCount = Array.isArray(aiAssistantFlow.chatIds) ? aiAssistantFlow.chatIds.length : 0;
+    const chatLabel = (() => {
+        if (chatCount === 1) {
+            const chatId = aiAssistantFlow.chatIds[0];
+            const match = (Array.isArray(aiAssistantState.chats) ? aiAssistantState.chats : []).find((c) => c?.chat_id === chatId);
+            return match?.name || chatId || 'Sohbet';
+        }
+        if (chatCount > 1) return `${chatCount} sohbet`;
+        return 'Sohbet';
+    })();
+
+    const historyLimit = aiAssistantFlow.includeHistory ? aiAssistantFlow.historyLimit : 0;
+    const persona = aiAssistantFlow.persona ? aiAssistantFlow.persona.trim() : '';
+    const delayRange = aiAssistantClampDelayRange(aiAssistantFlow.delayMinMs, aiAssistantFlow.delayMaxMs);
+
+    const safePersona = JSON.stringify(persona);
+    const safeHistory = Number.isFinite(historyLimit) ? Math.max(0, Math.min(200, historyLimit)) : 0;
+    const minDelay = delayRange.minMs;
+    const maxDelay = delayRange.maxMs;
+
+    const code = `
+const chatId = msg && msg.chatId;
+const messageId = msg && msg.messageId;
+if (!msg || !chatId || !messageId || msg.isFromMe) return;
+if (msg.type === 'revoked') return;
+if (!msg.body || !String(msg.body).trim()) return;
+
+const storagePrefix = 'ai_auto_reply:' + chatId + ':';
+const lastHandledKey = storagePrefix + 'lastHandledMessageId';
+if (storage.get(lastHandledKey) === messageId) return;
+storage.set(lastHandledKey, messageId);
+
+const now = Date.now();
+const windowKey = storagePrefix + 'replyWindow';
+let window = storage.get(windowKey);
+if (!Array.isArray(window)) window = [];
+window = window.filter((ts) => typeof ts === 'number' && (now - ts) < 10 * 60 * 1000);
+if (window.length >= 8) {
+    storage.set(windowKey, window);
+    log('AI rate limit: cevaplanmadi (chat=' + chatId + ')');
+    return;
+}
+window.push(now);
+storage.set(windowKey, window);
+
+const minDelay = ${minDelay};
+const maxDelay = ${maxDelay};
+const range = Math.max(0, maxDelay - minDelay);
+const delayMs = range ? Math.floor(Math.random() * (range + 1)) + minDelay : minDelay;
+
+const run = async () => {
+    const historyLimit = ${safeHistory};
+    const incomingText = (msg.body && String(msg.body).trim())
+        ? String(msg.body).trim()
+        : (msg.type ? '[' + msg.type + ']' : '[mesaj]');
+
+    let prompt = '';
+    if (historyLimit > 0) {
+        const rows = getMessages(chatId, historyLimit);
+        const ordered = Array.isArray(rows)
+            ? rows.slice().sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
+            : [];
+        const lines = ordered.map((m) => {
+            const name = m.is_from_me ? 'Sen' : (m.from_name || m.from_number || 'Karsi taraf');
+            const time = new Date(m.timestamp || Date.now()).toLocaleString();
+            const body = (m.body && String(m.body).trim())
+                ? String(m.body).trim()
+                : (m.type ? '[' + m.type + ']' : '[mesaj]');
+            return name + ' | ' + time + ' | ' + body;
+        });
+        if (lines.length) {
+            prompt += 'Sohbet gecmisi:\\n' + lines.join('\\n') + '\\n\\n';
+        }
+        const lastOutgoing = ordered.slice().reverse().find((m) => m.is_from_me && m.body);
+        if (lastOutgoing && lastOutgoing.body) {
+            prompt += 'Son gonderilen yanit: ' + String(lastOutgoing.body).trim() + '\\n';
+        }
+    }
+
+    const senderName = msg.fromName || msg.fromNumber || 'Karsi taraf';
+    const persona = ${safePersona};
+    prompt += 'Yeni gelen mesaj (' + senderName + '): ' + incomingText + '\\n';
+    prompt += 'Dogal, akici ve insan gibi bir cevap yaz (Turkce). ';
+    prompt += 'Ayni ifadeleri tekrar etme, ezbere yanit verme, kendinden bahsetme (AI oldugunu soyleme).\\n';
+    prompt += 'Gerektiginde kisa bir soru sorarak muhabbeti surdur.\\n';
+    if (persona) {
+        prompt += 'Konusma tavri: ' + persona + '\\n';
+    }
+    const jitter = Math.random().toString(36).slice(2, 8);
+    prompt += 'Stil tohumu: ' + jitter + '\\n';
+    prompt += 'Sadece yanit metnini yaz.\\n';
+
+    const response = await aiGenerate(prompt, { temperature: 0.7, maxTokens: 512 });
+    const replyText = String(response || '').trim();
+    if (!replyText) return;
+    await reply(replyText);
+};
+
+if (delayMs > 0) {
+    setTimeout(() => { run().catch((err) => log('AI hata: ' + err.message)); }, delayMs);
+} else {
+    await run();
+}
+`.trim();
+
+    return {
+        name: `AI Otomatik Cevap - ${chatLabel}`,
+        description: 'Gelen mesajlara Gemini ile otomatik cevap verir.',
+        trigger_type: 'message',
+        trigger_filter: { incoming: true },
+        code
+    };
 }
 
 function aiAssistantHandleCommand(text) {
@@ -239,32 +400,38 @@ async function aiAssistantFinalizeScript() {
     if (sendBtn) sendBtn.disabled = true;
 
     try {
-        const finalPrompt = buildAiAssistantPrompt(aiAssistantFlow.intent, {
-            autoReply: aiAssistantFlow.autoReply,
-            persona: aiAssistantFlow.persona || '',
-            includeHistory: aiAssistantFlow.includeHistory,
-            historyLimit: aiAssistantFlow.historyLimit
-        });
+        let script = null;
+        if (aiAssistantFlow.autoReply) {
+            script = aiAssistantBuildAutoReplyScript();
+        } else {
+            const finalPrompt = buildAiAssistantPrompt(aiAssistantFlow.intent, {
+                autoReply: aiAssistantFlow.autoReply,
+                persona: aiAssistantFlow.persona || '',
+                includeHistory: aiAssistantFlow.includeHistory,
+                historyLimit: aiAssistantFlow.historyLimit
+            });
 
-        const response = await api('api/ai/generate-script', 'POST', { prompt: finalPrompt });
-        if (!response?.success || !response?.script) {
-            aiAssistantRespond('Script olusturulamadi. Lutfen tekrar deneyelim.');
-            return;
+            const response = await api('api/ai/generate-script', 'POST', { prompt: finalPrompt });
+            if (!response?.success || !response?.script) {
+                aiAssistantRespond('Script olusturulamadi. Lutfen tekrar deneyelim.');
+                return;
+            }
+            script = response.script;
         }
 
-        const mergedFilter = mergeAiAssistantTriggerFilter(response.script.trigger_filter, aiAssistantFlow.chatIds);
+        const mergedFilter = mergeAiAssistantTriggerFilter(script.trigger_filter, aiAssistantFlow.chatIds);
         if (aiAssistantFlow.autoReply) {
             mergedFilter.incoming = true;
             delete mergedFilter.outgoing;
         }
 
-        lastGeneratedScript = { ...response.script, trigger_filter: mergedFilter };
+        lastGeneratedScript = { ...script, trigger_filter: mergedFilter };
 
         const payload = {
-            name: response.script.name,
-            description: response.script.description,
-            code: response.script.code,
-            trigger_type: response.script.trigger_type || 'message',
+            name: script.name,
+            description: script.description,
+            code: script.code,
+            trigger_type: script.trigger_type || 'message',
             trigger_filter: mergedFilter,
             is_active: true
         };
@@ -351,6 +518,17 @@ async function sendAiAssistantMessage() {
     if (!autoReply) {
         aiAssistantFlow.includeHistory = false;
         aiAssistantFlow.persona = '';
+    }
+    if (autoReply) {
+        const personaHint = aiAssistantParsePersonaHint(text);
+        if (personaHint) aiAssistantFlow.persona = personaHint;
+
+        const delayHint = aiAssistantParseDelayHint(text);
+        if (delayHint) {
+            const clamped = aiAssistantClampDelayRange(delayHint.delayMinMs, delayHint.delayMaxMs);
+            aiAssistantFlow.delayMinMs = clamped.minMs;
+            aiAssistantFlow.delayMaxMs = clamped.maxMs;
+        }
     }
 
     const historyParsed = autoReply ? aiAssistantParseHistoryAnswer(text) : null;
@@ -456,26 +634,11 @@ function toggleAiAssistantAutoReply(force) {
     }
 }
 
-function isAiAssistantAutoReplyEnabled() {
-    const toggleEl = document.getElementById('aiAssistantAutoReplyToggle');
-    return Boolean(toggleEl && toggleEl.classList.contains('active'));
-}
-
 function aiAssistantGetSelectedChatIds() {
     if (aiAssistantFlow && Array.isArray(aiAssistantFlow.chatIds) && aiAssistantFlow.chatIds.length) {
         return [...aiAssistantFlow.chatIds];
     }
     return Array.from(aiAssistantState.selectedChatIds || []);
-}
-
-function getAiAssistantHistoryLimit() {
-    const input = document.getElementById('aiAssistantHistoryLimit');
-    const raw = input ? Number.parseInt(String(input.value || ''), 10) : NaN;
-    const value = Number.isFinite(raw)
-        ? Math.max(10, Math.min(200, raw))
-        : 40;
-    if (input) input.value = String(value);
-    return value;
 }
 
 function aiAssistantRenderChatPicker() {
@@ -774,16 +937,6 @@ function toggleAiAssistantModelInput(value) {
     const customInput = document.getElementById('aiAssistantModelCustomInput');
     if (!customInput) return;
     customInput.style.display = (value === 'custom') ? 'block' : 'none';
-}
-
-function getAiAssistantModelValue() {
-    const select = document.getElementById('aiAssistantModelSelect');
-    const customInput = document.getElementById('aiAssistantModelCustomInput');
-    if (!select) return '';
-    if (select.value === 'custom') {
-        return String(customInput?.value || '').trim();
-    }
-    return select.value;
 }
 
 async function loadAiAssistantConfig() {
