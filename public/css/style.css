@@ -2327,6 +2327,17 @@ body.compact .message-row.stacked {
     max-height: 240px;
 }
 
+.analysis-result {
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background-color: var(--bg-secondary);
+    padding: 12px;
+    font-size: 13px;
+    color: var(--text-primary);
+    line-height: 1.55;
+    white-space: pre-wrap;
+}
+
 /* Media Hub */
 .media-hub {
     display: flex;

@@ -13,6 +13,49 @@ class AiService {
         this.baseUrl = 'https://generativelanguage.googleapis.com/v1beta/models';
     }
 
+    async generateText({ prompt, apiKey, model, maxOutputTokens = 2048, temperature = 0.3 }) {
+        const effectiveKey = apiKey || this.apiKey;
+        const effectiveModel = model || this.model;
+        if (!effectiveKey) {
+            throw new Error('GEMINI_API_KEY is not configured');
+        }
+        if (!prompt) {
+            throw new Error('Prompt is required');
+        }
+
+        try {
+            const response = await axios.post(
+                `${this.baseUrl}/${effectiveModel}:generateContent?key=${effectiveKey}`,
+                {
+                    contents: [{
+                        role: 'user',
+                        parts: [{ text: prompt }]
+                    }],
+                    generationConfig: {
+                        temperature,
+                        topK: 40,
+                        topP: 0.95,
+                        maxOutputTokens
+                    }
+                }
+            );
+
+            const candidate = response.data?.candidates?.[0];
+            const parts = candidate?.content?.parts || [];
+            const text = parts.map(part => part?.text || '').join('').trim();
+            if (!text) {
+                throw new Error('No response from AI');
+            }
+            return text;
+        } catch (error) {
+            logger.error('AI text generation failed', {
+                error: error.message,
+                response: error.response?.data
+            });
+            throw new Error('AI generation failed: ' + (error.response?.data?.error?.message || error.message));
+        }
+    }
+
     async generateScript(prompt) {
         if (!this.apiKey) {
             throw new Error('GEMINI_API_KEY is not configured');

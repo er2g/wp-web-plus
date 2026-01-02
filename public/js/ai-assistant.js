@@ -239,6 +239,270 @@ function closeAiAssistant() {
     if (overlay) overlay.remove();
 }
 
+let chatAnalysisState = {
+    hasKey: false,
+    savedModel: ''
+};
+
+function openChatAnalysis() {
+    const activeChatId = (typeof currentChat !== 'undefined' ? currentChat : null);
+    if (!activeChatId) {
+        showToast('Once bir sohbet secin', 'info');
+        return;
+    }
+
+    const existing = document.getElementById('chatAnalysisOverlay');
+    if (existing) existing.remove();
+
+    const rawChatName = document.getElementById('chatName')?.textContent || activeChatId || 'Sohbet';
+    const chatName = (typeof escapeHtml === 'function') ? escapeHtml(rawChatName) : rawChatName;
+
+    const modal = document.createElement('div');
+    modal.id = 'chatAnalysisOverlay';
+    modal.className = 'modal-overlay show';
+    modal.style.zIndex = '2500';
+    modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+
+    modal.innerHTML = `
+        <div class="modal" style="max-width: 720px;">
+            <div class="modal-header">
+                <h3><i class="bi bi-graph-up-arrow"></i> Sohbet Analizi</h3>
+                <i class="bi bi-x-lg close-btn" onclick="this.closest('.modal-overlay').remove()"></i>
+            </div>
+            <div class="modal-body">
+                <p style="color: var(--text-secondary); margin-bottom: 12px;">
+                    <strong>${chatName}</strong> sohbetinden son mesajlari Gemini ile analiz et.
+                </p>
+                <div class="settings-section" style="margin-bottom: 16px;">
+                    <div class="settings-section-title">Gemini Ayarlari</div>
+                    <div class="settings-item">
+                        <i class="icon bi bi-key"></i>
+                        <div class="info">
+                            <div class="title">API Anahtari</div>
+                            <div class="subtitle">Gemini API anahtarini kaydet</div>
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 8px; width: 50%;">
+                            <input type="password" class="form-input" id="chatAnalysisApiKeyInput" placeholder="AI...">
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <button class="btn btn-secondary btn-sm" type="button" onclick="saveChatAnalysisConfig()">Kaydet</button>
+                                <span id="chatAnalysisKeyStatus" style="font-size: 11px; color: var(--text-secondary);">Kontrol ediliyor...</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="settings-item">
+                        <i class="icon bi bi-cpu"></i>
+                        <div class="info">
+                            <div class="title">Model</div>
+                            <div class="subtitle">Analizde kullanilacak Gemini modeli</div>
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 8px; width: 50%;">
+                            <select id="chatAnalysisModelSelect" class="select-input" onchange="toggleChatAnalysisModelInput(this.value)">
+                                <option value="gemini-1.5-flash">gemini-1.5-flash</option>
+                                <option value="gemini-1.5-pro">gemini-1.5-pro</option>
+                                <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+                                <option value="custom">Ozel</option>
+                            </select>
+                            <input type="text" class="form-input" id="chatAnalysisModelCustomInput" placeholder="gemini-1.5-flash-latest" style="display:none;">
+                        </div>
+                    </div>
+                </div>
+                <div class="settings-section" style="margin-bottom: 16px;">
+                    <div class="settings-section-title">Analiz Kapsami</div>
+                    <div class="settings-item">
+                        <i class="icon bi bi-chat-left-text"></i>
+                        <div class="info">
+                            <div class="title">Mesaj Sayisi</div>
+                            <div class="subtitle">Analize girecek son mesaj adedi</div>
+                        </div>
+                        <input type="number" class="form-input" id="chatAnalysisMessageCount" min="10" max="1000" value="120" style="width: 120px;">
+                    </div>
+                    <div class="settings-item">
+                        <i class="icon bi bi-lightbulb"></i>
+                        <div class="info">
+                            <div class="title">Analiz Istegi</div>
+                            <div class="subtitle">AI'dan ne istediginizi yazin</div>
+                        </div>
+                        <textarea class="form-input" id="chatAnalysisPromptInput" rows="3" placeholder="Ornek: Konusmanin ozetini ve duygusal tonunu cikart."></textarea>
+                    </div>
+                </div>
+                <div id="chatAnalysisLoading" style="display: none; text-align: center; margin: 20px 0;">
+                    <div class="spinner"></div>
+                    <p style="margin-top: 8px; color: var(--text-secondary);">Analiz yapiliyor...</p>
+                </div>
+                <div id="chatAnalysisResult" style="display: none; margin-top: 12px;">
+                    <div class="analysis-result" id="chatAnalysisResultText"></div>
+                </div>
+            </div>
+            <div class="modal-footer" style="justify-content: space-between;">
+                <button class="btn btn-secondary" onclick="closeChatAnalysis()"><i class="bi bi-x"></i> Kapat</button>
+                <button class="btn btn-primary" onclick="runChatAnalysis()"><i class="bi bi-play-circle"></i> Analiz Et</button>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(modal);
+    loadChatAnalysisConfig();
+}
+
+function closeChatAnalysis() {
+    const overlay = document.getElementById('chatAnalysisOverlay');
+    if (overlay) overlay.remove();
+}
+
+function toggleChatAnalysisModelInput(value) {
+    const customInput = document.getElementById('chatAnalysisModelCustomInput');
+    if (!customInput) return;
+    customInput.style.display = (value === 'custom') ? 'block' : 'none';
+}
+
+function getChatAnalysisModelValue() {
+    const select = document.getElementById('chatAnalysisModelSelect');
+    const customInput = document.getElementById('chatAnalysisModelCustomInput');
+    if (!select) return '';
+    if (select.value === 'custom') {
+        return String(customInput?.value || '').trim();
+    }
+    return select.value;
+}
+
+async function loadChatAnalysisConfig() {
+    const statusEl = document.getElementById('chatAnalysisKeyStatus');
+    if (statusEl) statusEl.textContent = 'Kontrol ediliyor...';
+
+    try {
+        const result = await api('api/ai/config');
+        chatAnalysisState.hasKey = Boolean(result?.hasKey);
+        chatAnalysisState.savedModel = String(result?.model || '');
+
+        if (statusEl) {
+            statusEl.textContent = chatAnalysisState.hasKey ? 'Anahtar kayitli' : 'Anahtar kayitli degil';
+        }
+
+        const select = document.getElementById('chatAnalysisModelSelect');
+        const customInput = document.getElementById('chatAnalysisModelCustomInput');
+        if (select) {
+            const known = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash'];
+            if (chatAnalysisState.savedModel && known.includes(chatAnalysisState.savedModel)) {
+                select.value = chatAnalysisState.savedModel;
+                toggleChatAnalysisModelInput(select.value);
+            } else if (chatAnalysisState.savedModel) {
+                select.value = 'custom';
+                toggleChatAnalysisModelInput('custom');
+                if (customInput) customInput.value = chatAnalysisState.savedModel;
+            }
+        }
+    } catch (err) {
+        if (statusEl) statusEl.textContent = 'AI ayarlari okunamadi';
+    }
+}
+
+async function saveChatAnalysisConfig() {
+    const apiKeyInput = document.getElementById('chatAnalysisApiKeyInput');
+    const apiKey = String(apiKeyInput?.value || '').trim();
+    const model = getChatAnalysisModelValue();
+
+    const payload = {};
+    if (apiKey) payload.apiKey = apiKey;
+    if (model) payload.model = model;
+
+    if (!payload.apiKey && !payload.model) {
+        showToast('Kaydedilecek veri yok', 'info');
+        return;
+    }
+
+    try {
+        const result = await api('api/ai/config', 'POST', payload);
+        chatAnalysisState.hasKey = Boolean(result?.hasKey);
+        chatAnalysisState.savedModel = String(result?.model || '');
+        if (apiKeyInput) apiKeyInput.value = '';
+        const statusEl = document.getElementById('chatAnalysisKeyStatus');
+        if (statusEl) statusEl.textContent = chatAnalysisState.hasKey ? 'Anahtar kayitli' : 'Anahtar kayitli degil';
+        showToast('AI ayarlari kaydedildi', 'success');
+    } catch (err) {
+        showToast('AI ayarlari kaydedilemedi: ' + err.message, 'error');
+    }
+}
+
+async function runChatAnalysis() {
+    const activeChatId = (typeof currentChat !== 'undefined' ? currentChat : null);
+    if (!activeChatId) {
+        showToast('Once bir sohbet secin', 'info');
+        return;
+    }
+
+    const loading = document.getElementById('chatAnalysisLoading');
+    const resultWrap = document.getElementById('chatAnalysisResult');
+    const resultText = document.getElementById('chatAnalysisResultText');
+    const countInput = document.getElementById('chatAnalysisMessageCount');
+    const promptInput = document.getElementById('chatAnalysisPromptInput');
+
+    const requestedCount = Number.parseInt(String(countInput?.value || '0'), 10);
+    const messageCount = Number.isFinite(requestedCount)
+        ? Math.max(10, Math.min(1000, requestedCount))
+        : 120;
+    const model = getChatAnalysisModelValue();
+    if (!model) {
+        showToast('Model secin', 'info');
+        return;
+    }
+
+    if (countInput) countInput.value = String(messageCount);
+
+    if (loading) loading.style.display = 'block';
+    if (resultWrap) resultWrap.style.display = 'none';
+    if (resultText) resultText.textContent = '';
+
+    try {
+        const chatId = activeChatId;
+        const chatName = document.getElementById('chatName')?.textContent || chatId;
+        const response = await api('api/chats/' + encodeURIComponent(chatId) + '/messages?limit=' + messageCount + '&offset=0');
+        const rawMessages = Array.isArray(response?.messages) ? response.messages : [];
+
+        if (!rawMessages.length) {
+            showToast('Analiz icin mesaj bulunamadi', 'info');
+            return;
+        }
+
+        const sorted = [...rawMessages].sort((a, b) => {
+            const aTs = (typeof normalizeTimestamp === 'function') ? (normalizeTimestamp(a.timestamp) || 0) : (a.timestamp || 0);
+            const bTs = (typeof normalizeTimestamp === 'function') ? (normalizeTimestamp(b.timestamp) || 0) : (b.timestamp || 0);
+            return aTs - bTs;
+        });
+
+        const lines = sorted.map((msg) => {
+            const isMine = msg.is_from_me === 1 || msg.is_from_me === true;
+            const rawName = isMine ? 'Sen' : (typeof getDisplayNameFromMessage === 'function' ? getDisplayNameFromMessage(msg, chatId) : (msg.from_name || msg.fromNumber || ''));
+            const displayName = typeof formatSenderName === 'function' ? formatSenderName(rawName || 'Bilinmeyen') : (rawName || 'Bilinmeyen');
+            const ts = (typeof normalizeTimestamp === 'function') ? normalizeTimestamp(msg.timestamp) : msg.timestamp;
+            const timeText = ts && typeof formatDateTime === 'function' ? formatDateTime(ts) : String(msg.timestamp || '');
+            const body = (msg.body || msg.message || '').toString();
+            const fallback = (typeof getMessagePreviewText === 'function') ? getMessagePreviewText(msg) : '[Mesaj]';
+            const content = (body && body.trim()) ? body.trim() : fallback;
+            const cleaned = content.replace(/\\s+/g, ' ').trim();
+            const trimmed = cleaned.length > 1600 ? (cleaned.slice(0, 1600) + '...') : cleaned;
+            return `${displayName} | ${timeText} | ${trimmed}`;
+        });
+
+        const payload = {
+            chatId,
+            chatName,
+            model,
+            prompt: String(promptInput?.value || '').trim(),
+            messages: lines
+        };
+
+        const analysis = await api('api/ai/analyze-chat', 'POST', payload);
+        if (resultText) {
+            resultText.textContent = analysis?.analysis || 'Analiz sonucu alinmadi.';
+        }
+        if (resultWrap) resultWrap.style.display = 'block';
+    } catch (err) {
+        showToast('Analiz hatasi: ' + err.message, 'error');
+    } finally {
+        if (loading) loading.style.display = 'none';
+    }
+}
+
 Object.assign(window, {
     openGeminiAssistant,
     openAiAssistant,
@@ -246,5 +510,10 @@ Object.assign(window, {
     acceptAiScript,
     rejectAiScript,
     testAiScript,
-    closeAiAssistant
+    closeAiAssistant,
+    openChatAnalysis,
+    closeChatAnalysis,
+    runChatAnalysis,
+    saveChatAnalysisConfig,
+    toggleChatAnalysisModelInput
 });

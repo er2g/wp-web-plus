@@ -194,6 +194,8 @@ function createDatabase(config) {
         password_salt TEXT NOT NULL,
         is_active INTEGER DEFAULT 1,
         preferences TEXT,
+        ai_api_key TEXT,
+        ai_model TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -519,6 +521,18 @@ function createDatabase(config) {
                     db.exec('ALTER TABLE messages ADD COLUMN deleted_for_everyone_at INTEGER');
                 }
             }
+        },
+        {
+            version: 15,
+            name: 'add_ai_settings_to_users',
+            apply: () => {
+                if (!columnExists('users', 'ai_api_key')) {
+                    db.exec('ALTER TABLE users ADD COLUMN ai_api_key TEXT');
+                }
+                if (!columnExists('users', 'ai_model')) {
+                    db.exec('ALTER TABLE users ADD COLUMN ai_model TEXT');
+                }
+            }
         }
     ];
 
@@ -787,6 +801,7 @@ function createDatabase(config) {
     `),
         create: db.prepare('INSERT INTO users (username, display_name, password_hash, password_salt, is_active, preferences) VALUES (?, ?, ?, ?, ?, ?)'),
         updatePreferences: db.prepare('UPDATE users SET preferences = ? WHERE id = ?'),
+        updateAiConfig: db.prepare('UPDATE users SET ai_api_key = ?, ai_model = ? WHERE id = ?'),
         delete: db.prepare('DELETE FROM users WHERE id = ?'),
         count: db.prepare('SELECT COUNT(*) as count FROM users')
     };
