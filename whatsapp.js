@@ -24,6 +24,12 @@ const CONSTANTS = {
     SYNC_CHAT_MAX_RETRIES: 3,
     SYNC_CHAT_BACKOFF_BASE_MS: 1500,
     SYNC_CHAT_BACKOFF_MAX_MS: 15000,
+    HEALTH_CHECK_INTERVAL_MS: 30000,
+    HEALTH_CHECK_TIMEOUT_MS: 10000,
+    RESTART_COOLDOWN_MS: 60000,
+    SEND_MESSAGE_PREFLIGHT_TIMEOUT_MS: 5000,
+    SEND_MESSAGE_TIMEOUT_MS: 30000,
+    SEND_MEDIA_TIMEOUT_MS: 60000,
     FULL_SYNC_LOCK_TTL_MS: 5 * 60 * 1000,
     FULL_SYNC_LOCK_RENEW_MS: 30 * 1000,
     FULL_SYNC_CHAT_CONCURRENCY: 1,
@@ -48,6 +54,9 @@ class WhatsAppClient {
         this.syncProgress = { syncing: false, current: 0, total: 0, chat: '' };
         this.lastError = null;
         this.initPromise = null;
+        this.restartPromise = null;
+        this.lastRestartAt = 0;
+        this.healthCheckTimer = null;
         this.settings = {
             downloadMedia: true,
             downloadProfilePictures: false,
@@ -336,8 +345,17 @@ class WhatsAppClient {
     }
 
     extractPhoneFromId(id) {
-        if (!id) return 'Unknown';
-        return id.split('@')[0] || 'Unknown';
+        if (id === undefined || id === null) return 'Unknown';
+        if (typeof id === 'object') {
+            const serialized = id?._serialized || id?.user || id?.id || null;
+            if (serialized !== null && serialized !== undefined) {
+                return this.extractPhoneFromId(serialized);
+            }
+            return 'Unknown';
+        }
+        const text = typeof id === 'string' ? id : String(id);
+        if (!text) return 'Unknown';
+        return text.split('@')[0] || text || 'Unknown';
     }
 
     isLocalMediaUrl(url) {
@@ -540,6 +558,98 @@ class WhatsAppClient {
 
     emitStatus() {
         this.emit('status', this.getStatus());
+    }
+
+    stopHealthCheck() {
+        if (this.healthCheckTimer) {
+            clearInterval(this.healthCheckTimer);
+            this.healthCheckTimer = null;
+        }
+    }
+
+    startHealthCheck() {
+        if (this.healthCheckTimer) return;
+        const intervalMs = CONSTANTS.HEALTH_CHECK_INTERVAL_MS;
+        this.healthCheckTimer = setInterval(() => {
+            void this.performHealthCheck();
+        }, intervalMs);
+        if (typeof this.healthCheckTimer.unref === 'function') {
+            this.healthCheckTimer.unref();
+        }
+    }
+
+    async getClientState({ timeoutMs = CONSTANTS.HEALTH_CHECK_TIMEOUT_MS } = {}) {
+        if (!this.client) return { ok: false, error: 'Client not initialized' };
+        const resolvedTimeoutMs = Math.max(1000, Number(timeoutMs) || CONSTANTS.HEALTH_CHECK_TIMEOUT_MS);
+        try {
+            const state = await Promise.race([
+                this.client.getState(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('getState timeout')), resolvedTimeoutMs))
+            ]);
+            return { ok: true, state };
+        } catch (error) {
+            return { ok: false, error: error?.message || String(error) };
+        }
+    }
+
+    async restart({ reason = 'manual', cooldownMs } = {}) {
+        const now = Date.now();
+        const resolvedCooldownMs = Math.max(5000, Number(cooldownMs) || CONSTANTS.RESTART_COOLDOWN_MS);
+        if (this.restartPromise) return this.restartPromise;
+        if (this.initPromise) return this.initPromise;
+        if (this.lastRestartAt && (now - this.lastRestartAt) < resolvedCooldownMs) {
+            return { success: false, skipped: true, reason: 'cooldown' };
+        }
+
+        this.lastRestartAt = now;
+        this.restartPromise = (async () => {
+            this.log('warn', 'whatsapp', `Restarting WhatsApp client (${reason})`);
+            this.stopHealthCheck();
+            await this.destroy({ preserveError: true });
+            await this.initialize();
+            return { success: true };
+        })()
+            .catch((error) => {
+                this.log('error', 'whatsapp', `Restart failed (${reason}): ${error?.message || String(error)}`);
+                throw error;
+            })
+            .finally(() => {
+                this.restartPromise = null;
+            });
+
+        return this.restartPromise;
+    }
+
+    async performHealthCheck() {
+        if (this.status !== 'ready') return;
+        if (!this.client) return;
+        if (this.initPromise || this.restartPromise) return;
+
+        const result = await this.getClientState({ timeoutMs: CONSTANTS.HEALTH_CHECK_TIMEOUT_MS });
+        const state = result.ok ? result.state : null;
+
+        if (!result.ok) {
+            this.log('warn', 'whatsapp', `Health check failed: ${result.error || 'unknown'}`);
+            try {
+                await this.restart({ reason: 'health_check_failed' });
+            } catch (e) {}
+            return;
+        }
+
+        if (!state) {
+            this.log('warn', 'whatsapp', 'Health check returned empty state; restarting');
+            try {
+                await this.restart({ reason: 'health_check_empty_state' });
+            } catch (e) {}
+            return;
+        }
+
+        if (state !== 'CONNECTED') {
+            this.log('warn', 'whatsapp', `Health check state=${state}; restarting`);
+            try {
+                await this.restart({ reason: `health_check_state_${state}` });
+            } catch (e) {}
+        }
     }
 
     emitProgress() {
@@ -953,6 +1063,8 @@ class WhatsAppClient {
 
             if (this.drive) this.drive.initialize().catch(() => {});
 
+            this.startHealthCheck();
+
             if (this.settings.syncOnConnect) {
                 setTimeout(() => this.fullSync(), CONSTANTS.SYNC_DELAY_MS);
             }
@@ -970,6 +1082,7 @@ class WhatsAppClient {
             this.lastError = msg ? String(msg) : 'auth_failure';
             this.emit('auth_failure', msg);
             this.emitStatus();
+            this.stopHealthCheck();
         });
 
         this.client.on('disconnected', (reason) => {
@@ -977,6 +1090,7 @@ class WhatsAppClient {
             this.info = null;
             this.emit('disconnected', reason);
             this.emitStatus();
+            this.stopHealthCheck();
         });
 
         this.client.on('message', async (msg) => {
@@ -2711,22 +2825,65 @@ class WhatsAppClient {
 
     async sendMessage(chatId, message, options = {}) {
         if (!this.isReady()) throw new Error('WhatsApp not connected');
+        const id = typeof chatId === 'string' ? chatId.trim() : '';
+        if (!id) throw new Error('Invalid chatId');
+
+        const timeoutMs = Math.max(
+            5000,
+            Number(options.timeoutMs)
+                || (options.mediaPath ? CONSTANTS.SEND_MEDIA_TIMEOUT_MS : CONSTANTS.SEND_MESSAGE_TIMEOUT_MS)
+        );
+
+        const preflight = await this.getClientState({
+            timeoutMs: Math.min(timeoutMs, CONSTANTS.SEND_MESSAGE_PREFLIGHT_TIMEOUT_MS)
+        });
+        if (!preflight.ok || preflight.state !== 'CONNECTED') {
+            try {
+                const reason = preflight.ok ? `send_preflight_state_${preflight.state}` : 'send_preflight_failed';
+                await this.restart({ reason });
+            } catch (e) {}
+            if (!this.isReady()) {
+                throw new Error('WhatsApp not connected');
+            }
+        }
+
         let result;
         const sendOptions = {};
         if (options.quotedMessageId) {
             sendOptions.quotedMessageId = options.quotedMessageId;
         }
-        if (options.mediaPath) {
-            const media = MessageMedia.fromFilePath(options.mediaPath);
-            if (options.sendAsSticker) {
-                sendOptions.sendMediaAsSticker = true;
-            } else if (message) {
-                sendOptions.caption = message;
+
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('sendMessage timeout')), timeoutMs));
+
+        try {
+            if (options.mediaPath) {
+                const media = MessageMedia.fromFilePath(options.mediaPath);
+                if (options.sendAsSticker) {
+                    sendOptions.sendMediaAsSticker = true;
+                } else if (message) {
+                    sendOptions.caption = message;
+                }
+                result = await Promise.race([this.client.sendMessage(id, media, sendOptions), timeoutPromise]);
+            } else {
+                result = await Promise.race([this.client.sendMessage(id, message, sendOptions), timeoutPromise]);
             }
-            result = await this.client.sendMessage(chatId, media, sendOptions);
-        } else {
-            result = await this.client.sendMessage(chatId, message, sendOptions);
+        } catch (error) {
+            const errMsg = error?.message || String(error);
+            if (errMsg === 'sendMessage timeout') {
+                this.log('warn', 'message', `Send timed out for ${id}; restarting client`);
+                void this.restart({ reason: 'send_timeout' });
+                throw new Error('WhatsApp send timed out; reconnecting');
+            }
+
+            const restartHints = ['Execution context was destroyed', 'Target closed', 'Session closed', 'Protocol error'];
+            if (restartHints.some(hint => errMsg.includes(hint))) {
+                this.log('warn', 'message', `Send failed (${errMsg}); restarting client`);
+                void this.restart({ reason: 'send_error' });
+            }
+
+            throw error;
         }
+
         this.log('info', 'message', 'Message sent to ' + chatId);
         return result;
     }
@@ -3017,6 +3174,7 @@ class WhatsAppClient {
         if (this.client) {
             try { await this.client.logout(); } catch (e) {}
         }
+        this.stopHealthCheck();
         this.lastError = null;
         this.status = 'disconnected';
         this.info = null;
@@ -3026,6 +3184,7 @@ class WhatsAppClient {
 
     async destroy(options = {}) {
         const preserveError = options && options.preserveError === true;
+        this.stopHealthCheck();
         if (this.client) {
             try { await this.client.destroy(); } catch (e) {}
             this.client = null;
