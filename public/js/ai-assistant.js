@@ -7,6 +7,7 @@
 const AI_ASSISTANT_HISTORY_KEY = 'aiAssistantHistoryV1';
 const AI_ASSISTANT_HISTORY_LIMIT = 40;
 const AI_ASSISTANT_REPLY_MAX_TOKENS = 256;
+const AI_ASSISTANT_REPLY_HISTORY_LIMIT = 6;
 
 let aiAssistantState = {
     chats: [],
@@ -36,17 +37,44 @@ function aiAssistantRespond(text) {
     aiAssistantAppendHistory('assistant', text);
 }
 
+function aiAssistantGetRecentHistory(limit = AI_ASSISTANT_REPLY_HISTORY_LIMIT) {
+    const history = Array.isArray(aiAssistantState.history) ? aiAssistantState.history : [];
+    return history.slice(-limit).map((entry) => {
+        const role = entry?.role === 'assistant' ? 'assistant' : 'user';
+        const text = String(entry?.text || '').trim();
+        return `${role}: ${text}`;
+    });
+}
+
 function aiAssistantNormalizeReplyText(text) {
     const trimmed = String(text || '').trim();
     if (!trimmed) return '';
     return trimmed.replace(/^["'`]+|["'`]+$/g, '').trim();
 }
 
-function aiAssistantBuildReplyPrompt(type, context = {}) {
+function aiAssistantBuildReplyPrompt(type, context = {}, fallback) {
+    const goalMap = {
+        greeting: 'Kullanicinin ne yapmak istedigini sor; sohbet adini veya kisi/grup adini iste.',
+        ask_chat: 'Scriptin hangi sohbet(ler)de calisacagini sor. Ad veya ID kabul et. "hepsi" secenegi var.',
+        chat_multiple: 'Birden fazla sohbet eslesmesi var. Kullanicidan numarayi secmesini iste. Listeyi aynen kullan.',
+        chat_not_found: 'Sohbet bulunamadi. Adi/ID tekrar iste.',
+        ask_history: 'Gecmisi dahil edip etmeyecegini ve kac mesaj (10-200) oldugunu sor.',
+        history_invalid: 'Gecmis icin net cevap alinamadi. "hayir" ya da sayi iste.',
+        ask_persona: 'Cevaplarin tavrini sor (samimi, resmi, kisa vb). "farketmez" kabul.',
+        ask_confirm: 'Ayarlari kisaca ozetle ve onay iste (evet/hayir).',
+        confirm_invalid: 'Sadece evet/hayir iste.',
+        confirm_cancel: 'Iptal edildi. Yeni istek iste.',
+        reset: 'Akis sifirlandi. Yeni istek iste.',
+        cancel: 'Iptal edildi. Yeni istek iste.',
+        history_cleared: 'Gecmis temizlendi. Yeni istek iste.'
+    };
+
     const lines = [
         'You are the WhatsApp Web Panel script setup assistant.',
         'Respond in Turkish using ASCII only (no diacritics).',
-        'Short, friendly, natural. Avoid canned or repetitive phrasing.',
+        'Short, clear, and to the point. Avoid robotic or repetitive phrasing.',
+        'Do NOT propose sending messages. Never use the word "gonder".',
+        'Do NOT invent actions, scripts, or message content.',
         'Ask only one clear question if you need input.',
         'Do not use markdown.',
         'If you list choices, use short numbered items on new lines.'
@@ -54,6 +82,7 @@ function aiAssistantBuildReplyPrompt(type, context = {}) {
 
     lines.push('');
     lines.push(`Situation: ${type}`);
+    lines.push(`Goal: ${goalMap[type] || 'Kullaniciya dogru adim icin kisa soru sor.'}`);
 
     const pushLine = (label, value) => {
         if (value === undefined || value === null || value === '') return;
@@ -64,6 +93,9 @@ function aiAssistantBuildReplyPrompt(type, context = {}) {
     pushLine('Intent', context.intent);
     if (typeof context.autoReply === 'boolean') {
         pushLine('AutoReply', context.autoReply ? 'yes' : 'no');
+    }
+    if (typeof context.hasGreeted === 'boolean') {
+        pushLine('Has greeted before', context.hasGreeted ? 'yes' : 'no');
     }
     pushLine('Need', context.need);
     pushLine('Problem', context.problem);
@@ -77,10 +109,42 @@ function aiAssistantBuildReplyPrompt(type, context = {}) {
     pushLine('Persona', context.persona);
     pushLine('Delay', context.delay);
     pushLine('Summary', context.summary);
+    if (Array.isArray(context.recentHistory) && context.recentHistory.length) {
+        lines.push('Recent history:');
+        context.recentHistory.forEach((entry) => lines.push(entry));
+    }
+    if (fallback) {
+        lines.push('');
+        lines.push('Draft response (keep meaning, rewrite with different wording):');
+        lines.push(String(fallback).trim());
+    }
 
     lines.push('');
     lines.push('Assistant reply:');
     return lines.join('\n');
+}
+
+function aiAssistantValidateReply(type, text, context = {}) {
+    const reply = aiAssistantNormalizeReplyText(text);
+    if (!reply) return false;
+
+    const lowered = reply.toLowerCase();
+    if (lowered.includes('gonder')) return false;
+    if (context.hasGreeted && /(merhaba|selam)/.test(lowered)) return false;
+
+    if (type === 'ask_chat' || type === 'chat_not_found' || type === 'chat_multiple' || type === 'greeting') {
+        if (!/(sohbet|chat|kisi|kullanici|grup|id|hepsi|tum)/.test(lowered)) return false;
+    }
+    if (type === 'ask_history' || type === 'history_invalid') {
+        if (!/(gecmis|mesaj|kac|sayi|adet)/.test(lowered)) return false;
+    }
+    if (type === 'ask_persona') {
+        if (!/(tavir|tarz|stil|ton|samimi|resmi|kisa|espri)/.test(lowered)) return false;
+    }
+    if (type === 'ask_confirm' || type === 'confirm_invalid') {
+        if (!/(evet|hayir)/.test(lowered)) return false;
+    }
+    return true;
 }
 
 async function aiAssistantRespondSmart(type, context, fallback, options = {}) {
@@ -90,14 +154,14 @@ async function aiAssistantRespondSmart(type, context, fallback, options = {}) {
         return;
     }
 
-    const prompt = aiAssistantBuildReplyPrompt(type, context);
+    const prompt = aiAssistantBuildReplyPrompt(type, context, safeFallback);
     const maxTokens = Number.isFinite(options.maxTokens) ? options.maxTokens : AI_ASSISTANT_REPLY_MAX_TOKENS;
-    const temperature = (typeof options.temperature === 'number') ? options.temperature : 0.6;
+    const temperature = (typeof options.temperature === 'number') ? options.temperature : 0.7;
 
     try {
         const result = await api('api/ai/generate-text', 'POST', { prompt, maxTokens, temperature });
         const reply = aiAssistantNormalizeReplyText(result?.text);
-        if (result?.success && reply) {
+        if (result?.success && reply && aiAssistantValidateReply(type, reply, context)) {
             aiAssistantRespond(reply);
             return;
         }
@@ -207,6 +271,10 @@ function aiAssistantBuildBaseContext(userMessage) {
     if (userMessage) context.userMessage = String(userMessage || '').trim();
     if (flow.intent) context.intent = flow.intent;
     if (typeof flow.autoReply === 'boolean') context.autoReply = flow.autoReply;
+    context.hasGreeted = (Array.isArray(aiAssistantState.history) ? aiAssistantState.history : [])
+        .some((entry) => entry?.role === 'assistant');
+    const recentHistory = aiAssistantGetRecentHistory();
+    if (recentHistory.length) context.recentHistory = recentHistory;
 
     const selectedChats = aiAssistantDescribeChatIds(flow.chatIds || [], 6);
     if (selectedChats.length) context.selectedChats = selectedChats;
