@@ -31,11 +31,11 @@ router.use(requireAuth);
 router.use(accountManager.attachAccount.bind(accountManager));
 
 router.use('/accounts', accountsRouter);
+router.use('/ai', aiRouter);
 router.use('/', whatsappRouter);
 router.use('/scheduled', scheduledRouter);
 router.use('/webhooks', webhooksRouter);
 router.use('/scripts', scriptsRouter);
-router.use('/ai', aiRouter);
 router.use('/templates', templatesRouter);
 router.use('/logs', logsRouter);
 router.use('/stats', statsRouter);

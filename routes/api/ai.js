@@ -71,13 +71,21 @@ router.post('/admin-chat', requireRole(['admin']), validate({ body: adminChatSch
     const userId = req.session?.userId;
     if (!userId) return sendError(req, res, 401, 'Not authenticated');
     
-    const db = req.account.db; // Account middleware attaches this
-    const user = db.users.getById.get(userId);
+    // User might be in default DB (common admin) or active account DB
+    const defaultDb = accountManager.getAccountContext(accountManager.getDefaultAccountId()).db;
+    let user = defaultDb.users.getById.get(userId);
+    
+    if (!user && req.account.db !== defaultDb) {
+        user = req.account.db.users.getById.get(userId);
+    }
+
     if (!user) return sendError(req, res, 404, 'User not found');
 
     const { message, history } = req.validatedBody;
 
     // Resolve AI Config for the Agent to use
+    // 1. User specific (from the DB where user was found)
+    // 2. Service global defaults
     const provider = user.ai_provider || aiService.provider || 'gemini';
     const apiKey = user.ai_api_key || (provider === 'vertex' ? aiService.vertexApiKey : aiService.apiKey) || null;
     
@@ -85,7 +93,8 @@ router.post('/admin-chat', requireRole(['admin']), validate({ body: adminChatSch
         return sendError(req, res, 400, 'AI API key not configured');
     }
 
-    const agent = new AdminAgent(db);
+    // Agent operates on the ACTIVE account's DB
+    const agent = new AdminAgent(req.account.db);
     const response = await agent.process(history, message, {
         apiKey,
         provider,
