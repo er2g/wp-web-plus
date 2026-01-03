@@ -8,6 +8,29 @@ const AI_ASSISTANT_HISTORY_KEY = 'aiAssistantHistoryV1';
 const AI_ASSISTANT_HISTORY_LIMIT = 40;
 const AI_ASSISTANT_REPLY_MAX_TOKENS = 256;
 const AI_ASSISTANT_REPLY_HISTORY_LIMIT = 10;
+const AI_ASSISTANT_CHAT_STOP_WORDS = new Set([
+    'sohbet',
+    'chat',
+    'kisi',
+    'kullanici',
+    'grup',
+    'grubu',
+    'isimli',
+    'icin',
+    'ile',
+    'lutfen',
+    'bu',
+    'su',
+    'burasi',
+    'adli',
+    'adi',
+    'adinda',
+    'numara',
+    'id',
+    'idli',
+    'idsi',
+    'hesap'
+]);
 
 let aiAssistantState = {
     chats: [],
@@ -46,6 +69,19 @@ function aiAssistantGetRecentHistory(limit = AI_ASSISTANT_REPLY_HISTORY_LIMIT) {
     });
 }
 
+function aiAssistantNormalizeSearchText(value) {
+    const raw = String(value || '').toLowerCase();
+    const normalized = (typeof raw.normalize === 'function')
+        ? raw.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        : raw;
+    return normalized.replace(/[^a-z0-9@._\s-]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function aiAssistantExtractTokens(text) {
+    const tokens = String(text || '').split(/\s+/).filter(Boolean);
+    return tokens.filter((token) => token.length >= 3 && !AI_ASSISTANT_CHAT_STOP_WORDS.has(token));
+}
+
 function aiAssistantNormalizeReplyText(text) {
     const trimmed = String(text || '').trim();
     if (!trimmed) return '';
@@ -75,7 +111,8 @@ function aiAssistantBuildReplyPrompt(type, context = {}, fallback) {
         confirm_cancel: 'Iptal edildi. Yeni istek iste.',
         reset: 'Akis sifirlandi. Yeni istek iste.',
         cancel: 'Iptal edildi. Yeni istek iste.',
-        history_cleared: 'Gecmis temizlendi. Yeni istek iste.'
+        history_cleared: 'Gecmis temizlendi. Yeni istek iste.',
+        chat_list_empty: 'Sohbet listesi yuklenmemis olabilir. Kullaniciya biraz beklemesini iste.'
     };
 
     const lines = [
@@ -146,8 +183,8 @@ function aiAssistantValidateReply(type, text, context = {}) {
     if (context.hasGreeted && /(merhaba|selam)/.test(lowered)) return false;
     if (/(yardimci olabilirim|size nasil yardim)/.test(lowered) && type !== 'greeting') return false;
 
-    if (type === 'ask_chat' || type === 'chat_not_found' || type === 'chat_multiple' || type === 'greeting') {
-        if (!/(sohbet|chat|kisi|kullanici|grup|id|hepsi|tum)/.test(lowered)) return false;
+    if (type === 'ask_chat' || type === 'chat_not_found' || type === 'chat_multiple' || type === 'greeting' || type === 'chat_list_empty') {
+        if (!/(sohbet|chat|kisi|kullanici|grup|id|hepsi|tum|liste|yukle)/.test(lowered)) return false;
     }
     if (type === 'ask_history' || type === 'history_invalid') {
         if (!/(gecmis|mesaj|kac|sayi|adet)/.test(lowered)) return false;
@@ -322,29 +359,44 @@ function aiAssistantDetectAutoReplyIntent(text) {
 }
 
 function aiAssistantMatchChatsByText(text) {
-    const lowered = String(text || '').toLowerCase();
+    const rawText = String(text || '');
+    const normalizedInput = aiAssistantNormalizeSearchText(rawText);
+    if (!normalizedInput) return [];
+
     const chatsList = Array.isArray(aiAssistantState.chats) ? aiAssistantState.chats : [];
     const matches = [];
     const seen = new Set();
 
-    const quoted = lowered.match(/["'“”‘’]([^"'“”‘’]{2,})["'“”‘’]/);
-    const quotedToken = quoted ? quoted[1].trim() : '';
+    const tokens = aiAssistantExtractTokens(normalizedInput);
+    const inputCompact = normalizedInput.replace(/\s+/g, '');
+    const quoted = rawText.match(/["'“”‘’]([^"'“”‘’]{2,})["'“”‘’]/);
+    const quotedToken = quoted ? aiAssistantNormalizeSearchText(quoted[1]) : '';
+    const quotedCompact = quotedToken ? quotedToken.replace(/\s+/g, '') : '';
 
     chatsList.forEach((chat) => {
-        const name = String(chat.name || '').trim();
-        const id = String(chat.chat_id || '').trim();
-        if (!id || seen.has(id)) return;
+        const nameRaw = String(chat.name || '').trim();
+        const idRaw = String(chat.chat_id || '').trim();
+        if (!idRaw || seen.has(idRaw)) return;
 
-        const nameLower = name.toLowerCase();
-        const idLower = id.toLowerCase();
+        const name = aiAssistantNormalizeSearchText(nameRaw);
+        const id = aiAssistantNormalizeSearchText(idRaw);
+        const nameCompact = name.replace(/\s+/g, '');
+        const idCompact = id.replace(/\s+/g, '');
 
-        const nameHit = nameLower.length >= 3 && lowered.includes(nameLower);
-        const idHit = idLower && lowered.includes(idLower);
-        const quotedHit = quotedToken && nameLower.includes(quotedToken.toLowerCase());
+        const nameHit = normalizedInput.length >= 3
+            && (name.includes(normalizedInput) || nameCompact.includes(inputCompact));
+        const tokenHit = tokens.length
+            ? tokens.some((token) => name.includes(token) || nameCompact.includes(token))
+            : false;
+        const quotedHit = quotedToken
+            ? (name.includes(quotedToken) || nameCompact.includes(quotedCompact))
+            : false;
+        const idHit = id && ((normalizedInput.length >= 5 && (id.includes(normalizedInput) || idCompact.includes(inputCompact)))
+            || (tokens.length && tokens.some((token) => id.includes(token) || idCompact.includes(token))));
 
-        if (nameHit || idHit || quotedHit) {
+        if (nameHit || tokenHit || quotedHit || idHit) {
             matches.push(chat);
-            seen.add(id);
+            seen.add(idRaw);
         }
     });
 
@@ -579,6 +631,17 @@ async function sendAiAssistantMessage() {
     if (await aiAssistantHandleCommand(text)) return;
 
     if (aiAssistantFlow.step === 'awaiting_chat') {
+        const chatsList = Array.isArray(aiAssistantState.chats) ? aiAssistantState.chats : [];
+        if (!chatsList.length) {
+            const context = aiAssistantBuildBaseContext(text);
+            context.problem = 'chat_list_empty';
+            await aiAssistantRespondSmart(
+                'chat_list_empty',
+                context,
+                'Sohbet listesi henuz yuklenmedi. Biraz bekleyip tekrar dener misin?'
+            );
+            return;
+        }
         const selection = aiAssistantResolveChatSelection(text);
         if (selection.chatIds && selection.chatIds.length) {
             aiAssistantFlow.chatIds = selection.chatIds;
