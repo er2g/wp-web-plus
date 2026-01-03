@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Admin Assistant - WhatsApp Panel</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="css/style.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: var(--app-background);
+            color: var(--text-primary);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .chat-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            max-width: 900px;
+            margin: 0 auto;
+            width: 100%;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
+            gap: 15px;
+        }
+        .back-btn {
+            background: none;
+            border: none;
+            color: var(--text-primary);
+            font-size: 1.5rem;
+            cursor: pointer;
+        }
+        .messages {
+            flex: 1;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            padding-bottom: 20px;
+        }
+        .message {
+            max-width: 80%;
+            padding: 12px 16px;
+            border-radius: 12px;
+            line-height: 1.5;
+            position: relative;
+        }
+        .message.user {
+            align-self: flex-end;
+            background-color: var(--outgoing-background);
+            color: var(--text-primary);
+            border-bottom-right-radius: 2px;
+        }
+        .message.assistant {
+            align-self: flex-start;
+            background-color: var(--incoming-background);
+            color: var(--text-primary);
+            border-bottom-left-radius: 2px;
+        }
+        .message.system {
+            align-self: center;
+            background-color: rgba(128,128,128,0.1);
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            text-align: center;
+        }
+        .input-area {
+            display: flex;
+            gap: 10px;
+            background: var(--panel-header-background);
+            padding: 15px;
+            border-radius: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        textarea {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: var(--text-primary);
+            resize: none;
+            font-family: inherit;
+            outline: none;
+        }
+        .send-btn {
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        .send-btn:hover {
+            transform: scale(1.05);
+        }
+        .send-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        /* Markdown-like styling for AI code blocks */
+        pre {
+            background: rgba(0,0,0,0.2);
+            padding: 10px;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 5px 0;
+        }
+        code {
+            font-family: monospace;
+        }
+        .typing-indicator {
+            font-style: italic;
+            color: var(--text-secondary);
+            margin-left: 10px;
+            font-size: 0.9rem;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="header">
+            <button class="back-btn" onclick="window.location.href='/'"><i class="bi bi-arrow-left"></i></button>
+            <div style="flex:1">
+                <h2 style="margin:0">AI Admin Assistant</h2>
+                <span style="font-size:0.9rem; color: var(--text-secondary)">Sistemi yonetmek icin sohbet edin</span>
+            </div>
+            <div id="statusIndicator"></div>
+        </div>
+
+        <div class="messages" id="messagesList">
+            <div class="message system">AI Admin Assistant'a hos geldiniz.<br>Ornek: "Annem adli sohbet icin korsan gibi konusan bir bot ata."</div>
+        </div>
+        
+        <div class="typing-indicator" id="typingIndicator">AI dusunuyor...</div>
+
+        <div class="input-area">
+            <textarea id="messageInput" rows="1" placeholder="Bir seyler isteyin..."></textarea>
+            <button class="send-btn" id="sendBtn" onclick="sendMessage()">
+                <i class="bi bi-send-fill"></i>
+            </button>
+        </div>
+    </div>
+
+    <script src="js/admin-chat.js"></script>
+</body>
+</html>

@@ -39,6 +39,8 @@ const aiChatAnalysisSchema = z.object({
     messages: z.array(z.string().trim().min(1).max(2000)).min(1).max(1000)
 }).strict();
 
+const AdminAgent = require('../../services/adminAgent');
+
 const DEPRECATED_MODELS = new Set(['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash']);
 const DEFAULT_MODEL = 'gemini-2.5-flash';
 
@@ -56,6 +58,42 @@ function resolveModel(...candidates) {
     }
     return DEFAULT_MODEL;
 }
+
+const adminChatSchema = z.object({
+    message: z.string().trim().min(1),
+    history: z.array(z.object({
+        role: z.enum(['user', 'assistant']),
+        text: z.string()
+    })).optional().default([])
+});
+
+router.post('/admin-chat', requireRole(['admin']), validate({ body: adminChatSchema }), async (req, res) => {
+    const userId = req.session?.userId;
+    if (!userId) return sendError(req, res, 401, 'Not authenticated');
+    
+    const db = req.account.db; // Account middleware attaches this
+    const user = db.users.getById.get(userId);
+    if (!user) return sendError(req, res, 404, 'User not found');
+
+    const { message, history } = req.validatedBody;
+
+    // Resolve AI Config for the Agent to use
+    const provider = user.ai_provider || aiService.provider || 'gemini';
+    const apiKey = user.ai_api_key || (provider === 'vertex' ? aiService.vertexApiKey : aiService.apiKey) || null;
+    
+    if (!apiKey) {
+        return sendError(req, res, 400, 'AI API key not configured');
+    }
+
+    const agent = new AdminAgent(db);
+    const response = await agent.process(history, message, {
+        apiKey,
+        provider,
+        model: user.ai_model // Agent can override this if needed, but passing user pref is good
+    });
+
+    return res.json({ success: true, response });
+});
 
 router.get('/config', requireRole(['admin']), (req, res) => {
     const userId = req.session?.userId;
