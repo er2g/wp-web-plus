@@ -258,121 +258,6 @@ function aiAssistantAdvanceFlow() {
     return aiAssistantAskForConfirm();
 }
 
-function aiAssistantBuildAutoReplyScript() {
-    const chatCount = Array.isArray(aiAssistantFlow.chatIds) ? aiAssistantFlow.chatIds.length : 0;
-    const chatLabel = (() => {
-        if (chatCount === 1) {
-            const chatId = aiAssistantFlow.chatIds[0];
-            const match = (Array.isArray(aiAssistantState.chats) ? aiAssistantState.chats : []).find((c) => c?.chat_id === chatId);
-            return match?.name || chatId || 'Sohbet';
-        }
-        if (chatCount > 1) return `${chatCount} sohbet`;
-        return 'Sohbet';
-    })();
-
-    const historyLimit = aiAssistantFlow.includeHistory ? aiAssistantFlow.historyLimit : 0;
-    const persona = aiAssistantFlow.persona ? aiAssistantFlow.persona.trim() : '';
-    const delayRange = aiAssistantClampDelayRange(aiAssistantFlow.delayMinMs, aiAssistantFlow.delayMaxMs);
-
-    const safePersona = JSON.stringify(persona);
-    const safeHistory = Number.isFinite(historyLimit) ? Math.max(0, Math.min(200, historyLimit)) : 0;
-    const minDelay = delayRange.minMs;
-    const maxDelay = delayRange.maxMs;
-
-    const code = `
-const chatId = msg && msg.chatId;
-const messageId = msg && msg.messageId;
-if (!msg || !chatId || !messageId || msg.isFromMe) return;
-if (msg.type === 'revoked') return;
-if (!msg.body || !String(msg.body).trim()) return;
-
-const storagePrefix = 'ai_auto_reply:' + chatId + ':';
-const lastHandledKey = storagePrefix + 'lastHandledMessageId';
-if (storage.get(lastHandledKey) === messageId) return;
-storage.set(lastHandledKey, messageId);
-
-const now = Date.now();
-const windowKey = storagePrefix + 'replyWindow';
-let window = storage.get(windowKey);
-if (!Array.isArray(window)) window = [];
-window = window.filter((ts) => typeof ts === 'number' && (now - ts) < 10 * 60 * 1000);
-if (window.length >= 8) {
-    storage.set(windowKey, window);
-    log('AI rate limit: cevaplanmadi (chat=' + chatId + ')');
-    return;
-}
-window.push(now);
-storage.set(windowKey, window);
-
-const minDelay = ${minDelay};
-const maxDelay = ${maxDelay};
-const range = Math.max(0, maxDelay - minDelay);
-const delayMs = range ? Math.floor(Math.random() * (range + 1)) + minDelay : minDelay;
-
-const run = async () => {
-    const historyLimit = ${safeHistory};
-    const incomingText = (msg.body && String(msg.body).trim())
-        ? String(msg.body).trim()
-        : (msg.type ? '[' + msg.type + ']' : '[mesaj]');
-
-    let prompt = '';
-    if (historyLimit > 0) {
-        const rows = getMessages(chatId, historyLimit);
-        const ordered = Array.isArray(rows)
-            ? rows.slice().sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
-            : [];
-        const lines = ordered.map((m) => {
-            const name = m.is_from_me ? 'Sen' : (m.from_name || m.from_number || 'Karsi taraf');
-            const time = new Date(m.timestamp || Date.now()).toLocaleString();
-            const body = (m.body && String(m.body).trim())
-                ? String(m.body).trim()
-                : (m.type ? '[' + m.type + ']' : '[mesaj]');
-            return name + ' | ' + time + ' | ' + body;
-        });
-        if (lines.length) {
-            prompt += 'Sohbet gecmisi:\\n' + lines.join('\\n') + '\\n\\n';
-        }
-        const lastOutgoing = ordered.slice().reverse().find((m) => m.is_from_me && m.body);
-        if (lastOutgoing && lastOutgoing.body) {
-            prompt += 'Son gonderilen yanit: ' + String(lastOutgoing.body).trim() + '\\n';
-        }
-    }
-
-    const senderName = msg.fromName || msg.fromNumber || 'Karsi taraf';
-    const persona = ${safePersona};
-    prompt += 'Yeni gelen mesaj (' + senderName + '): ' + incomingText + '\\n';
-    prompt += 'Dogal, akici ve insan gibi bir cevap yaz (Turkce). ';
-    prompt += 'Ayni ifadeleri tekrar etme, ezbere yanit verme, kendinden bahsetme (AI oldugunu soyleme).\\n';
-    prompt += 'Gerektiginde kisa bir soru sorarak muhabbeti surdur.\\n';
-    if (persona) {
-        prompt += 'Konusma tavri: ' + persona + '\\n';
-    }
-    const jitter = Math.random().toString(36).slice(2, 8);
-    prompt += 'Stil tohumu: ' + jitter + '\\n';
-    prompt += 'Sadece yanit metnini yaz.\\n';
-
-    const response = await aiGenerate(prompt, { temperature: 0.7 });
-    const replyText = String(response || '').trim();
-    if (!replyText) return;
-    await reply(replyText);
-};
-
-if (delayMs > 0) {
-    setTimeout(() => { run().catch((err) => log('AI hata: ' + err.message)); }, delayMs);
-} else {
-    await run();
-}
-`.trim();
-
-    return {
-        name: `AI Otomatik Cevap - ${chatLabel}`,
-        description: 'Gelen mesajlara AI ile otomatik cevap verir.',
-        trigger_type: 'message',
-        trigger_filter: { incoming: true },
-        code
-    };
-}
-
 function aiAssistantHandleCommand(text) {
     const lowered = String(text || '').toLowerCase();
     if (/(sifirla|reset|yeni basla)/.test(lowered)) {
@@ -400,24 +285,21 @@ async function aiAssistantFinalizeScript() {
     if (sendBtn) sendBtn.disabled = true;
 
     try {
-        let script = null;
-        if (aiAssistantFlow.autoReply) {
-            script = aiAssistantBuildAutoReplyScript();
-        } else {
-            const finalPrompt = buildAiAssistantPrompt(aiAssistantFlow.intent, {
-                autoReply: aiAssistantFlow.autoReply,
-                persona: aiAssistantFlow.persona || '',
-                includeHistory: aiAssistantFlow.includeHistory,
-                historyLimit: aiAssistantFlow.historyLimit
-            });
+        const finalPrompt = buildAiAssistantPrompt(aiAssistantFlow.intent, {
+            autoReply: aiAssistantFlow.autoReply,
+            persona: aiAssistantFlow.persona || '',
+            includeHistory: aiAssistantFlow.includeHistory,
+            historyLimit: aiAssistantFlow.historyLimit,
+            delayMinMs: aiAssistantFlow.delayMinMs,
+            delayMaxMs: aiAssistantFlow.delayMaxMs
+        });
 
-            const response = await api('api/ai/generate-script', 'POST', { prompt: finalPrompt });
-            if (!response?.success || !response?.script) {
-                aiAssistantRespond('Script olusturulamadi. Lutfen tekrar deneyelim.');
-                return;
-            }
-            script = response.script;
+        const response = await api('api/ai/generate-script', 'POST', { prompt: finalPrompt });
+        if (!response?.success || !response?.script) {
+            aiAssistantRespond('Script olusturulamadi. Lutfen tekrar deneyelim.');
+            return;
         }
+        const script = response.script;
 
         const mergedFilter = mergeAiAssistantTriggerFilter(script.trigger_filter, aiAssistantFlow.chatIds);
         if (aiAssistantFlow.autoReply) {
@@ -734,10 +616,14 @@ function buildAiAssistantPrompt(basePrompt, options = {}) {
     if (options.autoReply) {
         const historyLimit = Number.isFinite(options.historyLimit) ? options.historyLimit : 40;
         const includeHistory = options.includeHistory !== false;
+        const delay = aiAssistantClampDelayRange(options.delayMinMs, options.delayMaxMs);
         segments.push('');
         segments.push('Ek kurallar:');
         segments.push('- Gelen mesajlara AI ile cevap uret (aiGenerate fonksiyonunu kullan).');
         segments.push('- Sadece gelen mesajlarda calis; kendi mesajlarina cevap verme.');
+        if (delay.minMs || delay.maxMs) {
+            segments.push(`- Cevap vermeden once ${Math.round(delay.minMs)}-${Math.round(delay.maxMs)} ms arasi rastgele bekle (setTimeout kullan).`);
+        }
         if (includeHistory) {
             segments.push(`- Cevap yazmadan once getMessages(msg.chatId, ${historyLimit}) ile son ${historyLimit} mesaji cek.`);
             segments.push('- Mesajlari kronolojik siraya koy (eskiden yeniye).');
