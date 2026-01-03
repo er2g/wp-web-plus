@@ -1313,7 +1313,7 @@
     "/api/ai/generate-script": {
       "post": {
         "tags": ["AI"],
-        "summary": "AI ile script uret (Gemini) (admin)",
+        "summary": "AI ile script uret (Gemini/Vertex) (admin)",
         "security": [{ "sessionCookie": [], "csrfToken": [] }],
         "parameters": [{ "$ref": "#/components/parameters/AccountIdHeader" }],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["prompt"], "properties": { "prompt": { "type": "string" } } } } } },

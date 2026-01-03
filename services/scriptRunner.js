@@ -96,10 +96,19 @@ class ScriptRunner {
         const sharedAi = this.getSharedAiConfig();
         const userAi = localAi || sharedAi;
 
+        const provider = (typeof overrides.provider === 'string' ? overrides.provider.trim() : '')
+            || (typeof filterAi.provider === 'string' ? filterAi.provider.trim() : '')
+            || (typeof userAi?.provider === 'string' ? userAi.provider.trim() : '')
+            || (typeof aiService.provider === 'string' ? aiService.provider.trim() : 'gemini');
+
+        const fallbackServiceKey = provider.toLowerCase() === 'vertex'
+            ? (typeof aiService.vertexApiKey === 'string' ? aiService.vertexApiKey.trim() : '')
+            : (typeof aiService.apiKey === 'string' ? aiService.apiKey.trim() : '');
+
         const rawApiKey = (typeof overrides.apiKey === 'string' ? overrides.apiKey.trim() : '')
             || (typeof filterAi.apiKey === 'string' ? filterAi.apiKey.trim() : '')
             || (typeof userAi?.apiKey === 'string' ? userAi.apiKey.trim() : '')
-            || (typeof aiService.apiKey === 'string' ? aiService.apiKey.trim() : '');
+            || fallbackServiceKey;
 
         const model = resolveAiModel(
             overrides.model,
@@ -122,6 +131,7 @@ class ScriptRunner {
 
         return {
             apiKey: rawApiKey || null,
+            provider,
             model,
             maxTokens,
             temperature
@@ -286,6 +296,7 @@ class ScriptRunner {
                     return await aiService.generateText({
                         prompt: textPrompt,
                         apiKey: resolved.apiKey,
+                        provider: resolved.provider,
                         model: resolved.model,
                         maxOutputTokens: resolved.maxTokens,
                         temperature: resolved.temperature

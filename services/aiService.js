@@ -1,6 +1,6 @@
 /**
  * WhatsApp Web Panel - AI Assistant Service
- * Integrates with Google Gemini to generate scripts
+ * Integrates with Gemini or Vertex AI to generate scripts
  */
 const axios = require('axios');
 const config = require('../config');
@@ -9,15 +9,70 @@ const { logger } = require('./logger');
 class AiService {
     constructor() {
         this.apiKey = config.GEMINI_API_KEY;
+        this.vertexApiKey = config.VERTEX_API_KEY;
         this.model = 'gemini-2.5-flash'; // Default model
-        this.baseUrl = 'https://generativelanguage.googleapis.com/v1beta/models';
+        this.provider = 'gemini';
+        this.geminiBaseUrl = 'https://generativelanguage.googleapis.com/v1beta/models';
+        this.vertexBaseUrl = 'https://aiplatform.googleapis.com/v1';
     }
 
-    async generateText({ prompt, apiKey, model, maxOutputTokens = 4096, temperature = 0.3 }) {
-        const effectiveKey = apiKey || this.apiKey;
-        const effectiveModel = model || this.model;
+    normalizeProvider(provider) {
+        const normalized = String(provider || '').trim().toLowerCase();
+        if (!normalized) return this.provider || 'gemini';
+        if (normalized === 'vertex' || normalized === 'aiplatform' || normalized === 'vertexai') return 'vertex';
+        return 'gemini';
+    }
+
+    resolveApiKey(provider, apiKey) {
+        const trimmed = typeof apiKey === 'string' ? apiKey.trim() : '';
+        if (trimmed) return trimmed;
+        if (provider === 'vertex') return typeof this.vertexApiKey === 'string' ? this.vertexApiKey.trim() : '';
+        return typeof this.apiKey === 'string' ? this.apiKey.trim() : '';
+    }
+
+    resolveModel(model) {
+        const trimmed = typeof model === 'string' ? model.trim() : '';
+        return trimmed || this.model;
+    }
+
+    buildVertexModelResource(model) {
+        const raw = typeof model === 'string' ? model.trim() : '';
+        if (!raw) return `publishers/google/models/${this.model}`;
+
+        // If someone pastes a full URL, extract the resource path after /v1/.
+        if (/^https?:\/\//i.test(raw)) {
+            try {
+                const url = new URL(raw);
+                const pathname = String(url.pathname || '');
+                const withoutPrefix = pathname.replace(/^\/?v1\//, '').replace(/^\/+/, '');
+                const withoutOp = withoutPrefix.split(':')[0];
+                if (withoutOp) return withoutOp;
+            } catch (e) {}
+        }
+
+        const noQuery = raw.split('?')[0];
+        const withoutOp = noQuery.split(':')[0];
+        const normalized = withoutOp.replace(/^\/?v1\//, '').replace(/^\/+/, '');
+        if (normalized.includes('/')) {
+            return normalized;
+        }
+        return `publishers/google/models/${normalized}`;
+    }
+
+    buildRequestUrl({ provider, model, apiKey, method }) {
+        if (provider === 'vertex') {
+            const resource = this.buildVertexModelResource(model);
+            return `${this.vertexBaseUrl}/${resource}:${method}?key=${encodeURIComponent(apiKey)}`;
+        }
+        return `${this.geminiBaseUrl}/${model}:${method}?key=${encodeURIComponent(apiKey)}`;
+    }
+
+    async generateText({ prompt, apiKey, model, provider, maxOutputTokens = 4096, temperature = 0.3 }) {
+        const resolvedProvider = this.normalizeProvider(provider);
+        const effectiveKey = this.resolveApiKey(resolvedProvider, apiKey);
+        const effectiveModel = this.resolveModel(model);
         if (!effectiveKey) {
-            throw new Error('GEMINI_API_KEY is not configured');
+            throw new Error('AI API key is not configured');
         }
         if (!prompt) {
             throw new Error('Prompt is required');
@@ -30,8 +85,14 @@ class AiService {
             let attemptPrompt = originalPrompt;
 
             for (let attempt = 0; attempt <= maxContinuations; attempt++) {
+                const url = this.buildRequestUrl({
+                    provider: resolvedProvider,
+                    model: effectiveModel,
+                    apiKey: effectiveKey,
+                    method: 'generateContent'
+                });
                 const response = await axios.post(
-                    `${this.baseUrl}/${effectiveModel}:generateContent?key=${effectiveKey}`,
+                    url,
                     {
                         contents: [{
                             role: 'user',
@@ -98,13 +159,14 @@ class AiService {
     }
 
     async generateScript(prompt, options = {}) {
-        const apiKey = options.apiKey || this.apiKey;
-        const model = options.model || this.model;
+        const resolvedProvider = this.normalizeProvider(options.provider);
+        const apiKey = this.resolveApiKey(resolvedProvider, options.apiKey);
+        const model = this.resolveModel(options.model);
         const maxOutputTokens = Number.isFinite(options.maxOutputTokens) ? options.maxOutputTokens : 2048;
         const temperature = (typeof options.temperature === 'number') ? options.temperature : 0.2;
 
         if (!apiKey) {
-            throw new Error('GEMINI_API_KEY is not configured');
+            throw new Error('AI API key is not configured');
         }
 
         const systemPrompt = `
@@ -190,8 +252,14 @@ ${prompt}
 `;
 
         try {
+            const url = this.buildRequestUrl({
+                provider: resolvedProvider,
+                model,
+                apiKey,
+                method: 'generateContent'
+            });
             const response = await axios.post(
-                `${this.baseUrl}/${model}:generateContent?key=${apiKey}`,
+                url,
                 {
                     contents: [{
                         role: 'user',
@@ -202,17 +270,27 @@ ${prompt}
                         topK: 40,
                         topP: 0.95,
                         maxOutputTokens,
-                        responseMimeType: "application/json"
+                        ...(resolvedProvider === 'gemini' ? { responseMimeType: 'application/json' } : {})
                     }
                 }
             );
 
             if (response.data && response.data.candidates && response.data.candidates.length > 0) {
-                const content = response.data.candidates[0].content.parts[0].text;
+                const parts = response.data?.candidates?.[0]?.content?.parts || [];
+                const content = parts.map(part => part?.text || '').join('');
                 try {
                     // Clean up markdown if Gemini adds it despite instructions
                     const cleaned = content.replace(/```json/g, '').replace(/```/g, '').trim();
-                    return JSON.parse(cleaned);
+                    try {
+                        return JSON.parse(cleaned);
+                    } catch (e) {
+                        const start = cleaned.indexOf('{');
+                        const end = cleaned.lastIndexOf('}');
+                        if (start >= 0 && end > start) {
+                            return JSON.parse(cleaned.slice(start, end + 1));
+                        }
+                        throw e;
+                    }
                 } catch (e) {
                     logger.error('AI JSON parse error', { error: e.message, content });
                     throw new Error('Failed to parse AI response');

@@ -366,7 +366,7 @@ if (delayMs > 0) {
 
     return {
         name: `AI Otomatik Cevap - ${chatLabel}`,
-        description: 'Gelen mesajlara Gemini ile otomatik cevap verir.',
+        description: 'Gelen mesajlara AI ile otomatik cevap verir.',
         trigger_type: 'message',
         trigger_filter: { incoming: true },
         code
@@ -736,7 +736,7 @@ function buildAiAssistantPrompt(basePrompt, options = {}) {
         const includeHistory = options.includeHistory !== false;
         segments.push('');
         segments.push('Ek kurallar:');
-        segments.push('- Gelen mesajlara Gemini ile cevap uret (aiGenerate fonksiyonunu kullan).');
+        segments.push('- Gelen mesajlara AI ile cevap uret (aiGenerate fonksiyonunu kullan).');
         segments.push('- Sadece gelen mesajlarda calis; kendi mesajlarina cevap verme.');
         if (includeHistory) {
             segments.push(`- Cevap yazmadan once getMessages(msg.chatId, ${historyLimit}) ile son ${historyLimit} mesaji cek.`);
@@ -943,6 +943,7 @@ async function loadAiAssistantConfig() {
     try {
         const result = await api('api/ai/config');
         chatAnalysisState.hasKey = Boolean(result?.hasKey);
+        chatAnalysisState.savedProvider = String(result?.provider || 'gemini');
         chatAnalysisState.savedModel = String(result?.model || '');
         const maxTokensParsed = Number.parseInt(String(result?.maxTokens || ''), 10);
         chatAnalysisState.savedMaxTokens = Number.isFinite(maxTokensParsed) ? maxTokensParsed : null;
@@ -950,7 +951,7 @@ async function loadAiAssistantConfig() {
         const select = document.getElementById('aiAssistantModelSelect');
         const customInput = document.getElementById('aiAssistantModelCustomInput');
         if (select) {
-            const known = ['gemini-2.5-flash', 'gemini-2.5-pro'];
+            const known = ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.5-pro'];
             const deprecated = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash'];
             const fallback = 'gemini-2.5-flash';
             const effectiveModel = deprecated.includes(chatAnalysisState.savedModel)
@@ -978,6 +979,7 @@ async function loadAiAssistantConfig() {
 
 let chatAnalysisState = {
     hasKey: false,
+    savedProvider: 'gemini',
     savedModel: '',
     savedMaxTokens: null
 };
@@ -1009,15 +1011,28 @@ function openChatAnalysis() {
             </div>
             <div class="modal-body">
                 <p style="color: var(--text-secondary); margin-bottom: 12px;">
-                    <strong>${chatName}</strong> sohbetinden son mesajlari Gemini ile analiz et.
+                    <strong>${chatName}</strong> sohbetinden son mesajlari AI ile analiz et.
                 </p>
                 <div class="settings-section" style="margin-bottom: 16px;">
-                    <div class="settings-section-title">Gemini Ayarlari</div>
+                    <div class="settings-section-title">AI Ayarlari</div>
+                    <div class="settings-item">
+                        <i class="icon bi bi-cloud"></i>
+                        <div class="info">
+                            <div class="title">Provider</div>
+                            <div class="subtitle">Gemini (AI Studio) veya Vertex AI</div>
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 8px; width: 50%;">
+                            <select id="chatAnalysisProviderSelect" class="select-input">
+                                <option value="gemini">Gemini (AI Studio)</option>
+                                <option value="vertex">Vertex AI (aiplatform.googleapis.com)</option>
+                            </select>
+                        </div>
+                    </div>
                     <div class="settings-item">
                         <i class="icon bi bi-key"></i>
                         <div class="info">
                             <div class="title">API Anahtari</div>
-                            <div class="subtitle">Gemini API anahtarini kaydet</div>
+                            <div class="subtitle">Provider'a gore API anahtarini kaydet</div>
                         </div>
                         <div style="display: flex; flex-direction: column; gap: 8px; width: 50%;">
                             <input type="password" class="form-input" id="chatAnalysisApiKeyInput" placeholder="AI...">
@@ -1031,10 +1046,11 @@ function openChatAnalysis() {
                         <i class="icon bi bi-cpu"></i>
                         <div class="info">
                             <div class="title">Model</div>
-                            <div class="subtitle">Analizde kullanilacak Gemini modeli</div>
+                            <div class="subtitle">Analizde kullanilacak model</div>
                         </div>
                         <div style="display: flex; flex-direction: column; gap: 8px; width: 50%;">
                             <select id="chatAnalysisModelSelect" class="select-input" onchange="toggleChatAnalysisModelInput(this.value)">
+                                <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
                                 <option value="gemini-2.5-flash">gemini-2.5-flash</option>
                                 <option value="gemini-2.5-pro">gemini-2.5-pro</option>
                                 <option value="custom">Ozel</option>
@@ -1117,6 +1133,7 @@ async function loadChatAnalysisConfig() {
     try {
         const result = await api('api/ai/config');
         chatAnalysisState.hasKey = Boolean(result?.hasKey);
+        chatAnalysisState.savedProvider = String(result?.provider || 'gemini');
         chatAnalysisState.savedModel = String(result?.model || '');
         const maxTokensParsed = Number.parseInt(String(result?.maxTokens || ''), 10);
         chatAnalysisState.savedMaxTokens = Number.isFinite(maxTokensParsed) ? maxTokensParsed : null;
@@ -1125,10 +1142,15 @@ async function loadChatAnalysisConfig() {
             statusEl.textContent = chatAnalysisState.hasKey ? 'Anahtar kayitli' : 'Anahtar kayitli degil';
         }
 
+        const providerSelect = document.getElementById('chatAnalysisProviderSelect');
+        if (providerSelect) {
+            providerSelect.value = (chatAnalysisState.savedProvider === 'vertex') ? 'vertex' : 'gemini';
+        }
+
         const select = document.getElementById('chatAnalysisModelSelect');
         const customInput = document.getElementById('chatAnalysisModelCustomInput');
         if (select) {
-            const known = ['gemini-2.5-flash', 'gemini-2.5-pro'];
+            const known = ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.5-pro'];
             const deprecated = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash'];
             const fallback = 'gemini-2.5-flash';
             const effectiveModel = deprecated.includes(chatAnalysisState.savedModel)
@@ -1157,6 +1179,8 @@ async function loadChatAnalysisConfig() {
 async function saveChatAnalysisConfig() {
     const apiKeyInput = document.getElementById('chatAnalysisApiKeyInput');
     const apiKey = String(apiKeyInput?.value || '').trim();
+    const providerSelect = document.getElementById('chatAnalysisProviderSelect');
+    const provider = String(providerSelect?.value || '').trim().toLowerCase();
     const model = getChatAnalysisModelValue();
     const maxTokensInput = document.getElementById('chatAnalysisMaxTokens');
     const maxTokensRaw = maxTokensInput ? Number.parseInt(String(maxTokensInput.value || ''), 10) : NaN;
@@ -1166,10 +1190,11 @@ async function saveChatAnalysisConfig() {
 
     const payload = {};
     if (apiKey) payload.apiKey = apiKey;
+    if (provider === 'gemini' || provider === 'vertex') payload.provider = provider;
     if (model) payload.model = model;
     if (maxTokens) payload.maxTokens = maxTokens;
 
-    if (!payload.apiKey && !payload.model && !payload.maxTokens) {
+    if (!payload.apiKey && !payload.provider && !payload.model && !payload.maxTokens) {
         showToast('Kaydedilecek veri yok', 'info');
         return;
     }
@@ -1177,6 +1202,7 @@ async function saveChatAnalysisConfig() {
     try {
         const result = await api('api/ai/config', 'POST', payload);
         chatAnalysisState.hasKey = Boolean(result?.hasKey);
+        chatAnalysisState.savedProvider = String(result?.provider || chatAnalysisState.savedProvider || 'gemini');
         chatAnalysisState.savedModel = String(result?.model || '');
         const maxTokensParsed = Number.parseInt(String(result?.maxTokens || ''), 10);
         chatAnalysisState.savedMaxTokens = Number.isFinite(maxTokensParsed)
@@ -1191,19 +1217,26 @@ async function saveChatAnalysisConfig() {
     }
 }
 
-async function persistChatAnalysisSettings(model, maxTokens) {
+async function persistChatAnalysisSettings(model, maxTokens, provider) {
     const trimmed = String(model || '').trim();
     const tokens = Number.isFinite(maxTokens) ? Math.max(256, Math.min(8192, maxTokens)) : null;
+    const providerNormalized = String(provider || '').trim().toLowerCase();
+    const providerValue = (providerNormalized === 'vertex') ? 'vertex' : (providerNormalized === 'gemini' ? 'gemini' : '');
+    const needsProvider = providerValue && chatAnalysisState.savedProvider !== providerValue;
     const needsModel = trimmed && chatAnalysisState.savedModel !== trimmed;
     const needsTokens = tokens && chatAnalysisState.savedMaxTokens !== tokens;
-    if (!needsModel && !needsTokens) return true;
+    if (!needsProvider && !needsModel && !needsTokens) return true;
 
     const payload = {};
+    if (needsProvider) payload.provider = providerValue;
     if (needsModel) payload.model = trimmed;
     if (needsTokens) payload.maxTokens = tokens;
 
     try {
         const result = await api('api/ai/config', 'POST', payload);
+        if (needsProvider) {
+            chatAnalysisState.savedProvider = String(result?.provider || providerValue);
+        }
         if (needsModel) {
             chatAnalysisState.savedModel = String(result?.model || trimmed);
         }
@@ -1246,7 +1279,9 @@ async function runChatAnalysis() {
     const maxTokensInput = document.getElementById('chatAnalysisMaxTokens');
     const maxTokensRaw = maxTokensInput ? Number.parseInt(String(maxTokensInput.value || ''), 10) : NaN;
     const maxTokens = Number.isFinite(maxTokensRaw) ? maxTokensRaw : null;
-    await persistChatAnalysisSettings(model, maxTokens);
+    const providerSelect = document.getElementById('chatAnalysisProviderSelect');
+    const provider = String(providerSelect?.value || '').trim().toLowerCase();
+    await persistChatAnalysisSettings(model, maxTokens, provider);
 
     if (countInput) countInput.value = String(messageCount);
 

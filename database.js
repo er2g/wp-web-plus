@@ -195,6 +195,7 @@ function createDatabase(config) {
         is_active INTEGER DEFAULT 1,
         preferences TEXT,
         ai_api_key TEXT,
+        ai_provider TEXT,
         ai_model TEXT,
         ai_max_tokens INTEGER,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -543,6 +544,15 @@ function createDatabase(config) {
                     db.exec('ALTER TABLE users ADD COLUMN ai_max_tokens INTEGER');
                 }
             }
+        },
+        {
+            version: 17,
+            name: 'add_ai_provider_to_users',
+            apply: () => {
+                if (!columnExists('users', 'ai_provider')) {
+                    db.exec('ALTER TABLE users ADD COLUMN ai_provider TEXT');
+                }
+            }
         }
     ];
 
@@ -810,7 +820,7 @@ function createDatabase(config) {
         WHERE users.username = ?
     `),
         getFirstAiConfig: db.prepare(`
-        SELECT ai_api_key as apiKey, ai_model as model, ai_max_tokens as maxTokens
+        SELECT ai_api_key as apiKey, ai_provider as provider, ai_model as model, ai_max_tokens as maxTokens
         FROM users
         WHERE ai_api_key IS NOT NULL AND ai_api_key != ''
         ORDER BY id ASC
@@ -818,7 +828,7 @@ function createDatabase(config) {
     `),
         create: db.prepare('INSERT INTO users (username, display_name, password_hash, password_salt, is_active, preferences) VALUES (?, ?, ?, ?, ?, ?)'),
         updatePreferences: db.prepare('UPDATE users SET preferences = ? WHERE id = ?'),
-        updateAiConfig: db.prepare('UPDATE users SET ai_api_key = ?, ai_model = ?, ai_max_tokens = ? WHERE id = ?'),
+        updateAiConfig: db.prepare('UPDATE users SET ai_api_key = ?, ai_provider = ?, ai_model = ?, ai_max_tokens = ? WHERE id = ?'),
         delete: db.prepare('DELETE FROM users WHERE id = ?'),
         count: db.prepare('SELECT COUNT(*) as count FROM users')
     };

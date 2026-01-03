@@ -35,6 +35,10 @@ const aiConfigSchema = z.object({
         (value) => (typeof value === 'string' ? value.trim() : value),
         z.string().max(512).optional()
     ),
+    provider: z.preprocess(
+        (value) => (typeof value === 'string' ? value.trim().toLowerCase() : value),
+        z.enum(['gemini', 'vertex']).optional()
+    ),
     model: z.preprocess(
         (value) => (typeof value === 'string' ? value.trim() : value),
         z.string().max(80).optional()
@@ -88,9 +92,10 @@ router.post('/generate-script', requireRole(['admin']), validate({ body: generat
         }
 
         const { prompt } = req.validatedBody;
-        const apiKey = user.ai_api_key || aiService.apiKey || null;
+        const provider = user.ai_provider || aiService.provider || 'gemini';
+        const apiKey = user.ai_api_key || (provider === 'vertex' ? aiService.vertexApiKey : aiService.apiKey) || null;
         if (!apiKey) {
-            return sendError(req, res, 400, 'Gemini API anahtari kaydedilmedi');
+            return sendError(req, res, 400, 'AI API anahtari kaydedilmedi');
         }
         const selectedModel = resolveModel(user.ai_model, aiService.model);
         const maxTokensParsed = Number.isFinite(user.ai_max_tokens)
@@ -101,7 +106,8 @@ router.post('/generate-script', requireRole(['admin']), validate({ body: generat
             : 2048;
 
         const rawScript = await aiService.generateScript(prompt, {
-            apiKey,
+            provider,
+            apiKey: user.ai_api_key || null,
             model: selectedModel,
             maxOutputTokens: maxTokens,
             temperature: 0.2
@@ -132,6 +138,7 @@ router.get('/config', requireRole(['admin']), (req, res) => {
     }
     return res.json({
         hasKey: Boolean(user.ai_api_key),
+        provider: user.ai_provider || 'gemini',
         model: user.ai_model || '',
         maxTokens: user.ai_max_tokens || null
     });
@@ -149,19 +156,22 @@ router.post('/config', requireRole(['admin']), validate({ body: aiConfigSchema }
     }
 
     const apiKeyRaw = req.validatedBody.apiKey;
+    const providerRaw = req.validatedBody.provider;
     const modelRaw = req.validatedBody.model;
     const maxTokensRaw = req.validatedBody.maxTokens;
 
     const nextKey = (apiKeyRaw !== undefined) ? (apiKeyRaw ? apiKeyRaw.trim() : null) : (user.ai_api_key || null);
+    const nextProvider = (providerRaw !== undefined) ? providerRaw : (user.ai_provider || null);
     const nextModel = (modelRaw !== undefined) ? (modelRaw ? modelRaw.trim() : null) : (user.ai_model || null);
     const nextMaxTokens = (maxTokensRaw !== undefined)
         ? (Number.isFinite(maxTokensRaw) ? maxTokensRaw : null)
         : (user.ai_max_tokens || null);
 
-    db.users.updateAiConfig.run(nextKey, nextModel, nextMaxTokens, userId);
+    db.users.updateAiConfig.run(nextKey, nextProvider, nextModel, nextMaxTokens, userId);
     return res.json({
         success: true,
         hasKey: Boolean(nextKey),
+        provider: nextProvider || 'gemini',
         model: nextModel || '',
         maxTokens: nextMaxTokens || null
     });
@@ -181,9 +191,10 @@ router.post('/analyze-chat', requireRole(['admin']), validate({ body: aiChatAnal
 
         const { chatId, chatName, model, prompt, messages } = req.validatedBody;
         const selectedModel = resolveModel(model, user.ai_model, aiService.model);
-        const apiKey = user.ai_api_key || aiService.apiKey || null;
+        const provider = user.ai_provider || aiService.provider || 'gemini';
+        const apiKey = user.ai_api_key || (provider === 'vertex' ? aiService.vertexApiKey : aiService.apiKey) || null;
         if (!apiKey) {
-            return sendError(req, res, 400, 'Gemini API anahtari kaydedilmedi');
+            return sendError(req, res, 400, 'AI API anahtari kaydedilmedi');
         }
         const maxTokensParsed = Number.isFinite(user.ai_max_tokens)
             ? user.ai_max_tokens
@@ -203,7 +214,8 @@ router.post('/analyze-chat', requireRole(['admin']), validate({ body: aiChatAnal
 
         const analysis = await aiService.generateText({
             prompt: payloadText,
-            apiKey,
+            apiKey: user.ai_api_key || null,
+            provider,
             model: selectedModel,
             maxOutputTokens: maxTokens,
             temperature: 0.3

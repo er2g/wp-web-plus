@@ -61,6 +61,7 @@ const envSchema = z.object({
 
     SITE_PASSWORD: requiredString('changeme'),
     GEMINI_API_KEY: optionalString(),
+    VERTEX_API_KEY: optionalString(),
     SESSION_SECRET: requiredString('change-this-secret-in-production'),
 
     ADMIN_BOOTSTRAP_USERNAME: requiredString('admin'),
@@ -144,6 +145,7 @@ module.exports = {
     // Authentication - Use environment variables for secrets
     SITE_PASSWORD: env.SITE_PASSWORD,
     GEMINI_API_KEY: env.GEMINI_API_KEY,
+    VERTEX_API_KEY: env.VERTEX_API_KEY,
     SESSION_SECRET: env.SESSION_SECRET,
     ADMIN_BOOTSTRAP_USERNAME: env.ADMIN_BOOTSTRAP_USERNAME,
     ADMIN_BOOTSTRAP_PASSWORD: env.ADMIN_BOOTSTRAP_PASSWORD || env.SITE_PASSWORD || 'changeme',

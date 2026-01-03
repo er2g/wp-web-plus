@@ -84,6 +84,8 @@ See `.env.example` for full details.
 - `API_RATE_LIMIT_*` (optional; `/api` rate limit settings)
 - `PASSWORD_*` (optional; password policy)
 - `LOG_RETENTION_DAYS`, `MESSAGE_RETENTION_DAYS` (optional; retention/cleanup)
+- `GEMINI_API_KEY` (Gemini AI Studio key for AI features)
+- `VERTEX_API_KEY` (Vertex AI key for AI features)
 
 ## Roadmap
 
