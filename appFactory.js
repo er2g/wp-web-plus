@@ -364,6 +364,14 @@ function createApp() {
         next();
     });
 
+    app.get('/admin-chat.html', (req, res) => {
+        if (req.session && req.session.authenticated) {
+            res.sendFile(path.join(__dirname, 'public', 'admin-chat.html'));
+        } else {
+            res.redirect('/');
+        }
+    });
+
     app.use(express.static(path.join(__dirname, 'public'), { index: false }));
 
     app.get('/healthz', (req, res) => {

@@ -35,7 +35,7 @@ async function sendMessage() {
     typingIndicator.style.display = 'block';
 
     try {
-        const response = await fetch('/api/ai/admin-chat', {
+        const response = await fetch('api/ai/admin-chat', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
