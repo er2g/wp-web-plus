@@ -28,11 +28,16 @@ async function sendMessage() {
     sendBtn.disabled = true;
     typingIndicator.style.display = 'block';
 
+    // Get CSRF Token
+    const csrfMatch = document.cookie.match(/(?:^|; )XSRF-TOKEN=([^;]+)/);
+    const csrfToken = csrfMatch ? decodeURIComponent(csrfMatch[1]) : '';
+
     try {
         const response = await fetch('api/ai/admin-chat', {
             method: 'POST',
             headers: {
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'X-XSRF-TOKEN': csrfToken
             },
             body: JSON.stringify({
                 message: text,
