@@ -70,6 +70,9 @@ class AdminAgent {
 
     createSystemPrompt() {
         const codeExample = [
+            "// Prevent infinite loops",
+            "if (msg.isFromMe) return;",
+            "",
             "// Get history",
             "const history = getMessages(msg.chatId, 50).reverse().map(m => (m.isFromMe ? 'Me: ' : 'User: ') + m.body).join('\n');",
             "",
