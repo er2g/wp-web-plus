@@ -384,6 +384,10 @@
                         <i class="bi bi-bell-fill"></i>
                         <span>Bildirimler</span>
                     </button>
+                    <button type="button" class="settings-nav-item" data-settings-nav="true" data-settings-category="api" onclick="selectSettingsCategory('api')">
+                        <i class="bi bi-key-fill"></i>
+                        <span>API Ayarlari</span>
+                    </button>
                     <button type="button" class="settings-nav-item" data-settings-nav="true" data-settings-category="about" onclick="selectSettingsCategory('about')">
                         <i class="bi bi-info-circle"></i>
                         <span>Hakkinda</span>
@@ -720,6 +724,64 @@
                         <div class="subtitle">Goruldu bilgisi gonderme</div>
                     </div>
                     <div class="toggle" id="toggleGhostMode" onclick="toggleSetting('ghostMode')"></div>
+                </div>
+            </div>
+
+            <!-- API Section -->
+                    </div>
+                    <div class="settings-page" data-settings-page="true" data-settings-category="api">
+            <div class="settings-section">
+                <div class="settings-section-title">API Ayarlari</div>
+                <div class="settings-item">
+                    <i class="icon bi bi-cloud"></i>
+                    <div class="info">
+                        <div class="title">Provider</div>
+                        <div class="subtitle">Gemini (AI Studio) veya Vertex AI</div>
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 8px; width: 50%;">
+                        <select id="apiProviderSelect" class="select-input">
+                            <option value="gemini">Gemini (AI Studio)</option>
+                            <option value="vertex">Vertex AI (aiplatform.googleapis.com)</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="settings-item">
+                    <i class="icon bi bi-key"></i>
+                    <div class="info">
+                        <div class="title">API Anahtari</div>
+                        <div class="subtitle">Provider'a gore API anahtarini kaydet</div>
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 8px; width: 50%;">
+                        <input type="password" class="form-input" id="apiKeyInput" placeholder="AI...">
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <button class="btn btn-secondary btn-sm" type="button" onclick="saveApiSettings()">Kaydet</button>
+                            <span id="apiKeyStatus" style="font-size: 11px; color: var(--text-secondary);">Kontrol ediliyor...</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="settings-item">
+                    <i class="icon bi bi-cpu"></i>
+                    <div class="info">
+                        <div class="title">Model</div>
+                        <div class="subtitle">Script ve analiz icin model sec</div>
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 8px; width: 50%;">
+                        <select id="apiModelSelect" class="select-input" onchange="toggleApiModelInput(this.value)">
+                            <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
+                            <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+                            <option value="gemini-2.5-pro">gemini-2.5-pro</option>
+                            <option value="custom">Ozel</option>
+                        </select>
+                        <input type="text" class="form-input" id="apiModelCustomInput" placeholder="publishers/google/models/gemini-2.5-flash-lite" style="display:none;">
+                    </div>
+                </div>
+                <div class="settings-item">
+                    <i class="icon bi bi-sliders"></i>
+                    <div class="info">
+                        <div class="title">Maksimum Token</div>
+                        <div class="subtitle">Daha yuksek deger daha uzun cevap verir</div>
+                    </div>
+                    <input type="number" class="form-input" id="apiMaxTokensInput" min="256" max="8192" step="128" value="2048" style="width: 120px;">
                 </div>
             </div>
 

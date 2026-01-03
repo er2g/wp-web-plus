@@ -1306,6 +1306,7 @@ function openSettings(category) {
     panel.classList.add('open');
     document.getElementById('overlay').classList.add('show');
     selectSettingsCategory(category || currentSettingsCategory);
+    loadApiSettings();
 }
 
 function closeSettings() {
@@ -1332,7 +1333,7 @@ function closeAllPanels() {
 }
 
 function selectSettingsCategory(category) {
-    const allowed = new Set(['connection', 'sync', 'appearance', 'notifications', 'about']);
+    const allowed = new Set(['connection', 'sync', 'appearance', 'notifications', 'api', 'about']);
     const next = allowed.has(String(category || '').trim()) ? String(category).trim() : 'appearance';
     currentSettingsCategory = next;
     try {
@@ -1676,6 +1677,120 @@ async function loadSettings() {
         updateSettingsUI();
     } catch (err) {
         console.error('Settings load error:', err);
+    }
+}
+
+const apiSettingsState = {
+    hasKey: false,
+    provider: 'gemini',
+    model: '',
+    maxTokens: null
+};
+
+function toggleApiModelInput(value) {
+    const customInput = document.getElementById('apiModelCustomInput');
+    if (!customInput) return;
+    customInput.style.display = (value === 'custom') ? 'block' : 'none';
+}
+
+function getApiModelValue() {
+    const select = document.getElementById('apiModelSelect');
+    const customInput = document.getElementById('apiModelCustomInput');
+    if (!select) return '';
+    if (select.value === 'custom') {
+        return String(customInput?.value || '').trim();
+    }
+    return select.value;
+}
+
+async function loadApiSettings() {
+    const statusEl = document.getElementById('apiKeyStatus');
+    if (statusEl) statusEl.textContent = 'Kontrol ediliyor...';
+    try {
+        const result = await api('api/ai/config');
+        apiSettingsState.hasKey = Boolean(result?.hasKey);
+        apiSettingsState.provider = String(result?.provider || 'gemini');
+        apiSettingsState.model = String(result?.model || '');
+        const maxTokensParsed = Number.parseInt(String(result?.maxTokens || ''), 10);
+        apiSettingsState.maxTokens = Number.isFinite(maxTokensParsed) ? maxTokensParsed : null;
+
+        if (statusEl) {
+            statusEl.textContent = apiSettingsState.hasKey ? 'Anahtar kayitli' : 'Anahtar kayitli degil';
+        }
+
+        const providerSelect = document.getElementById('apiProviderSelect');
+        if (providerSelect) {
+            providerSelect.value = apiSettingsState.provider === 'vertex' ? 'vertex' : 'gemini';
+        }
+
+        const select = document.getElementById('apiModelSelect');
+        const customInput = document.getElementById('apiModelCustomInput');
+        if (select) {
+            const known = ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.5-pro'];
+            const deprecated = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash'];
+            const fallback = 'gemini-2.5-flash';
+            const effectiveModel = deprecated.includes(apiSettingsState.model)
+                ? fallback
+                : apiSettingsState.model;
+            if (effectiveModel && known.includes(effectiveModel)) {
+                select.value = effectiveModel;
+                toggleApiModelInput(select.value);
+            } else if (effectiveModel) {
+                select.value = 'custom';
+                toggleApiModelInput('custom');
+                if (customInput) customInput.value = effectiveModel;
+            }
+        }
+
+        const maxTokensInput = document.getElementById('apiMaxTokensInput');
+        if (maxTokensInput) {
+            const fallback = 2048;
+            const value = Number.isFinite(apiSettingsState.maxTokens) ? apiSettingsState.maxTokens : fallback;
+            maxTokensInput.value = String(value);
+        }
+    } catch (err) {
+        if (statusEl) statusEl.textContent = 'AI ayarlari okunamadi';
+    }
+}
+
+async function saveApiSettings() {
+    const apiKeyInput = document.getElementById('apiKeyInput');
+    const apiKey = String(apiKeyInput?.value || '').trim();
+    const providerSelect = document.getElementById('apiProviderSelect');
+    const provider = String(providerSelect?.value || '').trim().toLowerCase();
+    const model = getApiModelValue();
+    const maxTokensInput = document.getElementById('apiMaxTokensInput');
+    const maxTokensRaw = maxTokensInput ? Number.parseInt(String(maxTokensInput.value || ''), 10) : NaN;
+    const maxTokens = Number.isFinite(maxTokensRaw)
+        ? Math.max(256, Math.min(8192, maxTokensRaw))
+        : null;
+
+    const payload = {};
+    if (apiKey) payload.apiKey = apiKey;
+    if (provider === 'gemini' || provider === 'vertex') payload.provider = provider;
+    if (model) payload.model = model;
+    if (maxTokens) payload.maxTokens = maxTokens;
+
+    if (!payload.apiKey && !payload.provider && !payload.model && !payload.maxTokens) {
+        showToast('Kaydedilecek veri yok', 'info');
+        return;
+    }
+
+    try {
+        const result = await api('api/ai/config', 'POST', payload);
+        apiSettingsState.hasKey = Boolean(result?.hasKey);
+        apiSettingsState.provider = String(result?.provider || provider || 'gemini');
+        apiSettingsState.model = String(result?.model || model || '');
+        const maxTokensParsed = Number.parseInt(String(result?.maxTokens || ''), 10);
+        apiSettingsState.maxTokens = Number.isFinite(maxTokensParsed)
+            ? maxTokensParsed
+            : apiSettingsState.maxTokens;
+        if (apiKeyInput) apiKeyInput.value = '';
+        const statusEl = document.getElementById('apiKeyStatus');
+        if (statusEl) statusEl.textContent = apiSettingsState.hasKey ? 'Anahtar kayitli' : 'Anahtar kayitli degil';
+        showToast('API ayarlari kaydedildi', 'success');
+    } catch (err) {
+        showToast('API ayarlari kaydedilemedi: ' + err.message, 'error');
     }
 }
 
@@ -6337,6 +6452,8 @@ Object.assign(window, {
     switchSidebarTab,
     showTab,
     openReports,
+    toggleApiModelInput,
+    saveApiSettings,
     toggleSetting,
     openChatForMessage,
     filterChats,
