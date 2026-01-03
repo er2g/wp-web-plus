@@ -5,14 +5,8 @@ const typingIndicator = document.getElementById('typingIndicator');
 
 let history = []; // Stores conversation history context
 
-// Auto-resize textarea
-messageInput.addEventListener('input', function() {
-    this.style.height = 'auto';
-    this.style.height = (this.scrollHeight) + 'px';
-    if (this.value === '') this.style.height = 'auto';
-});
-
-// Send on Enter (Shift+Enter for newline)
+// Auto-resize textarea is now handled in HTML inline script or CSS, 
+// but we keep the event listener if needed for other logic.
 messageInput.addEventListener('keydown', function(e) {
     if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -69,14 +63,44 @@ async function sendMessage() {
         sendBtn.disabled = false;
         typingIndicator.style.display = 'none';
         messageInput.focus();
+        
+        // Scroll to bottom
+        messagesList.scrollTop = messagesList.scrollHeight;
     }
 }
 
 function appendMessage(role, text) {
-    const div = document.createElement('div');
-    div.className = `message ${role}`;
+    const rowDiv = document.createElement('div');
+    const isUser = role === 'user';
+    const isSystem = role === 'system';
     
-    // Simple markdown-ish formatting for code blocks
+    // Determine row class
+    if (isSystem) {
+        rowDiv.className = 'message-row system';
+    } else {
+        rowDiv.className = `message-row ${isUser ? 'sent' : 'received'}`;
+    }
+    
+    // Bubble Div
+    const bubbleDiv = document.createElement('div');
+    if (isSystem) {
+        bubbleDiv.className = 'message-bubble system';
+    } else {
+        bubbleDiv.className = `message-bubble ${isUser ? 'sent' : 'received'}`;
+    }
+
+    // Sender Name (Only for Assistant)
+    if (!isUser && !isSystem) {
+        const senderName = document.createElement('div');
+        senderName.className = 'sender-name';
+        senderName.textContent = 'AI Assistant';
+        bubbleDiv.appendChild(senderName);
+    }
+
+    // Message Text with basic formatting
+    const textDiv = document.createElement('div');
+    textDiv.className = 'message-text';
+    
     let formatted = text
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
@@ -91,7 +115,19 @@ function appendMessage(role, text) {
     // Replace newlines
     formatted = formatted.replace(/\n/g, '<br>');
 
-    div.innerHTML = formatted;
-    messagesList.appendChild(div);
+    textDiv.innerHTML = formatted;
+    bubbleDiv.appendChild(textDiv);
+
+    // Time
+    const timeDiv = document.createElement('div');
+    timeDiv.className = 'message-time';
+    const now = new Date();
+    timeDiv.textContent = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0');
+    bubbleDiv.appendChild(timeDiv);
+
+    rowDiv.appendChild(bubbleDiv);
+    messagesList.appendChild(rowDiv);
+    
+    // Scroll into view
     messagesList.scrollTop = messagesList.scrollHeight;
 }
