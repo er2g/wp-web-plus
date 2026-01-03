@@ -7,7 +7,7 @@
 const AI_ASSISTANT_HISTORY_KEY = 'aiAssistantHistoryV1';
 const AI_ASSISTANT_HISTORY_LIMIT = 40;
 const AI_ASSISTANT_REPLY_MAX_TOKENS = 256;
-const AI_ASSISTANT_REPLY_HISTORY_LIMIT = 6;
+const AI_ASSISTANT_REPLY_HISTORY_LIMIT = 10;
 
 let aiAssistantState = {
     chats: [],
@@ -52,6 +52,15 @@ function aiAssistantNormalizeReplyText(text) {
     return trimmed.replace(/^["'`]+|["'`]+$/g, '').trim();
 }
 
+function aiAssistantSanitizeReply(type, text) {
+    if (!text) return '';
+    if (type === 'greeting') return text;
+    let cleaned = String(text || '').trim();
+    cleaned = cleaned.replace(/^(merhaba|selam)[.!?\s]+/i, '');
+    cleaned = cleaned.replace(/^(tabii ki\s*)?yardimci olabilirim[.!?\s]*/i, '');
+    return cleaned.trim();
+}
+
 function aiAssistantBuildReplyPrompt(type, context = {}, fallback) {
     const goalMap = {
         greeting: 'Kullanicinin ne yapmak istedigini sor; sohbet adini veya kisi/grup adini iste.',
@@ -73,8 +82,10 @@ function aiAssistantBuildReplyPrompt(type, context = {}, fallback) {
         'You are the WhatsApp Web Panel script setup assistant.',
         'Respond in Turkish using ASCII only (no diacritics).',
         'Short, clear, and to the point. Avoid robotic or repetitive phrasing.',
+        'Never greet unless Situation is "greeting".',
         'Do NOT propose sending messages. Never use the word "gonder".',
         'Do NOT invent actions, scripts, or message content.',
+        'Continue from the recent history; do not restart the conversation.',
         'Ask only one clear question if you need input.',
         'Do not use markdown.',
         'If you list choices, use short numbered items on new lines.'
@@ -94,6 +105,7 @@ function aiAssistantBuildReplyPrompt(type, context = {}, fallback) {
     if (typeof context.autoReply === 'boolean') {
         pushLine('AutoReply', context.autoReply ? 'yes' : 'no');
     }
+    pushLine('Step', context.step);
     if (typeof context.hasGreeted === 'boolean') {
         pushLine('Has greeted before', context.hasGreeted ? 'yes' : 'no');
     }
@@ -130,7 +142,9 @@ function aiAssistantValidateReply(type, text, context = {}) {
 
     const lowered = reply.toLowerCase();
     if (lowered.includes('gonder')) return false;
+    if (type !== 'greeting' && /(merhaba|selam)/.test(lowered)) return false;
     if (context.hasGreeted && /(merhaba|selam)/.test(lowered)) return false;
+    if (/(yardimci olabilirim|size nasil yardim)/.test(lowered) && type !== 'greeting') return false;
 
     if (type === 'ask_chat' || type === 'chat_not_found' || type === 'chat_multiple' || type === 'greeting') {
         if (!/(sohbet|chat|kisi|kullanici|grup|id|hepsi|tum)/.test(lowered)) return false;
@@ -160,9 +174,14 @@ async function aiAssistantRespondSmart(type, context, fallback, options = {}) {
 
     try {
         const result = await api('api/ai/generate-text', 'POST', { prompt, maxTokens, temperature });
-        const reply = aiAssistantNormalizeReplyText(result?.text);
-        if (result?.success && reply && aiAssistantValidateReply(type, reply, context)) {
-            aiAssistantRespond(reply);
+        const rawReply = aiAssistantNormalizeReplyText(result?.text);
+        const cleanedReply = aiAssistantSanitizeReply(type, rawReply);
+        if (result?.success && rawReply && aiAssistantValidateReply(type, rawReply, context)) {
+            aiAssistantRespond(rawReply);
+            return;
+        }
+        if (result?.success && cleanedReply && aiAssistantValidateReply(type, cleanedReply, context)) {
+            aiAssistantRespond(cleanedReply);
             return;
         }
     } catch (err) {
@@ -271,6 +290,7 @@ function aiAssistantBuildBaseContext(userMessage) {
     if (userMessage) context.userMessage = String(userMessage || '').trim();
     if (flow.intent) context.intent = flow.intent;
     if (typeof flow.autoReply === 'boolean') context.autoReply = flow.autoReply;
+    if (flow.step) context.step = flow.step;
     context.hasGreeted = (Array.isArray(aiAssistantState.history) ? aiAssistantState.history : [])
         .some((entry) => entry?.role === 'assistant');
     const recentHistory = aiAssistantGetRecentHistory();
