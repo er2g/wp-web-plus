@@ -35,6 +35,111 @@ class AiService {
         return trimmed || this.model;
     }
 
+    stripJsonFences(text) {
+        return String(text || '')
+            .replace(/```json/gi, '')
+            .replace(/```/g, '')
+            .trim();
+    }
+
+    extractJsonBlock(text) {
+        const cleaned = String(text || '').trim();
+        const start = cleaned.indexOf('{');
+        const end = cleaned.lastIndexOf('}');
+        if (start >= 0 && end > start) {
+            return cleaned.slice(start, end + 1);
+        }
+        return cleaned;
+    }
+
+    escapeNewlinesInStrings(text) {
+        const raw = String(text || '');
+        let inString = false;
+        let escaped = false;
+        let result = '';
+
+        for (let i = 0; i < raw.length; i += 1) {
+            const ch = raw[i];
+            if (!inString) {
+                if (ch === '"') {
+                    inString = true;
+                }
+                result += ch;
+                continue;
+            }
+
+            if (escaped) {
+                result += ch;
+                escaped = false;
+                continue;
+            }
+
+            if (ch === '\\') {
+                result += ch;
+                escaped = true;
+                continue;
+            }
+
+            if (ch === '"') {
+                inString = false;
+                result += ch;
+                continue;
+            }
+
+            if (ch === '\n') {
+                result += '\\n';
+                continue;
+            }
+
+            if (ch === '\r') {
+                result += '\\r';
+                continue;
+            }
+
+            if (ch === '\t') {
+                result += '\\t';
+                continue;
+            }
+
+            result += ch;
+        }
+
+        return result;
+    }
+
+    tryParseJson(text) {
+        if (!text) return null;
+        try {
+            return JSON.parse(text);
+        } catch (err) {
+            return null;
+        }
+    }
+
+    async repairJsonWithAi(content, options) {
+        const raw = String(content || '').trim();
+        if (!raw) return null;
+        const prompt = [
+            'Convert the following content into STRICT JSON only.',
+            'Do not include any commentary or markdown.',
+            'Ensure the "code" field is a valid JSON string with escaped newlines (\\n) and quotes.',
+            '',
+            'Content:',
+            raw
+        ].join('\n');
+
+        const maxTokens = Math.min(1024, Number.isFinite(options.maxOutputTokens) ? options.maxOutputTokens : 1024);
+        const repaired = await this.generateText({
+            prompt,
+            apiKey: options.apiKey,
+            model: options.model,
+            provider: options.provider,
+            maxOutputTokens: maxTokens,
+            temperature: 0
+        });
+        return repaired;
+    }
+
     buildVertexModelResource(model) {
         const raw = typeof model === 'string' ? model.trim() : '';
         if (!raw) return `publishers/google/models/${this.model}`;
@@ -187,6 +292,7 @@ Output format (strict JSON only, no markdown):
 Rules:
 - Output ONLY the JSON object. No extra text.
 - Use double quotes. The JSON must parse.
+- The "code" value MUST be a valid JSON string with escaped newlines (\\n) and quotes.
 - Use ONLY the ScriptRunner API below. No require(), no process, no fs.
 - Do NOT invent chat IDs or phone numbers. If a full chat id is explicitly provided, you may use trigger_filter.chatIds.
 - If the scope is unclear, keep trigger_filter minimal and rely on the caller to scope chats.
@@ -255,23 +361,43 @@ ${prompt}
             if (response.data && response.data.candidates && response.data.candidates.length > 0) {
                 const parts = response.data?.candidates?.[0]?.content?.parts || [];
                 const content = parts.map(part => part?.text || '').join('');
+                const cleaned = this.stripJsonFences(content);
+                const extracted = this.extractJsonBlock(cleaned);
+                const candidates = [
+                    cleaned,
+                    extracted,
+                    this.escapeNewlinesInStrings(extracted)
+                ];
+
+                for (const candidate of candidates) {
+                    const parsed = this.tryParseJson(candidate);
+                    if (parsed) return parsed;
+                }
+
                 try {
-                    // Clean up markdown if Gemini adds it despite instructions
-                    const cleaned = content.replace(/```json/g, '').replace(/```/g, '').trim();
-                    try {
-                        return JSON.parse(cleaned);
-                    } catch (e) {
-                        const start = cleaned.indexOf('{');
-                        const end = cleaned.lastIndexOf('}');
-                        if (start >= 0 && end > start) {
-                            return JSON.parse(cleaned.slice(start, end + 1));
-                        }
-                        throw e;
+                    const repaired = await this.repairJsonWithAi(cleaned, {
+                        apiKey,
+                        model,
+                        provider: resolvedProvider,
+                        maxOutputTokens
+                    });
+                    const repairedClean = this.stripJsonFences(repaired);
+                    const repairedExtracted = this.extractJsonBlock(repairedClean);
+                    const repairedCandidates = [
+                        repairedClean,
+                        repairedExtracted,
+                        this.escapeNewlinesInStrings(repairedExtracted)
+                    ];
+                    for (const candidate of repairedCandidates) {
+                        const parsed = this.tryParseJson(candidate);
+                        if (parsed) return parsed;
                     }
                 } catch (e) {
-                    logger.error('AI JSON parse error', { error: e.message, content });
-                    throw new Error('Failed to parse AI response');
+                    logger.error('AI JSON repair failed', { error: e.message });
                 }
+
+                logger.error('AI JSON parse error', { content });
+                throw new Error('Failed to parse AI response');
             } else {
                 throw new Error('No response from AI');
             }
