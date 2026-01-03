@@ -3,9 +3,8 @@ const { logger } = require('./logger');
 
 /**
  * Admin Agent Service
- * Handles natural language requests to manage the system (scripts, bots, etc.)
+ * Handles natural language requests to manage the system using a JSON-based ReAct loop.
  */
-
 class AdminAgent {
     constructor(db) {
         this.db = db;
@@ -15,7 +14,7 @@ class AdminAgent {
     defineTools() {
         return {
             find_chat: {
-                description: 'Search for a chat by name to get its ID. Use this when the user mentions a chat name.',
+                description: 'Search for a chat by name to get its ID. Required before creating scripts for a specific person/group.',
                 parameters: {
                     query: 'Name of the chat to search for'
                 },
@@ -30,17 +29,18 @@ class AdminAgent {
                 parameters: {
                     name: 'Name of the script (e.g., "Pirate Bot for Mom")',
                     description: 'Short description',
-                    code: 'The JavaScript code for the script',
+                    code: 'The JavaScript code for the script. MUST be valid JS.',
                     filter: 'JSON string for trigger_filter (e.g., {"chatIds": ["..."]})'
                 },
                 execute: async ({ name, description, code, filter }) => {
                     try {
+                        const filterStr = typeof filter === 'string' ? filter : JSON.stringify(filter);
                         const res = this.db.scripts.create.run(
                             name,
                             description || '',
                             code,
                             'message',
-                            typeof filter === 'string' ? filter : JSON.stringify(filter),
+                            filterStr,
                             1 // Active by default
                         );
                         return `Script created successfully with ID: ${res.lastInsertRowid}`;
@@ -68,112 +68,170 @@ class AdminAgent {
         };
     }
 
-    createSystemPrompt() {
-        const codeExample = [
-            "// Prevent infinite loops",
-            "if (msg.isFromMe) return;",
-            "",
-            "// Get history",
-            "const history = getMessages(msg.chatId, 50).reverse().map(m => (m.isFromMe ? 'Me: ' : 'User: ') + m.body).join('\n');",
-            "",
-            "// Generate reply",
-            "const prompt = `You are a helpful assistant...\n\nHistory:\n${history}\n\nUser: ${msg.body}`,",
-            "",
-            "const replyText = await aiGenerate(prompt);",
-            "await reply(replyText);"
-        ].join('\n');
-
-        return `
-You are the Admin Assistant for a WhatsApp Automation Panel.
-You have access to tools to manage the system.
-
-Your primary goal is to help the user manage "Scripts" and "Bots".
-A "Bot" is simply a Script that triggers on 'message' events for a specific chat.
-
-AVAILABLE TOOLS:
-1. find_chat(query): Finds chat IDs by name. ALWAYS use this if the user gives a name instead of an ID.
-2. create_script(name, description, code, filter): Creates a script.
-   - 'code' must be JavaScript that runs in the 'scriptRunner' context.
-   - 'filter' is a JSON object like {"chatIds": ["123@c.us"]}.
-   - Common script pattern for bots:
-     \
-     \
-     ${codeExample}
-     \
-     \
-3. list_scripts(): Lists active scripts.
-4. delete_script(id): Deletes a script.
-
-INSTRUCTIONS:
-- If the user asks to "Assign a bot to chat X", first call 'find_chat("X")'.
-- Once you have the Chat ID, call 'create_script' with the appropriate code and filter.
-- If the user asks for a specific persona (e.g. "Pirate"), adjust the prompt in the code.
-- If the user asks to "Look at the last N messages", adjust the 'getMessages(msg.chatId, N)' call in the code.
-- When you use a tool, respond with "TOOL_CALL: tool_name {json_params}".
-- I will respond with "TOOL_RESULT: result".
-- Then you continue the conversation.
-- If no tool is needed, just reply normally.
-`;
-    }
-
-    async process(history, userMessage, userContext) {
-        let messages = [...history];
-        if (userMessage) {
-            messages.push({ role: 'user', text: userMessage });
-        }
-
-        const systemPrompt = this.createSystemPrompt();
+    /**
+     * Cleans up history to remove duplicates and keep it within token limits.
+     * Also filters out garbage messages (like "}") to prevent pollution.
+     */
+    normalizeHistory(history = []) {
+        if (!Array.isArray(history)) return [];
         
-        // Context injection
-        const fullPrompt = `${systemPrompt}\n\nConversation History:\n${messages.map(m => `${m.role.toUpperCase()}: ${m.text}`).join('\n')}\n\nAssistant:`;
+        // Basic deduplication and cleanup
+        const clean = [];
+        let lastRole = null;
+        let lastText = null;
 
-        try {
-            // 1. Get initial response
-            let responseText = await aiService.generateText({
-                prompt: fullPrompt,
-                apiKey: userContext.apiKey,
-                provider: userContext.provider,
-                model: userContext.model || 'gemini-2.5-flash'
-            });
-
-            // 2. Check for tool call
-            const toolCallMatch = responseText.match(/TOOL_CALL: (\w+) ({.*})/s);
+        for (const msg of history) {
+            const role = msg.role === 'me' ? 'assistant' : (msg.role || 'user');
+            let text = (msg.text || '').trim();
             
-            if (toolCallMatch) {
-                const toolName = toolCallMatch[1];
-                const paramsStr = toolCallMatch[2];
-                
-                const tool = this.tools[toolName];
-                if (tool) {
-                    let result = '';
-                    try {
-                        const params = JSON.parse(paramsStr);
-                        result = await tool.execute(params);
-                    } catch (e) {
-                        result = `Error executing tool: ${e.message}`;
-                    }
-
-                    // 3. Feed result back to AI
-                    const followUpPrompt = `${fullPrompt}${responseText}\nTOOL_RESULT: ${result}\nAssistant (interpret result and reply to user):`;
-                    
-                    const finalResponse = await aiService.generateText({
-                        prompt: followUpPrompt,
-                        apiKey: userContext.apiKey,
-                        provider: userContext.provider,
-                        model: userContext.model || 'gemini-2.5-flash'
-                    });
-
-                    return finalResponse;
-                }
+            // Garbage filter: Remove messages that are just symbols or empty
+            // This fixes the issue where previous "}" bugs pollute the context
+            if (!text || text.length < 2 || /^[\}\]\{\)\.]+$/.test(text)) {
+                continue;
             }
 
-            return responseText;
+            if (role === lastRole && text === lastText) continue; // Skip exact duplicates
 
-        } catch (error) {
-            logger.error('Admin Agent Error', error);
-            return "Sorry, I encountered an error processing your request: " + error.message;
+            clean.push({ role, text });
+            lastRole = role;
+            lastText = text;
+        }
+
+        // Keep last 30 messages
+        return clean.slice(-30);
+    }
+
+    isGarbageOutput(text) {
+        const trimmed = (text || '').trim();
+        if (!trimmed || trimmed.length < 2) return true;
+        return /^[\]\[\{\}\(\)\.\s]+$/.test(trimmed);
+    }
+
+    getSystemPrompt() {
+        const toolsDesc = Object.entries(this.tools).map(([name, t]) => {
+            return `- ${name}: ${t.description} (Params: ${Object.keys(t.parameters).join(', ')})`;
+        }).join('\n');
+
+        const scriptExample = `
+// Example Bot Code
+if (msg.isFromMe) return;
+const history = buildHistory({ limit: 10 });
+const prompt = "Reply as a pirate to: " + msg.body;
+const reply = await aiGenerate(prompt);
+await reply(reply);
+`;
+
+        return `
+You are the Admin Assistant for the WhatsApp Panel.
+Your goal is to help the admin manage scripts and bots.
+
+AVAILABLE TOOLS:
+${toolsDesc}
+
+RULES:
+1. RESPONSE FORMAT: You must ALWAYS respond with a JSON object.
+2. If you need to use a tool, set "tool_name" and "tool_params".
+3. If you are done or need to talk to the user, set "final_response" and leave "tool_name" null.
+4. "filter" for create_script must be a JSON string like '{"chatIds": ["123@c.us"]}'.
+5. "code" for create_script must be valid JavaScript. Use 'aiGenerate' for AI features.
+6. NO MARKDOWN in the JSON output. Return pure JSON.
+7. "final_response" should be a clear, natural language message to the user. DO NOT return lone braces, brackets, or placeholder characters.
+
+Script Code Example:
+${JSON.stringify(scriptExample)}
+
+JSON OUTPUT SCHEMA:
+{
+  "thought": "Internal reasoning about what to do next...",
+  "tool_name": "name_of_tool" (or null),
+  "tool_params": { ... } (or null),
+  "final_response": "Message to user" (or null)
+}
+`;
+    }
+    
+        async process(history, userMessage, userContext) {
+            let currentHistory = this.normalizeHistory(history);
+            currentHistory.push({ role: 'user', text: userMessage });
+    
+            const maxTurns = 5; // Prevent infinite loops
+            let turn = 0;
+    
+            while (turn < maxTurns) {
+                turn++;
+    
+                // Construct prompt for this turn
+                const conversation = currentHistory.map(m => `${m.role.toUpperCase()}: ${m.text}`).join('\n');
+                const prompt = `Conversation:\n${conversation}\n\nReview the history and decide the next step (Tool or Response).`;
+    
+                try {
+                    // Generate JSON decision
+                    const response = await aiService.generateJson({
+                        prompt,
+                        systemInstruction: this.getSystemPrompt(),
+                        apiKey: userContext.apiKey,
+                        provider: userContext.provider,
+                        model: userContext.model,
+                        temperature: 0.2 // Lower temp for precise tool usage
+                    });
+    
+                    logger.info('AdminAgent Decision', response);
+    
+                    if (response.tool_name) {
+                        // Execute Tool
+                        const tool = this.tools[response.tool_name];
+                        if (!tool) {
+                            currentHistory.push({ 
+                                role: 'assistant', 
+                                text: `Attempted to use unknown tool: ${response.tool_name}` 
+                            });
+                            continue;
+                        }
+    
+                        let toolResult;
+                        try {
+                            toolResult = await tool.execute(response.tool_params || {});
+                        } catch (err) {
+                            toolResult = `Error executing ${response.tool_name}: ${err.message}`;
+                        }
+    
+                        // Add tool result to history as a system/observation message
+                        // We model it as a user message from "SYSTEM" to inform the AI
+                        currentHistory.push({
+                            role: 'user', // "user" role is safer for many models than "system" in middle of convo
+                            text: `[SYSTEM TOOL RESULT for ${response.tool_name}]: ${toolResult}`
+                        });
+    
+                    } else if (response.final_response) {
+                        // Validate final response
+                        const text = String(response.final_response).trim();
+                        if (this.isGarbageOutput(text)) {
+                            logger.warn('AdminAgent produced garbage final response', { text });
+                            currentHistory.push({
+                                role: 'user',
+                                text: `[SYSTEM NOTICE]: Invalid assistant reply "${text}". Respond again with a clear sentence or use tools.`
+                            });
+                            continue;
+                        }
+                        if (text) {
+                            return text;
+                        }
+                        // If invalid but thought exists, return thought
+                        if (response.thought) return response.thought;
+                        return "I processed your request.";
+                    } else {
+                        // Fallback
+                        if (response.thought) return response.thought;
+                        return "I'm not sure what to do. No tool or response specified.";
+                    }
+    
+                } catch (error) {
+                    logger.error('AdminAgent Loop Error', error);
+                    return "Internal Error: " + error.message;
+                }
+            }
+    
+            return "I tried to process your request but ran into a loop.";
         }
     }
-}
-
-module.exports = AdminAgent;
+    module.exports = AdminAgent;
