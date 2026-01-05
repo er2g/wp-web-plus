@@ -340,6 +340,13 @@ body.edge-to-edge .app-container {
     color: var(--text-light);
 }
 
+.search-hint {
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--text-light);
+    line-height: 1.2;
+}
+
 /* Tab Navigation */
 .tab-nav {
     display: flex;

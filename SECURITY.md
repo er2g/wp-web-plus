@@ -59,6 +59,16 @@ On login, the server derives a 32-byte **Master Encryption Key** from the user�
   - media search (`chats.name`, `messages.body`)
 - Background jobs and integrations are designed to **skip sensitive operations** when the vault is locked.
 
+## Password Changes
+
+This build does **not** support changing a user's login password without a full re-encryption pass.
+
+Because the encryption key is derived from the user's password, changing that password would derive a different key and make existing ciphertext unreadable unless the system:
+1) decrypts all encrypted fields with the old key, and
+2) re-encrypts everything with the new key.
+
+If you add a “change password” UI/endpoint, you must either implement re-encryption or clearly warn/disable the feature.
+
 ## Secure Deletion Hygiene
 
 - SQLite is configured with `PRAGMA secure_delete = ON`.
@@ -78,4 +88,3 @@ If you point directly at a DB file, you must also provide the account id used fo
 - `node scripts/zk-migrate.js --db /abs/path/to/whatsapp.db --account-id default --username admin`
 
 If you lose the password used to derive the master key, **encrypted data is unrecoverable**.
-

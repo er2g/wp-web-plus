@@ -103,7 +103,7 @@
             <div class="search-container">
                 <div class="search-box">
                     <i class="bi bi-search"></i>
-                    <input type="text" id="searchInput" placeholder="Ara veya yeni sohbet baslat" oninput="filterChats()">
+                    <input type="text" id="searchInput" placeholder="Ara veya yeni sohbet baslat" oninput="filterChats()" title="Sifreleme sebebiyle arama kapsamı sinirli olabilir">
                 </div>
                 <div class="search-filters">
                     <select id="tagFilter" onchange="filterChats()">
@@ -111,6 +111,7 @@
                     </select>
                     <input type="text" id="noteSearchInput" placeholder="Notta ara" oninput="filterChats()">
                 </div>
+                <div class="search-hint">Guvenlik sebebiyle icerik aramasi sinirli olabilir (yakin gecmis).</div>
             </div>
 
             <!-- Tab Navigation -->

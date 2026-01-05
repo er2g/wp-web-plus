@@ -1213,6 +1213,12 @@ function initSocket() {
 
     socket.on('connect', () => console.log('Socket connected'));
     socket.on('disconnect', () => console.log('Socket disconnected'));
+    socket.on('connect_error', (err) => {
+        const msg = err?.message || String(err || '');
+        if (msg.toLowerCase().includes('unauthorized') || msg.toLowerCase().includes('not authenticated')) {
+            handleAuthLock();
+        }
+    });
     socket.on('status', (status) => {
         updateConnectionStatus(status);
         if (status && status.status === 'qr' && status.qrCode) {
@@ -1260,6 +1266,26 @@ function getCsrfToken() {
     return match ? decodeURIComponent(match[1]) : null;
 }
 
+let authRedirectInProgress = false;
+
+function handleAuthLock(reason) {
+    if (authRedirectInProgress) return;
+    authRedirectInProgress = true;
+
+    try {
+        socket?.disconnect?.();
+    } catch (e) {}
+
+    const message = reason || 'Guvenlik sebebiyle oturumunuz kilitlendi. Lutfen tekrar giris yapin.';
+    try {
+        showToast(message, 'warning');
+    } catch (e) {}
+
+    setTimeout(() => {
+        window.location.href = './';
+    }, 200);
+}
+
 async function api(url, method, body, fetchOptions) {
     method = method || 'GET';
     fetchOptions = fetchOptions || {};
@@ -1293,8 +1319,19 @@ async function api(url, method, body, fetchOptions) {
         data = null;
     }
     if (!response.ok) {
+        const code = data && typeof data === 'object' ? data.code : null;
+        const errorText = (data && data.error) ? data.error : (rawText || 'API Error');
+        if (response.status === 401 || response.status === 423 || code === 'VAULT_LOCKED') {
+            handleAuthLock('Guvenlik sebebiyle oturumunuz kilitlendi. Lutfen tekrar giris yapin.');
+        }
+        if (response.status === 403 && typeof errorText === 'string' && errorText.toLowerCase().includes('vault')) {
+            handleAuthLock('Guvenlik sebebiyle oturumunuz kilitlendi. Lutfen tekrar giris yapin.');
+        }
         const message = (data && data.error) ? data.error : (rawText || 'API Error');
-        throw new Error(message);
+        const err = new Error(message);
+        err.status = response.status;
+        if (code) err.code = code;
+        throw err;
     }
     return data;
 }
@@ -3354,8 +3391,20 @@ async function sendMessageWithAttachment(message, file, options = {}) {
         credentials: 'include',
         body: formData
     });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || 'API Error');
+    const rawText = await response.text();
+    let data = null;
+    try {
+        data = rawText ? JSON.parse(rawText) : null;
+    } catch (e) {
+        data = null;
+    }
+    const errorText = (data && data.error) ? data.error : (rawText || 'API Error');
+    if (!response.ok) {
+        if (response.status === 401 || response.status === 423) {
+            handleAuthLock();
+        }
+        throw new Error(errorText);
+    }
     return data;
 }
 
@@ -4417,7 +4466,7 @@ function getMediaHubContent() {
         '<div class="media-hub">' +
             '<div class="media-hub-toolbar">' +
                 '<div class="media-hub-row">' +
-                    '<input type="text" class="form-input media-hub-search" id="mediaHubSearch" placeholder="Sohbet veya aciklama ara..." oninput="mediaHubDebouncedSearch()">' +
+                    '<input type="text" class="form-input media-hub-search" id="mediaHubSearch" placeholder="Sohbet veya aciklama ara (yakin gecmis)..." oninput="mediaHubDebouncedSearch()">' +
                     '<select class="select-input media-hub-select" id="mediaHubKind" onchange="mediaHubReload(true)">' +
                         '<option value="all">Tum turler</option>' +
                         '<option value="image">Fotograf</option>' +
