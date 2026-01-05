@@ -12,7 +12,7 @@ const requestContext = new AsyncLocalStorage();
 
 const REDACTED = '[REDACTED]';
 const MAX_STRING_LEN = 2000;
-const SENSITIVE_KEY = /pass(word)?|token|secret|authorization|cookie|session|api[_-]?key|ai[_-]?api[_-]?key|csrf|xsrf|body|content|quoted_body|quoted_from_name|from_name|from_number|to_number|phone/i;
+const SENSITIVE_KEY = /pass(word)?|token|secret|authorization|cookie|session|api[_-]?key|ai[_-]?api[_-]?key|csrf|xsrf|\\bqr\\b|qr[_-]?code|qrcode|body|content|quoted_body|quoted_from_name|from_name|from_number|to_number|phone/i;
 
 function redactString(value) {
     if (typeof value !== 'string') return value;

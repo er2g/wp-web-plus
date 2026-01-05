@@ -1618,7 +1618,7 @@ function createDatabase(config) {
         }
     };
 
-    const LOG_SENSITIVE_KEY = /pass(word)?|token|secret|authorization|cookie|api[_-]?key|body|content|quoted_body|from_name|from_number|to_number|phone/i;
+    const LOG_SENSITIVE_KEY = /pass(word)?|token|secret|authorization|cookie|api[_-]?key|\\bqr\\b|qr[_-]?code|qrcode|body|content|quoted_body|from_name|from_number|to_number|phone/i;
     const redactLogObject = (value, depth = 0, seen = new WeakSet()) => {
         if (value === null || value === undefined) return value;
         if (typeof value === 'string') return value.length > 2000 ? value.slice(0, 2000) + '…' : value;
