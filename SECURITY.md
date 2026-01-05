@@ -33,9 +33,19 @@ The backend encrypts/decrypts transparently in `database.js`.
 
 After migration, you should be able to open the SQLite file and see random-looking ciphertext in these columns.
 
-## Key Derivation (Password → Master Key)
+## Key Hierarchy (True Zero-Knowledge)
 
-On login, the server derives a 32-byte **Master Encryption Key** from the user’s raw password using PBKDF2:
+This project supports an **envelope-key** model for multi-user “true zero-knowledge”:
+
+- **KEK (Key Encryption Key):** derived from the user’s password (PBKDF2) and kept only in RAM.
+- **DEK (Data Encryption Key):** random 32-byte per-account key used to encrypt all sensitive data at rest.
+- **Wrapping:** The DEK is stored in SQLite **only as ciphertext**, wrapped by the user’s KEK.
+
+If an account has no `user_keyrings` entries yet, the app runs in **legacy mode** where KEK is used directly as the data key (backwards-compatible).
+
+### KEK Derivation (Password → KEK)
+
+On login, the server derives a 32-byte **KEK** from the user’s raw password using PBKDF2:
 
 - **KDF:** PBKDF2
 - **Digest:** SHA-256
@@ -43,10 +53,19 @@ On login, the server derives a 32-byte **Master Encryption Key** from the user�
 - **Iterations:** 310,000 (see `services/encryption.js`)
 - **Salt:** `users.encryption_salt` (stored in SQLite; not secret)
 
+### DEK Wrapping (KEK → wrapped DEK)
+
+- **Algorithm:** AES-256-GCM
+- **IV:** 12 bytes (random)
+- **Auth tag:** 16 bytes
+- **Format:** `wk:v1:<base64(iv|tag|ciphertext)>`
+- **AAD:** bound to `(accountId, userId)` to prevent cross-user/account swapping
+- **Storage:** `user_keyrings(wrapped_dek)`
+
 ## Session-Only Key Storage (Zero-Knowledge)
 
-- The derived key is stored **only in RAM** in an in-process vault (`services/encryption.js`).
-- The key is associated with the user’s **session id**, and then “attached” to the selected account id at runtime.
+- The derived **KEK** is stored **only in RAM** in an in-process vault (`services/encryption.js`).
+- The **account DEK** is held in RAM only while at least one authenticated session has unlocked the account (enables background jobs while a user is online).
 - If the app restarts, the in-memory vault is cleared and **all existing sessions are treated as locked** until the user logs in again.
 - The key is **never stored** in SQLite or Redis (even if Redis-backed sessions are enabled).
 
@@ -61,13 +80,11 @@ On login, the server derives a 32-byte **Master Encryption Key** from the user�
 
 ## Password Changes
 
-This build does **not** support changing a user's login password without a full re-encryption pass.
+In **legacy mode**, changing a password implies changing the data key and would require full re-encryption.
 
-Because the encryption key is derived from the user's password, changing that password would derive a different key and make existing ciphertext unreadable unless the system:
-1) decrypts all encrypted fields with the old key, and
-2) re-encrypts everything with the new key.
+In **keyring mode (DEK/KEK)**, password changes do **not** require re-encrypting the database: the system only needs to **rewrap the same DEK** with a new KEK derived from the new password.
 
-If you add a “change password” UI/endpoint, you must either implement re-encryption or clearly warn/disable the feature.
+Note: a password-change endpoint/UI must still be implemented safely (verify old password + update hash + update `users.encryption_salt` + rewrite `user_keyrings.wrapped_dek`).
 
 ## Secure Deletion Hygiene
 
@@ -88,3 +105,12 @@ If you point directly at a DB file, you must also provide the account id used fo
 - `node scripts/zk-migrate.js --db /abs/path/to/whatsapp.db --account-id default --username admin`
 
 If you lose the password used to derive the master key, **encrypted data is unrecoverable**.
+
+## Migration (Enable DEK/KEK Keyrings)
+
+To initialize a per-account random DEK and migrate existing ciphertext from legacy KEK → DEK:
+
+- `node scripts/zk-keyring-init.js --account default --username admin`
+- Dry run: `node scripts/zk-keyring-init.js --account default --username admin --dry-run true`
+
+After this, users without a `user_keyrings` entry can be provisioned automatically when they log in while the account is already unlocked by another session.

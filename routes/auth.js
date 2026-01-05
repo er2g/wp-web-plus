@@ -5,7 +5,7 @@ const express = require('express');
 const config = require('../config');
 const accountManager = require('../services/accountManager');
 const { passwordMeetsPolicy, verifyPassword } = require('../services/passwords');
-const { deriveMasterKey, vault } = require('../services/encryption');
+const { deriveMasterKey, unwrapDataKey, wrapDataKey, keyringAad, vault } = require('../services/encryption');
 const { sendError } = require('../lib/httpResponses');
 const crypto = require('crypto');
 
@@ -183,12 +183,48 @@ function createAuthRouter({ redisClient, redisPrefix } = {}) {
                     }
                 }
 
-                let masterKey;
+                let kek;
                 try {
-                    masterKey = deriveMasterKey(password, encryptionSalt);
+                    kek = deriveMasterKey(password, encryptionSalt);
                 } catch (error) {
                     req.log?.error('Failed to derive master key', { error: error.message });
                     return sendError(req, res, 500, 'Encryption setup error');
+                }
+
+                const defaultAccountId = accountManager.getDefaultAccountId();
+                const accountId = req.session.accountId || defaultAccountId;
+
+                // Envelope-key mode (DEK wrapped per user) is active when any keyring exists for the account.
+                // If not active, fall back to legacy mode where the KEK is also used as the data key.
+                const keyringCount = db.userKeyrings?.countByAccount?.get(accountId)?.count || 0;
+                const keyring = db.userKeyrings?.getByUserAndAccount?.get(user.id, accountId) || null;
+
+                let dek = null;
+                if (keyringCount > 0) {
+                    if (keyring?.wrapped_dek) {
+                        try {
+                            dek = unwrapDataKey(keyring.wrapped_dek, kek, keyringAad({ accountId, userId: user.id }));
+                        } catch (error) {
+                            req.log?.error('Failed to unwrap account key', { error: error.message });
+                            return sendError(req, res, 403, 'Account key invalid');
+                        }
+                    } else {
+                        // Allow first-time provisioning if another session has the account unlocked.
+                        const unlockedDek = vault.getAccountKey(accountId);
+                        if (!unlockedDek) {
+                            return sendError(req, res, 423, 'Vault locked: ask an admin to login first');
+                        }
+                        try {
+                            const wrapped = wrapDataKey(unlockedDek, kek, keyringAad({ accountId, userId: user.id }));
+                            db.userKeyrings.upsert.run(user.id, accountId, wrapped);
+                            dek = unlockedDek;
+                        } catch (error) {
+                            req.log?.error('Failed to provision account key', { error: error.message });
+                            return sendError(req, res, 500, 'Encryption setup error');
+                        }
+                    }
+                } else {
+                    dek = kek;
                 }
 
                 req.session.regenerate(err => {
@@ -200,11 +236,9 @@ function createAuthRouter({ redisClient, redisPrefix } = {}) {
                     req.session.userId = user.id;
                     req.session.role = user.role || 'agent';
                     try {
-                        vault.setSessionKey(req.sessionID, { key: masterKey, userId: user.id });
-                        const defaultAccountId = accountManager.getDefaultAccountId();
-                        const accountId = req.session.accountId || defaultAccountId;
                         req.session.accountId = accountId;
-                        vault.attachSessionToAccount(req.sessionID, accountId);
+                        vault.setSession(req.sessionID, { kek, userId: user.id });
+                        vault.setAccountKeyForSession(accountId, dek, req.sessionID);
                     } catch (error) {
                         req.log?.error('Failed to store session key', { error: error.message });
                         return sendError(req, res, 500, 'Encryption setup error');
@@ -250,7 +284,8 @@ function createAuthRouter({ redisClient, redisPrefix } = {}) {
                 return sendError(req, res, 400, 'Password does not meet policy');
             }
 
-            const db = accountManager.getAccountContext(accountManager.getDefaultAccountId()).db;
+            const defaultAccountId = accountManager.getDefaultAccountId();
+            const db = accountManager.getAccountContext(defaultAccountId).db;
 
             const invite = db.invites.getByCode.get(inviteCode);
             if (!invite) {
@@ -285,10 +320,25 @@ function createAuthRouter({ redisClient, redisPrefix } = {}) {
             const userId = result.lastInsertRowid;
             db.userRoles.assign.run(userId, agentRole.id);
 
+            const keyringCount = db.userKeyrings?.countByAccount?.get(defaultAccountId)?.count || 0;
+            if (keyringCount > 0) {
+                const dek = vault.getAccountKey(defaultAccountId);
+                if (!dek) {
+                    // Cannot provision the new user without an unlocked account DEK.
+                    try { db.users.delete.run(userId); } catch (e) {}
+                    return sendError(req, res, 423, 'Vault locked: admin must be online to register');
+                }
+
+                const newUserKek = deriveMasterKey(password, encryptionSalt);
+                const wrappedDek = wrapDataKey(dek, newUserKek, keyringAad({ accountId: defaultAccountId, userId }));
+                db.userKeyrings.upsert.run(userId, defaultAccountId, wrappedDek);
+            }
+
             const marked = db.invites.markUsed.run(userId, inviteCode);
             if (!marked || marked.changes === 0) {
                 // Invite got used concurrently; rollback user creation to avoid orphan accounts.
                 try {
+                    try { db.userKeyrings?.delete?.run(userId, defaultAccountId); } catch (e) {}
                     db.users.delete.run(userId);
                 } catch (e) {}
                 return sendError(req, res, 409, 'Bu davet kodu daha önce kullanılmış');
@@ -318,7 +368,7 @@ function createAuthRouter({ redisClient, redisPrefix } = {}) {
 
     router.get('/check', (req, res) => {
         let preferences = null;
-        const vaultUnlocked = Boolean(req.session?.authenticated && vault.hasSessionKey(req.sessionID));
+        const vaultUnlocked = Boolean(req.session?.authenticated && vault.hasSession(req.sessionID));
         if (req.session && req.session.authenticated && req.session.userId) {
             const db = accountManager.getAccountContext(accountManager.getDefaultAccountId()).db;
             const user = db.users.getById.get(req.session.userId);

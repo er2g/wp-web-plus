@@ -2,7 +2,10 @@ const { sendError } = require('../../lib/httpResponses');
 const { vault } = require('../../services/encryption');
 
 function requireAuth(req, res, next) {
-    if (req.session && req.session.authenticated && vault.hasSessionKey(req.sessionID)) {
+    if (req.session && req.session.authenticated) {
+        if (!vault.hasSession(req.sessionID)) {
+            return sendError(req, res, 423, 'Vault locked');
+        }
         return next();
     }
     return sendError(req, res, 401, 'Not authenticated');

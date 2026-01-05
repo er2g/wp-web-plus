@@ -12,7 +12,7 @@ const { createScriptRunner } = require('./scriptRunner');
 const { createMessagePipeline } = require('./messagePipeline');
 const { logger } = require('./logger');
 const { sendError } = require('../lib/httpResponses');
-const { vault } = require('./encryption');
+const { CryptoLockedError, unwrapDataKey, wrapDataKey, keyringAad, vault } = require('./encryption');
 
 const ACCOUNTS_FILE = path.join(config.DATA_DIR, 'accounts.json');
 const ACCOUNTS_DIR = path.join(config.DATA_DIR, 'accounts');
@@ -247,11 +247,13 @@ class AccountManager {
             const fallbackAccount = this.findAccount(fallbackId);
             if (fallbackAccount) {
                 req.session.accountId = fallbackId;
-                try {
-                    vault.attachSessionToAccount(req.sessionID, fallbackId);
-                } catch (error) {
-                    vault.clearSession(req.sessionID);
-                    return sendError(req, res, 403, 'Vault key mismatch');
+                const unlockResult = this.ensureAccountUnlocked({
+                    sessionId: req.sessionID,
+                    userId: req.session?.userId,
+                    accountId: fallbackId
+                });
+                if (!unlockResult.ok) {
+                    return sendError(req, res, unlockResult.status, unlockResult.error);
                 }
                 req.account = this.getAccountContext(fallbackId);
                 return next();
@@ -260,14 +262,72 @@ class AccountManager {
         }
 
         req.session.accountId = accountId;
-        try {
-            vault.attachSessionToAccount(req.sessionID, accountId);
-        } catch (error) {
-            vault.clearSession(req.sessionID);
-            return sendError(req, res, 403, 'Vault key mismatch');
+        const unlockResult = this.ensureAccountUnlocked({
+            sessionId: req.sessionID,
+            userId: req.session?.userId,
+            accountId
+        });
+        if (!unlockResult.ok) {
+            return sendError(req, res, unlockResult.status, unlockResult.error);
         }
         req.account = this.getAccountContext(accountId);
         return next();
+    }
+
+    ensureAccountUnlocked({ sessionId, userId, accountId } = {}) {
+        try {
+            if (!vault.hasSession(sessionId)) {
+                throw new CryptoLockedError();
+            }
+
+            const existingDek = vault.getAccountKey(accountId);
+            if (existingDek) {
+                vault.trackSessionOnAccount(sessionId, accountId);
+                // Best-effort provisioning: if keyring mode is on and user is missing a wrapped DEK,
+                // store it while the account is unlocked.
+                try {
+                    const authDb = this.getAccountContext(this.getDefaultAccountId()).db;
+                    const keyringCount = authDb.userKeyrings?.countByAccount?.get(accountId)?.count || 0;
+                    if (keyringCount > 0 && authDb.userKeyrings?.getByUserAndAccount && !authDb.userKeyrings.getByUserAndAccount.get(userId, accountId)) {
+                        const kek = vault.getSessionKek(sessionId);
+                        if (kek) {
+                            const wrapped = wrapDataKey(existingDek, kek, keyringAad({ accountId, userId }));
+                            authDb.userKeyrings.upsert.run(userId, accountId, wrapped);
+                        }
+                    }
+                } catch (e) {}
+                return { ok: true };
+            }
+
+            const kek = vault.getSessionKek(sessionId);
+            if (!kek) {
+                throw new CryptoLockedError();
+            }
+
+            const authDb = this.getAccountContext(this.getDefaultAccountId()).db;
+            const keyringCount = authDb.userKeyrings?.countByAccount?.get(accountId)?.count || 0;
+
+            let dek;
+            if (keyringCount > 0) {
+                const keyring = authDb.userKeyrings?.getByUserAndAccount?.get(userId, accountId);
+                if (!keyring?.wrapped_dek) {
+                    // Cannot unwrap without a stored wrapped key.
+                    return { ok: false, status: 423, error: 'Vault locked' };
+                }
+                dek = unwrapDataKey(keyring.wrapped_dek, kek, keyringAad({ accountId, userId }));
+            } else {
+                // Legacy mode: KEK is also used as the data key.
+                dek = kek;
+            }
+
+            vault.setAccountKeyForSession(accountId, dek, sessionId);
+            return { ok: true };
+        } catch (error) {
+            if (error instanceof CryptoLockedError) {
+                return { ok: false, status: 423, error: 'Vault locked' };
+            }
+            return { ok: false, status: 403, error: 'Account locked' };
+        }
     }
 
     async shutdown() {

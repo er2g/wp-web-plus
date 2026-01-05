@@ -18,6 +18,7 @@ class CryptoLockedError extends Error {
 }
 
 const CIPHERTEXT_PREFIX = 'enc:v1:';
+const WRAPPED_KEY_PREFIX = 'wk:v1:';
 const DEFAULT_AAD_NAMESPACE = 'wp-web-plus';
 
 const KDF_DEFAULTS = Object.freeze({
@@ -56,6 +57,27 @@ function unpackV1(value) {
     const buf = Buffer.from(raw, 'base64');
     if (buf.length < 12 + 16) {
         throw new Error('Invalid ciphertext');
+    }
+    const iv = buf.subarray(0, 12);
+    const tag = buf.subarray(12, 28);
+    const ciphertext = buf.subarray(28);
+    return { iv, tag, ciphertext };
+}
+
+function isWrappedKey(value) {
+    return typeof value === 'string' && value.startsWith(WRAPPED_KEY_PREFIX);
+}
+
+function packWrappedKeyV1(iv, tag, ciphertext) {
+    return `${WRAPPED_KEY_PREFIX}${Buffer.concat([iv, tag, ciphertext]).toString('base64')}`;
+}
+
+function unpackWrappedKeyV1(value) {
+    if (!isWrappedKey(value)) return null;
+    const raw = value.slice(WRAPPED_KEY_PREFIX.length);
+    const buf = Buffer.from(raw, 'base64');
+    if (buf.length < 12 + 16) {
+        throw new Error('Invalid wrapped key');
     }
     const iv = buf.subarray(0, 12);
     const tag = buf.subarray(12, 28);
@@ -104,8 +126,8 @@ function getCryptoContext() {
 class InMemoryKeyVault {
     constructor(options = {}) {
         this.sessionTtlMs = Number(options.sessionTtlMs) || 24 * 60 * 60 * 1000;
-        this.sessionKeys = new Map(); // sessionId -> { key: Buffer, userId, createdAt, lastSeenAt }
-        this.accountKeys = new Map(); // accountId -> Buffer
+        this.sessions = new Map(); // sessionId -> { kek: Buffer, userId, createdAt, lastSeenAt }
+        this.accountKeys = new Map(); // accountId -> Buffer (DEK)
         this.accountSessions = new Map(); // accountId -> Set(sessionId)
 
         const pruneIntervalMs = Number(options.pruneIntervalMs) || 10 * 60 * 1000;
@@ -115,54 +137,72 @@ class InMemoryKeyVault {
         }
     }
 
-    setSessionKey(sessionId, { key, userId } = {}) {
+    setSession(sessionId, { kek, userId } = {}) {
         if (!sessionId || typeof sessionId !== 'string') {
             throw new Error('sessionId required');
         }
-        if (!Buffer.isBuffer(key) || key.length !== 32) {
-            throw new Error('Invalid master key');
+        if (!Buffer.isBuffer(kek) || kek.length !== 32) {
+            throw new Error('Invalid session KEK');
         }
         const now = Date.now();
-        this.sessionKeys.set(sessionId, {
-            key,
+        this.sessions.set(sessionId, {
+            kek,
             userId: userId || null,
             createdAt: now,
             lastSeenAt: now
         });
     }
 
-    getSessionKey(sessionId) {
+    getSession(sessionId) {
         if (!sessionId || typeof sessionId !== 'string') return null;
-        const entry = this.sessionKeys.get(sessionId);
+        const entry = this.sessions.get(sessionId);
         if (!entry) return null;
         entry.lastSeenAt = Date.now();
-        return entry.key;
+        return entry;
     }
 
-    hasSessionKey(sessionId) {
-        return Boolean(this.getSessionKey(sessionId));
+    getSessionKek(sessionId) {
+        return this.getSession(sessionId)?.kek || null;
     }
 
-    attachSessionToAccount(sessionId, accountId) {
-        if (!accountId || typeof accountId !== 'string') return false;
-        const key = this.getSessionKey(sessionId);
-        if (!key) return false;
+    hasSession(sessionId) {
+        return Boolean(this.getSessionKek(sessionId));
+    }
 
-        const current = this.accountKeys.get(accountId);
-        if (current) {
-            if (current.length === key.length && crypto.timingSafeEqual(current, key)) {
-                // ok, same key
-            } else {
-                // Allow key rotation when another user unlocks the same account.
-                // This keeps background jobs functional for the most recently unlocked key.
-                this.accountKeys.set(accountId, key);
-                this.accountSessions.set(accountId, new Set([sessionId]));
-                return true;
-            }
-        } else {
-            this.accountKeys.set(accountId, key);
+    setAccountKeyForSession(accountId, dek, sessionId) {
+        if (!accountId || typeof accountId !== 'string') {
+            throw new Error('accountId required');
+        }
+        if (!Buffer.isBuffer(dek) || dek.length !== 32) {
+            throw new Error('Invalid account DEK');
+        }
+        if (!sessionId || typeof sessionId !== 'string') {
+            throw new Error('sessionId required');
+        }
+        if (!this.hasSession(sessionId)) {
+            throw new Error('Session not present');
         }
 
+        const current = this.accountKeys.get(accountId);
+        if (current && !(current.length === dek.length && crypto.timingSafeEqual(current, dek))) {
+            // Replace with latest unlocked DEK (accounts are single-tenant in terms of data encryption key).
+            this.accountKeys.set(accountId, dek);
+            this.accountSessions.set(accountId, new Set([sessionId]));
+            return;
+        }
+        if (!current) {
+            this.accountKeys.set(accountId, dek);
+        }
+
+        const set = this.accountSessions.get(accountId) || new Set();
+        set.add(sessionId);
+        this.accountSessions.set(accountId, set);
+    }
+
+    trackSessionOnAccount(sessionId, accountId) {
+        if (!accountId || typeof accountId !== 'string') return false;
+        if (!this.hasSession(sessionId)) return false;
+        if (!this.accountKeys.get(accountId)) return false;
         const set = this.accountSessions.get(accountId) || new Set();
         set.add(sessionId);
         this.accountSessions.set(accountId, set);
@@ -180,7 +220,7 @@ class InMemoryKeyVault {
 
     clearSession(sessionId) {
         if (!sessionId || typeof sessionId !== 'string') return;
-        this.sessionKeys.delete(sessionId);
+        this.sessions.delete(sessionId);
 
         for (const [accountId, sessions] of this.accountSessions.entries()) {
             if (sessions.delete(sessionId)) {
@@ -196,7 +236,7 @@ class InMemoryKeyVault {
 
     prune() {
         const now = Date.now();
-        for (const [sessionId, entry] of this.sessionKeys.entries()) {
+        for (const [sessionId, entry] of this.sessions.entries()) {
             if (now - entry.lastSeenAt > this.sessionTtlMs) {
                 this.clearSession(sessionId);
             }
@@ -219,17 +259,51 @@ function getActiveKey({ accountId, sessionId } = {}) {
         return ctx.key;
     }
 
-    if (sessionId) {
-        const fromSession = vault.getSessionKey(sessionId);
-        if (fromSession) return fromSession;
-    }
-
     if (accountId) {
         const fromAccount = vault.getAccountKey(accountId);
         if (fromAccount) return fromAccount;
     }
 
     return null;
+}
+
+function wrapDataKey(dek, kek, aad = `${DEFAULT_AAD_NAMESPACE}|keyring`) {
+    if (!Buffer.isBuffer(dek) || dek.length !== 32) {
+        throw new Error('Invalid DEK');
+    }
+    if (!Buffer.isBuffer(kek) || kek.length !== 32) {
+        throw new Error('Invalid KEK');
+    }
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv('aes-256-gcm', kek, iv);
+    cipher.setAAD(Buffer.from(String(aad), 'utf8'));
+    const ciphertext = Buffer.concat([cipher.update(dek), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    return packWrappedKeyV1(iv, tag, ciphertext);
+}
+
+function unwrapDataKey(wrapped, kek, aad = `${DEFAULT_AAD_NAMESPACE}|keyring`) {
+    if (!isWrappedKey(wrapped)) {
+        throw new Error('Invalid wrapped key format');
+    }
+    if (!Buffer.isBuffer(kek) || kek.length !== 32) {
+        throw new Error('Invalid KEK');
+    }
+    const unpacked = unpackWrappedKeyV1(wrapped);
+    const decipher = crypto.createDecipheriv('aes-256-gcm', kek, unpacked.iv);
+    decipher.setAAD(Buffer.from(String(aad), 'utf8'));
+    decipher.setAuthTag(unpacked.tag);
+    const dek = Buffer.concat([decipher.update(unpacked.ciphertext), decipher.final()]);
+    if (dek.length !== 32) {
+        throw new Error('Invalid DEK length');
+    }
+    return dek;
+}
+
+function keyringAad({ accountId, userId } = {}) {
+    const safeAccount = typeof accountId === 'string' && accountId ? accountId : 'unknown';
+    const safeUser = userId === null || userId === undefined ? 'unknown' : String(userId);
+    return `${DEFAULT_AAD_NAMESPACE}|keyring|${safeAccount}|${safeUser}`;
 }
 
 module.exports = {
@@ -239,9 +313,13 @@ module.exports = {
     encryptString,
     decryptString,
     isEncryptedValue,
+    isWrappedKey,
     aadForField,
     runWithCryptoContext,
     getCryptoContext,
     getActiveKey,
+    wrapDataKey,
+    unwrapDataKey,
+    keyringAad,
     vault
 };

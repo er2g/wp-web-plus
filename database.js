@@ -222,6 +222,20 @@ function createDatabase(config) {
         FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
     );
 
+    -- Stores per-user wrapped account Data Encryption Keys (DEK).
+    -- The DEK is wrapped with a user-specific KEK derived from their password.
+    CREATE TABLE IF NOT EXISTS user_keyrings (
+        user_id INTEGER NOT NULL,
+        account_id TEXT NOT NULL,
+        wrapped_dek TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (user_id, account_id),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_user_keyrings_account_id ON user_keyrings(account_id);
+
     CREATE TABLE IF NOT EXISTS invites (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         code TEXT UNIQUE NOT NULL,
@@ -601,6 +615,24 @@ function createDatabase(config) {
                     CREATE INDEX IF NOT EXISTS idx_invites_created_at ON invites(created_at);
                 `);
             }
+        },
+        {
+            version: 19,
+            name: 'add_user_keyrings_table',
+            apply: () => {
+                db.exec(`
+                    CREATE TABLE IF NOT EXISTS user_keyrings (
+                        user_id INTEGER NOT NULL,
+                        account_id TEXT NOT NULL,
+                        wrapped_dek TEXT NOT NULL,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (user_id, account_id),
+                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_user_keyrings_account_id ON user_keyrings(account_id);
+                `);
+            }
         }
     ];
 
@@ -965,6 +997,31 @@ function createDatabase(config) {
         assign: db.prepare('INSERT OR REPLACE INTO user_roles (user_id, role_id) VALUES (?, ?)'),
         clear: db.prepare('DELETE FROM user_roles WHERE user_id = ?'),
         countByRole: db.prepare('SELECT COUNT(*) as count FROM user_roles WHERE role_id = ?')
+    };
+
+    const userKeyrings = {
+        getByUserAndAccount: db.prepare('SELECT * FROM user_keyrings WHERE user_id = ? AND account_id = ?'),
+        upsert: db.prepare(`
+            INSERT INTO user_keyrings (user_id, account_id, wrapped_dek, updated_at)
+            VALUES (?, ?, ?, datetime('now'))
+            ON CONFLICT(user_id, account_id) DO UPDATE SET
+                wrapped_dek = excluded.wrapped_dek,
+                updated_at = datetime('now')
+        `),
+        delete: db.prepare('DELETE FROM user_keyrings WHERE user_id = ? AND account_id = ?'),
+        countByAccount: db.prepare('SELECT COUNT(*) as count FROM user_keyrings WHERE account_id = ?'),
+        listByAccount: db.prepare(`
+            SELECT
+                user_keyrings.user_id,
+                user_keyrings.account_id,
+                user_keyrings.created_at,
+                user_keyrings.updated_at,
+                users.username as username
+            FROM user_keyrings
+            LEFT JOIN users ON users.id = user_keyrings.user_id
+            WHERE user_keyrings.account_id = ?
+            ORDER BY user_keyrings.created_at DESC
+        `)
     };
 
     const invites = {
@@ -1737,6 +1794,7 @@ function createDatabase(config) {
         roles,
         users: wrappedUsers,
         userRoles,
+        userKeyrings,
         invites,
         contacts: wrappedContacts,
         tags,

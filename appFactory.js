@@ -440,7 +440,7 @@ function createApp() {
     app.use('/api', apiIpLimiter, apiUserLimiter, apiRoutes);
 
     app.get('/', (req, res) => {
-        if (req.session && req.session.authenticated && vault.hasSessionKey(req.sessionID)) {
+        if (req.session && req.session.authenticated && vault.hasSession(req.sessionID)) {
             res.sendFile(path.join(__dirname, 'public', 'index.html'));
         } else {
             res.sendFile(path.join(__dirname, 'public', 'login.html'));
@@ -461,7 +461,7 @@ function createApp() {
 
     io.on('connection', (socket) => {
         const session = socket.request.session;
-        if (!session || !session.authenticated || !vault.hasSessionKey(socket.request.sessionID)) {
+        if (!session || !session.authenticated || !vault.hasSession(socket.request.sessionID)) {
             socket.disconnect();
             return;
         }
@@ -472,10 +472,12 @@ function createApp() {
             accountId = accountManager.getDefaultAccountId();
         }
 
-        try {
-            vault.attachSessionToAccount(socket.request.sessionID, accountId);
-        } catch (error) {
-            vault.clearSession(socket.request.sessionID);
+        const unlockResult = accountManager.ensureAccountUnlocked({
+            sessionId: socket.request.sessionID,
+            userId: session.userId,
+            accountId
+        });
+        if (!unlockResult.ok) {
             socket.disconnect();
             return;
         }

@@ -1,8 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const { z } = require('zod');
+const crypto = require('crypto');
 
 const accountManager = require('../../services/accountManager');
+const { vault, wrapDataKey, keyringAad } = require('../../services/encryption');
 const { requireRole } = require('../middleware/auth');
 const { sendError } = require('../../lib/httpResponses');
 const { validate } = require('../middleware/validate');
@@ -44,6 +46,19 @@ router.get('/', requireRole(['admin']), (req, res) => {
 
 router.post('/', requireRole(['admin']), validate({ body: accountCreateSchema }), (req, res) => {
     const account = accountManager.createAccount(req.validatedBody.name);
+    const accountId = account.id;
+
+    // Initialize a per-account DEK for new accounts (envelope-key mode).
+    try {
+        const authDb = accountManager.getAccountContext(accountManager.getDefaultAccountId()).db;
+        const kek = vault.getSessionKek(req.sessionID);
+        if (kek) {
+            const dek = crypto.randomBytes(32);
+            const wrapped = wrapDataKey(dek, kek, keyringAad({ accountId, userId: req.session?.userId }));
+            authDb.userKeyrings?.upsert?.run(req.session?.userId, accountId, wrapped);
+            vault.setAccountKeyForSession(accountId, dek, req.sessionID);
+        }
+    } catch (e) {}
     return res.json({ success: true, account });
 });
 
@@ -55,6 +70,14 @@ router.post('/select', requireRole(['admin']), validate({ body: accountSelectSch
     }
     req.session.accountId = accountId;
     accountManager.getAccountContext(accountId);
+    const unlockResult = accountManager.ensureAccountUnlocked({
+        sessionId: req.sessionID,
+        userId: req.session?.userId,
+        accountId
+    });
+    if (!unlockResult.ok) {
+        return sendError(req, res, unlockResult.status, unlockResult.error);
+    }
     return res.json({ success: true, accountId });
 });
 
