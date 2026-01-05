@@ -133,6 +133,11 @@ const envSchema = z.object({
     WEBHOOK_CONCURRENCY: positiveInt(2),
     WEBHOOK_QUEUE_LIMIT: positiveInt(2000),
 
+    MESSAGE_PIPELINE_CONCURRENCY: positiveInt(4),
+    MESSAGE_PIPELINE_QUEUE_LIMIT: positiveInt(2000),
+    MESSAGE_PIPELINE_CLAIM_TTL_MS: positiveInt(10 * 60 * 1000),
+    MESSAGE_PIPELINE_DONE_TTL_MS: positiveInt(30 * 24 * 60 * 60 * 1000),
+
     WHATSAPP_INIT_TIMEOUT_MS: positiveInt(60000),
 
     LOG_RETENTION_DAYS: positiveInt(30),
@@ -260,6 +265,14 @@ module.exports = {
     WEBHOOK_RETRY_BASE_MS: env.WEBHOOK_RETRY_BASE_MS,
     WEBHOOK_CONCURRENCY: env.WEBHOOK_CONCURRENCY,
     WEBHOOK_QUEUE_LIMIT: env.WEBHOOK_QUEUE_LIMIT,
+
+    // Message pipeline (auto-replies, webhooks, scripts)
+    MESSAGE_PIPELINE: {
+        CONCURRENCY: env.MESSAGE_PIPELINE_CONCURRENCY,
+        QUEUE_LIMIT: env.MESSAGE_PIPELINE_QUEUE_LIMIT,
+        CLAIM_TTL_MS: env.MESSAGE_PIPELINE_CLAIM_TTL_MS,
+        DONE_TTL_MS: env.MESSAGE_PIPELINE_DONE_TTL_MS
+    },
     
     // Logging
     LOG_LEVEL: env.LOG_LEVEL

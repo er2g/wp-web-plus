@@ -191,6 +191,19 @@ function createDatabase(config) {
 
     CREATE INDEX IF NOT EXISTS idx_service_locks_expires_at ON service_locks(expires_at);
 
+    CREATE TABLE IF NOT EXISTS message_pipeline_dedupe (
+        message_id TEXT NOT NULL,
+        direction TEXT NOT NULL,
+        state TEXT NOT NULL,
+        owner_id TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        PRIMARY KEY (message_id, direction)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_message_pipeline_dedupe_expires_at ON message_pipeline_dedupe(expires_at);
+
     CREATE TABLE IF NOT EXISTS roles (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT UNIQUE NOT NULL,
@@ -221,6 +234,25 @@ function createDatabase(config) {
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
         FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS audit_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        account_id TEXT,
+        action TEXT,
+        method TEXT,
+        path TEXT,
+        status INTEGER,
+        ip TEXT,
+        user_agent TEXT,
+        request_id TEXT,
+        metadata TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_account ON audit_logs(account_id, created_at);
 
     -- Stores per-user wrapped account Data Encryption Keys (DEK).
     -- The DEK is wrapped with a user-specific KEK derived from their password.
@@ -930,6 +962,26 @@ function createDatabase(config) {
         cleanup: db.prepare(`DELETE FROM logs WHERE created_at < datetime('now', ?)`)
     };
 
+    const auditLogs = {
+        add: db.prepare(`
+            INSERT INTO audit_logs
+                (user_id, account_id, action, method, path, status, ip, user_agent, request_id, metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `),
+        getRecent: db.prepare(`
+            SELECT * FROM audit_logs
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+        `),
+        getByUser: db.prepare(`
+            SELECT * FROM audit_logs
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+        `),
+        cleanup: db.prepare(`DELETE FROM audit_logs WHERE created_at < datetime('now', ?)`),
+    };
+
     const locks = {
         acquire: db.prepare(`
         INSERT INTO service_locks (name, owner_id, acquired_at, expires_at)
@@ -944,6 +996,38 @@ function createDatabase(config) {
         release: db.prepare('DELETE FROM service_locks WHERE name = ? AND owner_id = ?'),
         get: db.prepare('SELECT * FROM service_locks WHERE name = ?'),
         cleanupExpired: db.prepare('DELETE FROM service_locks WHERE expires_at < ?')
+    };
+
+    const messagePipelineDedupe = {
+        claim: db.prepare(`
+            INSERT INTO message_pipeline_dedupe
+                (message_id, direction, state, owner_id, created_at, updated_at, expires_at)
+            VALUES (?, ?, 'queued', ?, ?, ?, ?)
+            ON CONFLICT(message_id, direction) DO UPDATE SET
+                state = 'queued',
+                owner_id = excluded.owner_id,
+                updated_at = excluded.updated_at,
+                expires_at = excluded.expires_at
+            WHERE message_pipeline_dedupe.state = 'queued'
+              AND message_pipeline_dedupe.expires_at < excluded.updated_at
+        `),
+        markDone: db.prepare(`
+            UPDATE message_pipeline_dedupe
+            SET state = 'done',
+                owner_id = ?,
+                updated_at = ?,
+                expires_at = ?
+            WHERE message_id = ? AND direction = ?
+        `),
+        release: db.prepare(`
+            UPDATE message_pipeline_dedupe
+            SET expires_at = ?,
+                updated_at = ?
+            WHERE message_id = ? AND direction = ?
+              AND state = 'queued'
+              AND owner_id = ?
+        `),
+        cleanupExpired: db.prepare('DELETE FROM message_pipeline_dedupe WHERE expires_at < ?')
     };
 
     const roles = {
@@ -1476,7 +1560,8 @@ function createDatabase(config) {
         const defaultRoles = [
             { name: 'admin', description: 'Tam yetkili' },
             { name: 'manager', description: 'Yonetici' },
-            { name: 'agent', description: 'Agent' }
+            { name: 'agent', description: 'Agent' },
+            { name: 'readonly', description: 'Sadece goruntuleme' }
         ];
 
         defaultRoles.forEach(role => {
@@ -1790,7 +1875,9 @@ function createDatabase(config) {
         scripts,
         scriptLogs: wrappedScriptLogs,
         logs: wrappedLogs,
+        auditLogs,
         locks,
+        messagePipelineDedupe,
         roles,
         users: wrappedUsers,
         userRoles,

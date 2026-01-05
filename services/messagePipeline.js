@@ -1,8 +1,14 @@
 const { randomUUID, randomBytes } = require('crypto');
 const { requestContext } = require('./logger');
 
-function createMessagePipeline({ autoReply, webhook, scriptRunner, logger, metrics }) {
+function createMessagePipeline({ autoReply, webhook, scriptRunner, logger, metrics, options } = {}) {
     const generateTraceId = () => (typeof randomUUID === 'function' ? randomUUID() : randomBytes(16).toString('hex'));
+    options = options && typeof options === 'object' ? options : {};
+    const concurrency = Number(options.concurrency) > 0 ? Number(options.concurrency) : 4;
+    const queueLimit = Number(options.queueLimit) > 0 ? Number(options.queueLimit) : 2000;
+    const pending = [];
+    let inFlight = 0;
+    let drainScheduled = false;
 
     function safeInc(counter, labels) {
         try {
@@ -82,9 +88,24 @@ function createMessagePipeline({ autoReply, webhook, scriptRunner, logger, metri
         });
     }
 
-    function schedule(args) {
+    function scheduleDrain() {
+        if (drainScheduled) return;
+        drainScheduled = true;
         const run = () => {
-            void processMessage(args);
+            drainScheduled = false;
+            while (inFlight < concurrency && pending.length) {
+                const job = pending.shift();
+                if (!job) continue;
+                inFlight += 1;
+                Promise.resolve()
+                    .then(() => processMessage(job.args))
+                    .then(() => job.onDone && job.onDone(null))
+                    .catch((error) => job.onDone && job.onDone(error))
+                    .finally(() => {
+                        inFlight -= 1;
+                        scheduleDrain();
+                    });
+            }
         };
 
         if (typeof setImmediate === 'function') {
@@ -94,7 +115,33 @@ function createMessagePipeline({ autoReply, webhook, scriptRunner, logger, metri
         }
     }
 
-    return { process: processMessage, schedule };
+    function enqueue(args, { onDone } = {}) {
+        if (pending.length >= queueLimit) {
+            try {
+                logger?.warn?.('Message pipeline queue full; dropping message', {
+                    category: 'message_pipeline',
+                    queueLimit,
+                    pending: pending.length,
+                    messageId: args?.msgData?.messageId,
+                    chatId: args?.msgData?.chatId
+                });
+            } catch (e) {}
+            if (typeof onDone === 'function') {
+                onDone(new Error('Message pipeline queue full'));
+            }
+            return false;
+        }
+
+        pending.push({ args, onDone: typeof onDone === 'function' ? onDone : null });
+        scheduleDrain();
+        return true;
+    }
+
+    function schedule(args) {
+        enqueue(args);
+    }
+
+    return { process: processMessage, schedule, enqueue };
 }
 
 module.exports = { createMessagePipeline };

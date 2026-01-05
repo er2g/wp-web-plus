@@ -164,7 +164,17 @@ class AccountManager {
         const scheduler = createSchedulerService(db, whatsapp, config, this.metrics, { accountId: resolvedId });
         const webhook = createWebhookService(db, config, this.metrics, { accountId: resolvedId });
         const scriptRunner = createScriptRunner(db, whatsapp);
-        const messagePipeline = createMessagePipeline({ autoReply, webhook, scriptRunner, logger, metrics: this.metrics });
+        const messagePipeline = createMessagePipeline({
+            autoReply,
+            webhook,
+            scriptRunner,
+            logger,
+            metrics: this.metrics,
+            options: {
+                concurrency: config.MESSAGE_PIPELINE?.CONCURRENCY,
+                queueLimit: config.MESSAGE_PIPELINE?.QUEUE_LIMIT
+            }
+        });
 
         const useJobQueue = Boolean(this.jobQueue?.isEnabled?.());
         const context = {
@@ -188,11 +198,53 @@ class AccountManager {
             const result = await originalHandleMessage(msg, fromMe);
 
             if (result) {
-                messagePipeline.schedule({
-                    msgData: result.msgData,
-                    fromMe,
-                    accountId: resolvedId
-                });
+                const msgData = result.msgData;
+                const messageId = msgData?.messageId;
+                const direction = fromMe ? 'outgoing' : 'incoming';
+                const now = Date.now();
+                const ownerId = config.INSTANCE_ID || String(process.pid);
+                const claimTtl = config.MESSAGE_PIPELINE?.CLAIM_TTL_MS || (10 * 60 * 1000);
+                const doneTtl = config.MESSAGE_PIPELINE?.DONE_TTL_MS || (30 * 24 * 60 * 60 * 1000);
+
+                let claimed = true;
+                try {
+                    if (messageId && db?.messagePipelineDedupe?.claim?.run) {
+                        const claimRes = db.messagePipelineDedupe.claim.run(
+                            messageId,
+                            direction,
+                            ownerId,
+                            now,
+                            now,
+                            now + claimTtl
+                        );
+                        claimed = Boolean(claimRes && claimRes.changes > 0);
+                    }
+                } catch (e) {
+                    claimed = true;
+                }
+
+                if (claimed) {
+                    const accepted = messagePipeline.enqueue(
+                        { msgData, fromMe, accountId: resolvedId },
+                        {
+                            onDone: (error) => {
+                                const ts = Date.now();
+                                try {
+                                    if (error) {
+                                        db?.messagePipelineDedupe?.release?.run?.(ts, ts, messageId, direction, ownerId);
+                                    } else {
+                                        db?.messagePipelineDedupe?.markDone?.run?.(ownerId, ts, ts + doneTtl, messageId, direction);
+                                    }
+                                } catch (e) {}
+                            }
+                        }
+                    );
+                    if (!accepted) {
+                        try {
+                            db?.messagePipelineDedupe?.release?.run?.(now, now, messageId, direction, ownerId);
+                        } catch (e) {}
+                    }
+                }
             }
 
             return result;

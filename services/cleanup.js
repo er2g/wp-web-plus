@@ -95,6 +95,9 @@ class CleanupService {
             if (this.db?.locks?.cleanupExpired) {
                 this.db.locks.cleanupExpired.run(Date.now());
             }
+            if (this.db?.messagePipelineDedupe?.cleanupExpired) {
+                this.db.messagePipelineDedupe.cleanupExpired.run(Date.now());
+            }
 
             this.recordSummary('daily', {
                 logsDeleted: logResult.changes,

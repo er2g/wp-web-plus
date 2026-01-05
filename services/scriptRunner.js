@@ -10,6 +10,75 @@ const aiService = require('./aiService');
 const AI_DEPRECATED_MODELS = new Set(['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash']);
 const AI_DEFAULT_MODEL = 'gemini-2.5-flash';
 
+const SCRIPT_LIMITS = {
+    // vm timeout is CPU-time-ish; async can still extend runtime, so we enforce both.
+    CPU_TIMEOUT_MS: 5000,
+    WALL_TIMEOUT_MS: 15000,
+    MAX_LOG_LINES: 200,
+    MAX_LOG_CHARS: 2000,
+    MAX_TIMERS: 25,
+    MAX_TIMER_DELAY_MS: 5000,
+    MAX_FETCH_BYTES: 256 * 1024
+};
+
+const REDACTED = '[REDACTED]';
+const SENSITIVE_KEY = /pass(word)?|token|secret|authorization|cookie|session|api[_-]?key|ai[_-]?api[_-]?key|csrf|xsrf|\\bqr\\b|qr[_-]?code|qrcode|body|content|message|quoted_body|quoted_from_name|from_name|from_number|to_number|phone/i;
+
+function redactString(value) {
+    if (typeof value !== 'string') return value;
+    let out = value;
+    out = out.replace(/Bearer\\s+[A-Za-z0-9._-]+/g, 'Bearer ' + REDACTED);
+    out = out.replace(/(api[_-]?key\\s*[:=]\\s*)([^\\s]+)/ig, `$1${REDACTED}`);
+    out = out.replace(/(password\\s*[:=]\\s*)([^\\s]+)/ig, `$1${REDACTED}`);
+    if (out.length > SCRIPT_LIMITS.MAX_LOG_CHARS) {
+        out = out.slice(0, SCRIPT_LIMITS.MAX_LOG_CHARS) + '…';
+    }
+    return out;
+}
+
+function safeStringify(value) {
+    try {
+        if (typeof value === 'string') return value;
+        return JSON.stringify(value);
+    } catch (e) {
+        return String(value);
+    }
+}
+
+function sanitizeScriptLogText(text) {
+    const raw = redactString(String(text || ''));
+    return raw.length > SCRIPT_LIMITS.MAX_LOG_CHARS ? raw.slice(0, SCRIPT_LIMITS.MAX_LOG_CHARS) + '…' : raw;
+}
+
+function sanitizeScriptLogData(data) {
+    if (data === null || data === undefined) return null;
+    try {
+        const seen = new WeakSet();
+        const redactValue = (value, keyHint, depth) => {
+            if (value === null || value === undefined) return value;
+            if (typeof value === 'string') {
+                if (keyHint && SENSITIVE_KEY.test(keyHint)) return REDACTED;
+                return redactString(value);
+            }
+            if (typeof value !== 'object') return value;
+            if (seen.has(value) || depth > 6) return '[Truncated]';
+            seen.add(value);
+            if (Array.isArray(value)) return value.slice(0, 50).map(v => redactValue(v, keyHint, depth + 1));
+            const out = {};
+            for (const [k, v] of Object.entries(value)) {
+                out[k] = SENSITIVE_KEY.test(k) ? REDACTED : redactValue(v, k, depth + 1);
+            }
+            return out;
+        };
+
+        const sanitized = typeof data === 'string' ? redactString(data) : redactValue(data, null, 0);
+        const json = typeof sanitized === 'string' ? sanitized : JSON.stringify(sanitized);
+        return json.length > SCRIPT_LIMITS.MAX_LOG_CHARS ? json.slice(0, SCRIPT_LIMITS.MAX_LOG_CHARS) + '…' : json;
+    } catch (e) {
+        return sanitizeScriptLogText(String(data));
+    }
+}
+
 function resolveAiModel(...candidates) {
     for (const candidate of candidates) {
         if (typeof candidate !== 'string') continue;
@@ -109,6 +178,8 @@ class ScriptRunner {
     createContext(script, triggerData) {
         const self = this;
         const scriptId = script?.id || 0;
+        let logLines = 0;
+        let timerCount = 0;
         
         // Create a null-prototype object to prevent prototype chain attacks
         const context = Object.create(null);
@@ -174,16 +245,31 @@ class ScriptRunner {
             // Utilities
             console: {
                 value: Object.freeze({
-                    log: (...args) => self.scriptLog(scriptId, 'info', args.join(' ')),
-                    info: (...args) => self.scriptLog(scriptId, 'info', args.join(' ')),
-                    warn: (...args) => self.scriptLog(scriptId, 'warn', args.join(' ')),
-                    error: (...args) => self.scriptLog(scriptId, 'error', args.join(' '))
+                    log: (...args) => {
+                        if (logLines++ > SCRIPT_LIMITS.MAX_LOG_LINES) return;
+                        self.scriptLog(scriptId, 'info', sanitizeScriptLogText(args.map(safeStringify).join(' ')));
+                    },
+                    info: (...args) => {
+                        if (logLines++ > SCRIPT_LIMITS.MAX_LOG_LINES) return;
+                        self.scriptLog(scriptId, 'info', sanitizeScriptLogText(args.map(safeStringify).join(' ')));
+                    },
+                    warn: (...args) => {
+                        if (logLines++ > SCRIPT_LIMITS.MAX_LOG_LINES) return;
+                        self.scriptLog(scriptId, 'warn', sanitizeScriptLogText(args.map(safeStringify).join(' ')));
+                    },
+                    error: (...args) => {
+                        if (logLines++ > SCRIPT_LIMITS.MAX_LOG_LINES) return;
+                        self.scriptLog(scriptId, 'error', sanitizeScriptLogText(args.map(safeStringify).join(' ')));
+                    }
                 }),
                 writable: false, configurable: false
             },
 
             log: {
-                value: (...args) => self.scriptLog(scriptId, 'info', args.join(' ')),
+                value: (...args) => {
+                    if (logLines++ > SCRIPT_LIMITS.MAX_LOG_LINES) return;
+                    self.scriptLog(scriptId, 'info', sanitizeScriptLogText(args.map(safeStringify).join(' ')));
+                },
                 writable: false, configurable: false
             },
 
@@ -212,25 +298,42 @@ class ScriptRunner {
                         };
                     }
                     try {
+                        const method = String(options.method || 'GET').toUpperCase();
+                        if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+                            throw new Error('Unsupported method');
+                        }
+                        const body = options.body;
+                        const bodyText = body === undefined || body === null ? undefined : (typeof body === 'string' ? body : safeStringify(body));
+                        if (bodyText && Buffer.byteLength(bodyText) > SCRIPT_LIMITS.MAX_FETCH_BYTES) {
+                            throw new Error('Body too large');
+                        }
                         const response = await axios({
                             url,
-                            method: options.method || 'GET',
+                            method,
                             headers: options.headers,
-                            data: options.body,
-                            timeout: 10000
+                            data: bodyText,
+                            timeout: 10000,
+                            maxContentLength: SCRIPT_LIMITS.MAX_FETCH_BYTES,
+                            maxBodyLength: SCRIPT_LIMITS.MAX_FETCH_BYTES,
+                            responseType: 'json',
+                            validateStatus: () => true
                         });
+                        const jsonText = safeStringify(response.data);
+                        const truncated = jsonText.length > SCRIPT_LIMITS.MAX_FETCH_BYTES
+                            ? jsonText.slice(0, SCRIPT_LIMITS.MAX_FETCH_BYTES) + '…'
+                            : jsonText;
                         return {
                             ok: response.status >= 200 && response.status < 300,
                             status: response.status,
                             json: async () => response.data,
-                            text: async () => JSON.stringify(response.data)
+                            text: async () => truncated
                         };
                     } catch (error) {
                         return {
                             ok: false,
                             status: error.response?.status || 0,
                             json: async () => ({}),
-                            text: async () => error.message
+                            text: async () => sanitizeScriptLogText(error.message)
                         };
                     }
                 },
@@ -260,7 +363,13 @@ class ScriptRunner {
 
             // Timing
             setTimeout: {
-                value: (fn, ms) => setTimeout(fn, Math.min(ms, 30000)),
+                value: (fn, ms) => {
+                    if (timerCount++ > SCRIPT_LIMITS.MAX_TIMERS) {
+                        throw new Error('Timer limit exceeded');
+                    }
+                    const delay = Math.max(0, Math.min(Number(ms) || 0, SCRIPT_LIMITS.MAX_TIMER_DELAY_MS));
+                    return setTimeout(fn, delay);
+                },
                 writable: false, configurable: false
             },
             
@@ -284,7 +393,7 @@ class ScriptRunner {
 
     scriptLog(scriptId, level, message) {
         try {
-            this.db.scriptLogs.add.run(scriptId, level, message, null);
+            this.db.scriptLogs.add.run(scriptId, level, sanitizeScriptLogText(message), null);
         } catch (e) {
             logger.error('Script log error', { category: 'script-runner', error: e.message });
         }
@@ -292,8 +401,8 @@ class ScriptRunner {
 
     scriptLogWithData(scriptId, level, message, data) {
         try {
-            const payload = data ? JSON.stringify(data) : null;
-            this.db.scriptLogs.add.run(scriptId, level, message, payload);
+            const payload = data ? sanitizeScriptLogData(data) : null;
+            this.db.scriptLogs.add.run(scriptId, level, sanitizeScriptLogText(message), payload);
         } catch (e) {
             console.error('Script log error:', e);
         }
@@ -304,7 +413,7 @@ class ScriptRunner {
 
         try {
             const context = this.createContext(script, triggerData);
-            vm.createContext(context);
+            vm.createContext(context, { codeGeneration: { strings: false, wasm: false } });
 
             // Wrap code in async function to support await
             const wrappedCode = `
@@ -314,13 +423,14 @@ class ScriptRunner {
             `;
 
             const scriptObj = new vm.Script(wrappedCode, {
-                filename: script.name + '.js',
-                timeout: 30000 // 30 second timeout
+                filename: script.name + '.js'
             });
 
-            await scriptObj.runInContext(context, {
-                timeout: 30000
-            });
+            const exec = scriptObj.runInContext(context, { timeout: SCRIPT_LIMITS.CPU_TIMEOUT_MS });
+            await Promise.race([
+                exec,
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Script timeout')), SCRIPT_LIMITS.WALL_TIMEOUT_MS))
+            ]);
 
             this.db.scripts.recordRun.run(script.id);
 
@@ -333,8 +443,8 @@ class ScriptRunner {
             this.db.scripts.recordError.run(error.message, script.id);
             this.scriptLogWithData(script.id, 'error', 'Error: ' + error.message, {
                 script_id: script.id,
-                stack: error.stack,
-                trigger_data: triggerData
+                stack: sanitizeScriptLogText(error.stack || ''),
+                trigger: triggerData ? { messageId: triggerData.messageId, chatId: triggerData.chatId } : null
             });
 
             return { success: false, error: error.message };

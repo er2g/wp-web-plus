@@ -27,9 +27,15 @@ const sendRouter = require('./api/send');
 const autoRepliesRouter = require('./api/autoReplies');
 const mediaRouter = require('./api/media');
 const driveRouter = require('./api/drive');
+const auditRouter = require('./api/audit');
+const { enforceReadonly, enforceApiMatrix } = require('./middleware/permissions');
+const { auditMiddleware } = require('../services/audit');
 
 router.use(requireAuth);
 router.use(accountManager.attachAccount.bind(accountManager));
+router.use(enforceReadonly);
+router.use(enforceApiMatrix);
+router.use(auditMiddleware);
 
 router.use('/accounts', accountsRouter);
 router.use('/', whatsappRouter);
@@ -53,5 +59,6 @@ router.use('/send', sendRouter);
 router.use('/auto-replies', autoRepliesRouter);
 router.use('/media', mediaRouter);
 router.use('/drive', driveRouter);
+router.use('/audit', auditRouter);
 
 module.exports = router;
