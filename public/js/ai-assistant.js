@@ -2,7 +2,7 @@
  * WhatsApp Web Panel - AI Assistant Frontend Logic
  */
 
-/* global api, showToast, loadScriptsData, escapeHtml, formatDateTime, renderAvatarContent, chats, archivedChats, archivedChatsLoaded, currentChat */
+/* global api, showToast, loadScriptsData, escapeHtml, formatDateTime, renderAvatarContent, chats, archivedChats, archivedChatsLoaded, currentChat, normalizeTimestamp, getDisplayNameFromMessage, formatSenderName, getMessagePreviewText */
 
 const AI_ASSISTANT_HISTORY_KEY = 'aiAssistantHistoryV1';
 const AI_ASSISTANT_HISTORY_LIMIT = 40;
@@ -456,26 +456,11 @@ function toggleAiAssistantAutoReply(force) {
     }
 }
 
-function isAiAssistantAutoReplyEnabled() {
-    const toggleEl = document.getElementById('aiAssistantAutoReplyToggle');
-    return Boolean(toggleEl && toggleEl.classList.contains('active'));
-}
-
 function aiAssistantGetSelectedChatIds() {
     if (aiAssistantFlow && Array.isArray(aiAssistantFlow.chatIds) && aiAssistantFlow.chatIds.length) {
         return [...aiAssistantFlow.chatIds];
     }
     return Array.from(aiAssistantState.selectedChatIds || []);
-}
-
-function getAiAssistantHistoryLimit() {
-    const input = document.getElementById('aiAssistantHistoryLimit');
-    const raw = input ? Number.parseInt(String(input.value || ''), 10) : NaN;
-    const value = Number.isFinite(raw)
-        ? Math.max(10, Math.min(200, raw))
-        : 40;
-    if (input) input.value = String(value);
-    return value;
 }
 
 function aiAssistantRenderChatPicker() {
@@ -774,16 +759,6 @@ function toggleAiAssistantModelInput(value) {
     const customInput = document.getElementById('aiAssistantModelCustomInput');
     if (!customInput) return;
     customInput.style.display = (value === 'custom') ? 'block' : 'none';
-}
-
-function getAiAssistantModelValue() {
-    const select = document.getElementById('aiAssistantModelSelect');
-    const customInput = document.getElementById('aiAssistantModelCustomInput');
-    if (!select) return '';
-    if (select.value === 'custom') {
-        return String(customInput?.value || '').trim();
-    }
-    return select.value;
 }
 
 async function loadAiAssistantConfig() {
