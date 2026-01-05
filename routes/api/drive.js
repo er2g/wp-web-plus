@@ -51,8 +51,10 @@ router.post('/upload', upload.single('file'), async (req, res) => {
         return res.json({
             success: true,
             fileId: result.id,
+            mediaUrl: result.proxyUrl || result.downloadLink,
             downloadLink: result.downloadLink,
-            viewLink: result.viewLink
+            viewLink: result.viewLink,
+            publicSharing: Boolean(result.downloadLink)
         });
     } catch (error) {
         return sendError(req, res, 500, error.message);

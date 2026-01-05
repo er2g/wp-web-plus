@@ -7,6 +7,7 @@ Bu doküman, projeyi tek sunucuda **stabil** ve **ölçülebilir** şekilde çal
 - Node.js 18+
 - `whatsapp-web.js` için Chromium/Puppeteer bağımlılıkları (distro’ya göre değişir)
 - (Önerilir) Redis: `REDIS_URL` set edilirse session + Socket.IO için önerilir (restart sonrası session kalır)
+  - (Opsiyonel) Redis Job Queue: `JOB_QUEUE_ENABLED=true` ile scheduler/cleanup + scheduled messages BullMQ üzerinden çalışır
 
 ### Redis (Session Store) Kurulumu
 
@@ -26,6 +27,19 @@ REDIS_URL=redis://127.0.0.1:6379
 REDIS_PREFIX=wp-panel:
 ```
 
+### Redis Job Queue (BullMQ) (Opsiyonel)
+
+Çoklu instance hedefinde background job’ları standardize etmek için:
+
+```bash
+JOB_QUEUE_ENABLED=true
+JOB_QUEUE_CONCURRENCY=4
+```
+
+Notlar:
+- Queue job’ları Redis’te tutulur; bir job aynı anda tek worker tarafından işlenir.
+- “Vault locked” durumda scheduled message job’ları retry olur (kullanıcı bir instance’ta login olup hesabı unlock edene kadar).
+
 ## Kurulum
 
 1. Env dosyasını oluştur:
@@ -44,8 +58,36 @@ REDIS_PREFIX=wp-panel:
 - Multi-account dosya yapısı:
   - `data/accounts/<accountId>/whatsapp.db` (SQLite)
   - `data/accounts/<accountId>/session/` (WhatsApp LocalAuth)
-  - `data/accounts/<accountId>/media/`
+- `data/accounts/<accountId>/media/`
 - WhatsApp ayarları (ör. `ghostMode`, `maxMessagesPerChat`) account DB içinde persist edilir.
+
+## Media Storage (Local / Drive / S3)
+
+Medya saklama davranışı `MEDIA_STORAGE_PROVIDER` ile seçilir:
+
+- `auto` (default): WhatsApp ayarındaki `uploadToDrive` üzerinden `local` vs `drive` seçer.
+- `local`: medya dosyaları `media/` altında kalır.
+- `drive`: Google Drive’a upload eder, **public paylaşım kapalıdır** ve medya `api/media/drive/<fileId>` üzerinden **auth ile** servis edilir.
+- `s3`: S3 uyumlu storage’a upload eder, medya `api/media/s3/<key>` üzerinden **auth ile** servis edilir.
+
+Drive için:
+
+```bash
+DRIVE_FOLDER_ID=...
+DRIVE_PUBLIC_SHARING=false
+```
+
+S3 için:
+
+```bash
+MEDIA_STORAGE_PROVIDER=s3
+S3_ENDPOINT=http://127.0.0.1:9000   # MinIO örneği
+S3_REGION=us-east-1
+S3_BUCKET=wp-panel-media
+S3_ACCESS_KEY_ID=...
+S3_SECRET_ACCESS_KEY=...
+S3_FORCE_PATH_STYLE=true
+```
 
 ## PM2 ile Çalıştırma
 
@@ -68,6 +110,7 @@ pm2 restart whatsapp-panel
 Notlar:
 - WhatsApp bağlantısı tek proses/instance ile daha stabil olur (`exec_mode: fork`, `instances: 1`).
 - Multi-instance gerekiyorsa Redis session + Socket.IO adapter + sticky session şarttır.
+- Zero-knowledge vault anahtarları RAM’de tutulur; restart sonrası UI “Kilidi Aç” akışı ile parolayı tekrar ister (`POST /auth/unlock`).
 - Graceful shutdown için `shutdown_with_message` + `kill_timeout` ayarlı; uygulama shutdown sırasında `/readyz` → `503` döner.
 - `SHUTDOWN_TIMEOUT_MS` (app) < `kill_timeout` (PM2) olacak şekilde ayarla (varsayılanlar uyumlu).
 

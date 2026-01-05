@@ -12,9 +12,11 @@
     "check": "npm run lint && npm test"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.962.0",
     "@socket.io/redis-adapter": "^8.3.0",
     "axios": "^1.6.2",
     "better-sqlite3": "^9.2.2",
+    "bullmq": "^5.66.4",
     "connect-redis": "^9.0.0",
     "cors": "^2.8.5",
     "csurf": "^1.11.0",
@@ -23,6 +25,7 @@
     "express-rate-limit": "^8.2.1",
     "express-session": "^1.17.3",
     "googleapis": "^169.0.0",
+    "ioredis": "^5.9.0",
     "mime-types": "^2.1.35",
     "multer": "^1.4.5-lts.1",
     "node-cron": "^3.0.3",

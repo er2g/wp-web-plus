@@ -10,6 +10,7 @@ const fs = require('fs');
 const https = require('https');
 const path = require('path');
 const mime = require('mime-types');
+const { MediaStorage } = require('./services/mediaStorage');
 
 const CONSTANTS = {
     SYNC_DELAY_MS: 2000,
@@ -39,6 +40,7 @@ class WhatsAppClient {
         this.config = config;
         this.db = db;
         this.drive = drive;
+        this.mediaStorage = null;
         this.client = null;
         this.qrCode = null;
         this.status = 'disconnected';
@@ -58,6 +60,11 @@ class WhatsAppClient {
             ghostMode: false
         };
         this.loadSettingsFromDb();
+        this.mediaStorage = new MediaStorage({
+            accountId: this.config.ACCOUNT_ID || 'default',
+            drive: this.drive,
+            settingsProvider: () => (this.settings?.uploadToDrive ? 'drive' : 'local')
+        });
         this.contactCache = new Map();
         this.chatProfileCache = new Map();
         this.contactProfilePicCache = new Map(); // contactId -> { url, fetchedAt }
@@ -1249,18 +1256,15 @@ class WhatsAppClient {
                 fs.writeFileSync(localPath, Buffer.from(media.data, 'base64'));
             }
 
-            if (this.settings.uploadToDrive && this.drive) {
-                try {
-                    if (await this.drive.initialize()) {
-                        const result = await this.drive.uploadFile(localPath, media.mimetype);
-                        if (result) {
-                            fs.unlinkSync(localPath);
-                            return { mediaPath: null, mediaUrl: result.downloadLink };
-                        }
-                    }
-                } catch (e) {}
+            const fallback = { mediaPath: localPath, mediaUrl: CONSTANTS.MEDIA_URL_PREFIX + encodeURIComponent(filename) };
+            if (!this.mediaStorage) return fallback;
+
+            try {
+                return await this.mediaStorage.storeFromLocalPath(localPath, media.mimetype);
+            } catch (e) {
+                this.log('warn', 'media', 'Remote media storage failed: ' + e.message);
+                return fallback;
             }
-            return { mediaPath: localPath, mediaUrl: CONSTANTS.MEDIA_URL_PREFIX + encodeURIComponent(filename) };
         } catch (e) {
             this.log('error', 'media', 'Save media failed: ' + e.message);
             return { mediaPath: null, mediaUrl: null };

@@ -253,7 +253,7 @@ function aadForField({ accountId, table, column } = {}) {
     return `${DEFAULT_AAD_NAMESPACE}|${safeAccount}|${safeTable}|${safeColumn}`;
 }
 
-function getActiveKey({ accountId, sessionId } = {}) {
+function getActiveKey({ accountId } = {}) {
     const ctx = getCryptoContext();
     if (ctx?.key && Buffer.isBuffer(ctx.key)) {
         return ctx.key;

@@ -45,6 +45,9 @@
         </div>
         <h2 class="mb-4">WhatsApp Panel</h2>
         <form id="loginForm">
+            <div id="unlockNotice" class="alert alert-warning d-none">
+                Sunucu yeniden baslatildigi icin kasaniz kilitlendi. Devam etmek icin sifrenizi tekrar girin.
+            </div>
             <div class="mb-3">
                 <input type="text" class="form-control form-control-lg" id="username" placeholder="Kullanici adi" required>
             </div>
@@ -54,6 +57,9 @@
             <div id="error" class="alert alert-danger d-none"></div>
             <button type="submit" class="btn btn-whatsapp btn-lg text-white w-100">
                 <i class="bi bi-box-arrow-in-right me-2"></i>Giris Yap
+            </button>
+            <button id="logoutBtn" type="button" class="btn btn-outline-secondary w-100 mt-2 d-none">
+                Oturumu Sifirla
             </button>
             <div class="mt-3 text-center">
                 <a href="register.html">Davet kodum var (Kayit Ol)</a>
@@ -68,6 +74,53 @@
             if (parts.length === 2) return parts.pop().split(';').shift();
         }
 
+        let unlockMode = false;
+
+        function setUnlockMode(enabled) {
+            unlockMode = Boolean(enabled);
+            const usernameInput = document.getElementById('username');
+            const unlockNotice = document.getElementById('unlockNotice');
+            const submitBtn = document.querySelector('#loginForm button[type="submit"]');
+            const logoutBtn = document.getElementById('logoutBtn');
+            if (!usernameInput || !unlockNotice || !submitBtn || !logoutBtn) return;
+
+            if (unlockMode) {
+                unlockNotice.classList.remove('d-none');
+                usernameInput.value = '';
+                usernameInput.disabled = true;
+                usernameInput.classList.add('d-none');
+                submitBtn.innerHTML = '<i class="bi bi-unlock me-2"></i>Kilidi Ac';
+                logoutBtn.classList.remove('d-none');
+            } else {
+                unlockNotice.classList.add('d-none');
+                usernameInput.disabled = false;
+                usernameInput.classList.remove('d-none');
+                submitBtn.innerHTML = '<i class="bi bi-box-arrow-in-right me-2"></i>Giris Yap';
+                logoutBtn.classList.add('d-none');
+            }
+        }
+
+        async function checkUnlockState() {
+            try {
+                const response = await fetch('auth/check', { credentials: 'include', cache: 'no-store' });
+                const data = await response.json();
+                if (data && data.sessionAuthenticated && !data.vaultUnlocked) {
+                    setUnlockMode(true);
+                }
+            } catch (e) {}
+        }
+
+        document.getElementById('logoutBtn').addEventListener('click', async () => {
+            const csrfToken = getCookie('XSRF-TOKEN');
+            try {
+                await fetch('auth/logout', {
+                    method: 'POST',
+                    headers: { 'X-XSRF-TOKEN': csrfToken }
+                });
+            } catch (e) {}
+            window.location.href = './';
+        });
+
         document.getElementById('loginForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const username = document.getElementById('username').value;
@@ -76,13 +129,15 @@
             const csrfToken = getCookie('XSRF-TOKEN');
 
             try {
-                const response = await fetch('auth/login', {
+                const url = unlockMode ? 'auth/unlock' : 'auth/login';
+                const payload = unlockMode ? { password } : { username, password };
+                const response = await fetch(url, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         'X-XSRF-TOKEN': csrfToken
                     },
-                    body: JSON.stringify({ username, password })
+                    body: JSON.stringify(payload)
                 });
 
                 const data = await response.json();
@@ -98,6 +153,8 @@
                 errorDiv.classList.remove('d-none');
             }
         });
+
+        checkUnlockState();
     </script>
 </body>
 </html>

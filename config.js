@@ -44,6 +44,17 @@ function requiredString(defaultValue) {
     return z.preprocess(emptyToUndefined, z.string().min(1).default(defaultValue));
 }
 
+function enumString(values, defaultValue) {
+    return z.preprocess(
+        (value) => {
+            const normalized = emptyToUndefined(value);
+            if (normalized === undefined) return undefined;
+            return typeof normalized === 'string' ? normalized.trim().toLowerCase() : normalized;
+        },
+        z.enum(values).default(defaultValue)
+    );
+}
+
 function formatZodError(error) {
     const issues = error?.issues;
     if (!Array.isArray(issues) || issues.length === 0) return String(error?.message || error);
@@ -76,6 +87,9 @@ const envSchema = z.object({
     REDIS_URL: optionalString(),
     REDIS_PREFIX: requiredString('wp-panel:'),
 
+    JOB_QUEUE_ENABLED: booleanLike(false),
+    JOB_QUEUE_CONCURRENCY: positiveInt(4),
+
     METRICS_ENABLED: booleanLike(false),
     METRICS_TOKEN: optionalString(),
 
@@ -95,6 +109,17 @@ const envSchema = z.object({
     SESSION_DIR: optionalString(),
     DB_PATH: optionalString(),
     MEDIA_DIR: optionalString(),
+
+    DRIVE_FOLDER_ID: optionalString(),
+    DRIVE_PUBLIC_SHARING: booleanLike(false),
+
+    MEDIA_STORAGE_PROVIDER: enumString(['auto', 'local', 'drive', 's3'], 'auto'),
+    S3_ENDPOINT: optionalString(),
+    S3_REGION: optionalString(),
+    S3_BUCKET: optionalString(),
+    S3_ACCESS_KEY_ID: optionalString(),
+    S3_SECRET_ACCESS_KEY: optionalString(),
+    S3_FORCE_PATH_STYLE: booleanLike(false),
 
     SCHEDULER_LOCK_TTL_MS: positiveInt(3 * 60 * 1000),
     CLEANUP_LOCK_TTL_MS: positiveInt(15 * 60 * 1000),
@@ -156,6 +181,10 @@ module.exports = {
     REDIS_URL: env.REDIS_URL,
     REDIS_PREFIX: env.REDIS_PREFIX,
 
+    // Job Queue (optional; requires Redis)
+    JOB_QUEUE_ENABLED: env.JOB_QUEUE_ENABLED,
+    JOB_QUEUE_CONCURRENCY: env.JOB_QUEUE_CONCURRENCY,
+
     // Metrics (optional)
     METRICS_ENABLED: env.METRICS_ENABLED,
     METRICS_TOKEN: env.METRICS_TOKEN,
@@ -183,6 +212,21 @@ module.exports = {
     DB_PATH: env.DB_PATH ? path.resolve(env.DB_PATH) : path.join(dataDir, 'whatsapp.db'),
     LOGS_DIR: logsDir,
     MEDIA_DIR: env.MEDIA_DIR ? path.resolve(env.MEDIA_DIR) : path.join(dataDir, 'media'),
+
+    // Drive (optional)
+    DRIVE_FOLDER_ID: env.DRIVE_FOLDER_ID,
+    DRIVE_PUBLIC_SHARING: env.DRIVE_PUBLIC_SHARING,
+
+    // Media storage (optional)
+    MEDIA_STORAGE_PROVIDER: env.MEDIA_STORAGE_PROVIDER,
+    S3: {
+        ENDPOINT: env.S3_ENDPOINT,
+        REGION: env.S3_REGION,
+        BUCKET: env.S3_BUCKET,
+        ACCESS_KEY_ID: env.S3_ACCESS_KEY_ID,
+        SECRET_ACCESS_KEY: env.S3_SECRET_ACCESS_KEY,
+        FORCE_PATH_STYLE: env.S3_FORCE_PATH_STYLE
+    },
     
     // WhatsApp
     PUPPETEER_ARGS: [

@@ -59,7 +59,7 @@ router.get('/', (req, res) => {
     res.json(req.account.db.scheduled.getAll.all());
 });
 
-router.post('/', validate({ body: scheduleCreateSchema }), (req, res) => {
+router.post('/', validate({ body: scheduleCreateSchema }), async (req, res) => {
     const { chat_id, chat_name, message, template_id, scheduled_at, is_recurring, cron_expression } = req.validatedBody;
 
     let resolvedMessage = message || '';
@@ -87,8 +87,28 @@ router.post('/', validate({ body: scheduleCreateSchema }), (req, res) => {
         cron_expression || null
     );
 
+    const scheduled = req.account.db.scheduled.getById.get(result.lastInsertRowid);
+    if (!scheduled) {
+        return sendError(req, res, 500, 'Failed to create schedule');
+    }
+
+    const accountId = req.account.account?.id;
+    if (req.account.jobQueueEnabled && req.account.jobQueue && accountId) {
+        try {
+            if (scheduled.is_recurring && scheduled.cron_expression) {
+                await req.account.jobQueue.ensureRecurringSchedule(accountId, scheduled.id, scheduled.cron_expression);
+            } else {
+                const runAt = Date.parse(String(scheduled.scheduled_at || '')) || Date.now();
+                await req.account.jobQueue.enqueueOneTimeSchedule(accountId, scheduled.id, runAt);
+            }
+        } catch (error) {
+            try { req.account.db.scheduled.delete.run(scheduled.id); } catch (e) {}
+            return sendError(req, res, 400, error.message || 'Schedule enqueue failed');
+        }
+        return res.json({ success: true, id: result.lastInsertRowid });
+    }
+
     if (is_recurring && cron_expression) {
-        const scheduled = req.account.db.scheduled.getById.get(result.lastInsertRowid);
         if (!req.account.scheduler.setupRecurring(
             scheduled.id,
             cron_expression,
@@ -109,6 +129,10 @@ router.delete('/:id', (req, res) => {
     const scheduledId = parseInt(req.params.id, 10);
     if (Number.isNaN(scheduledId)) {
         return sendError(req, res, 400, 'Invalid scheduled id');
+    }
+    const existing = req.account.db.scheduled.getById.get(scheduledId);
+    if (existing && req.account.jobQueueEnabled && req.account.jobQueue && req.account.account?.id) {
+        req.account.jobQueue.removeSchedule(req.account.account.id, scheduledId, existing.cron_expression || null).catch(() => {});
     }
     req.account.scheduler.removeRecurring(scheduledId);
     req.account.db.scheduled.delete.run(scheduledId);

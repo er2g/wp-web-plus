@@ -19,6 +19,7 @@ const accountManager = require('./services/accountManager');
 const { logger, requestContext } = require('./services/logger');
 const { requireAuth, requireRole } = require('./routes/middleware/auth');
 const { vault } = require('./services/encryption');
+const { JobQueue } = require('./services/jobQueue');
 
 const authRoutes = require('./routes/auth');
 const apiRoutes = require('./routes/api');
@@ -32,6 +33,7 @@ function createApp() {
     let redisClient = null;
     let redisPubClient = null;
     let redisSubClient = null;
+    let jobQueue = null;
     let metrics = null;
     let shutdownPromise = null;
     let isShuttingDown = false;
@@ -347,6 +349,24 @@ function createApp() {
         });
     }
 
+    if (config.REDIS_URL && config.JOB_QUEUE_ENABLED) {
+        jobQueue = new JobQueue({ accountManager, metrics });
+        accountManager.setJobQueue(jobQueue);
+        startupTasks.push(
+            jobQueue.start().catch((error) => {
+                logger.error('Job queue init failed', { category: 'jobs', error: error.message });
+                throw error;
+            })
+        );
+        shutdownTasks.push(async () => {
+            try {
+                await jobQueue.close();
+            } catch (error) {
+                logger.warn('Job queue shutdown failed', { category: 'jobs', error: error.message });
+            }
+        });
+    }
+
     const sessionMiddleware = session(sessionOptions);
     app.use(sessionMiddleware);
 
@@ -378,6 +398,7 @@ function createApp() {
     app.get('/readyz', (req, res) => {
         const redisConfigured = Boolean(config.REDIS_URL);
         const redisConnected = redisConfigured ? Boolean(redisClient?.isOpen) : false;
+        const jobsConfigured = Boolean(config.JOB_QUEUE_ENABLED) && redisConfigured;
 
         const ok = !isShuttingDown && isReady && (redisConfigured ? redisConnected : true);
 
@@ -390,6 +411,10 @@ function createApp() {
                 redis: {
                     configured: redisConfigured,
                     connected: redisConnected
+                },
+                jobs: {
+                    configured: jobsConfigured,
+                    enabled: Boolean(jobQueue?.isEnabled?.())
                 }
             },
             timestamp: Date.now()

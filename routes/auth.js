@@ -255,6 +255,116 @@ function createAuthRouter({ redisClient, redisPrefix } = {}) {
         }
     });
 
+    router.post('/unlock', async (req, res, next) => {
+        const ip = getClientIp(req);
+        try {
+            const rateCheck = await checkRateLimit(ip, req);
+            if (!rateCheck.allowed) {
+                if (rateCheck.remainingTime) {
+                    res.setHeader('Retry-After', String(rateCheck.remainingTime));
+                }
+                return sendError(
+                    req,
+                    res,
+                    429,
+                    'Too many attempts. Try again in ' + rateCheck.remainingTime + ' seconds.'
+                );
+            }
+
+            const sessionUserId = req.session?.userId;
+            if (!req.session?.authenticated || !sessionUserId) {
+                await recordFailedAttempt(ip, req);
+                return sendError(req, res, 401, 'Not authenticated');
+            }
+
+            const body = req.body || {};
+            const password = body.password;
+            if (!password) {
+                await recordFailedAttempt(ip, req);
+                return sendError(req, res, 400, 'Password required');
+            }
+
+            const db = accountManager.getAccountContext(accountManager.getDefaultAccountId()).db;
+            const user = db.users.getById.get(sessionUserId);
+            if (!user || !user.is_active) {
+                await recordFailedAttempt(ip, req);
+                return sendError(req, res, 401, 'Invalid credentials');
+            }
+
+            if (!verifyPassword(password, user.password_salt, user.password_hash)) {
+                await recordFailedAttempt(ip, req);
+                return sendError(req, res, 401, 'Invalid credentials');
+            }
+
+            await clearAttempts(ip, req);
+            vault.clearSession(req.sessionID);
+
+            let encryptionSalt = user.encryption_salt;
+            if (!encryptionSalt) {
+                encryptionSalt = crypto.randomBytes(16).toString('hex');
+                try {
+                    db.users.setEncryptionSalt.run(encryptionSalt, user.id);
+                } catch (error) {
+                    req.log?.error('Failed to set encryption salt', { error: error.message });
+                    return sendError(req, res, 500, 'Encryption setup error');
+                }
+            }
+
+            let kek;
+            try {
+                kek = deriveMasterKey(password, encryptionSalt);
+            } catch (error) {
+                req.log?.error('Failed to derive master key', { error: error.message });
+                return sendError(req, res, 500, 'Encryption setup error');
+            }
+
+            const defaultAccountId = accountManager.getDefaultAccountId();
+            const accountId = req.session.accountId || defaultAccountId;
+
+            const keyringCount = db.userKeyrings?.countByAccount?.get(accountId)?.count || 0;
+            const keyring = db.userKeyrings?.getByUserAndAccount?.get(user.id, accountId) || null;
+
+            let dek = null;
+            if (keyringCount > 0) {
+                if (keyring?.wrapped_dek) {
+                    try {
+                        dek = unwrapDataKey(keyring.wrapped_dek, kek, keyringAad({ accountId, userId: user.id }));
+                    } catch (error) {
+                        req.log?.error('Failed to unwrap account key', { error: error.message });
+                        return sendError(req, res, 403, 'Account key invalid');
+                    }
+                } else {
+                    const unlockedDek = vault.getAccountKey(accountId);
+                    if (!unlockedDek) {
+                        return sendError(req, res, 423, 'Vault locked: ask an admin to login first');
+                    }
+                    try {
+                        const wrapped = wrapDataKey(unlockedDek, kek, keyringAad({ accountId, userId: user.id }));
+                        db.userKeyrings.upsert.run(user.id, accountId, wrapped);
+                        dek = unlockedDek;
+                    } catch (error) {
+                        req.log?.error('Failed to provision account key', { error: error.message });
+                        return sendError(req, res, 500, 'Encryption setup error');
+                    }
+                }
+            } else {
+                dek = kek;
+            }
+
+            try {
+                vault.setSession(req.sessionID, { kek, userId: user.id });
+                vault.setAccountKeyForSession(accountId, dek, req.sessionID);
+            } catch (error) {
+                req.log?.error('Failed to store session key', { error: error.message });
+                return sendError(req, res, 500, 'Encryption setup error');
+            }
+
+            return res.json({ success: true, vaultUnlocked: true });
+        } catch (error) {
+            return next(error);
+        }
+    });
+
     function normalizeInviteCode(value) {
         const raw = (value || '').toString().trim().toUpperCase();
         const compact = raw.replace(/[^A-Z0-9]/g, '');
@@ -381,6 +491,7 @@ function createAuthRouter({ redisClient, redisPrefix } = {}) {
 
         return res.json({
             authenticated: req.session && req.session.authenticated === true && vaultUnlocked,
+            sessionAuthenticated: Boolean(req.session && req.session.authenticated === true && req.session.userId),
             vaultUnlocked,
             userId: req.session?.userId || null,
             role: req.session?.role || null,

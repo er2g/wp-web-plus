@@ -21,6 +21,7 @@ process.env.METRICS_TOKEN = 'test-metrics-token';
 
 const { createApp } = require('../appFactory');
 const accountManager = require('../services/accountManager');
+const { vault } = require('../services/encryption');
 
 let appInstance;
 let server;
@@ -45,6 +46,15 @@ function createClient() {
     function cookieHeader() {
         if (cookieJar.size === 0) return '';
         return Array.from(cookieJar.entries()).map(([k, v]) => `${k}=${v}`).join('; ');
+    }
+
+    function getSessionId() {
+        const raw = cookieJar.get('whatsapp.sid');
+        if (!raw) return null;
+        const decoded = decodeURIComponent(String(raw));
+        const value = decoded.startsWith('s:') ? decoded.slice(2) : decoded;
+        const dot = value.indexOf('.');
+        return dot === -1 ? value : value.slice(0, dot);
     }
 
     function request({ method, urlPath, body, rawBody, headers }) {
@@ -121,6 +131,7 @@ function createClient() {
 
     return {
         cookies: cookieJar,
+        getSessionId,
         request,
         refreshCsrfToken,
         login,
@@ -344,6 +355,40 @@ test('POST /auth/login succeeds with CSRF token', async () => {
     const checkParsed = JSON.parse(check.body);
     assert.equal(checkParsed.authenticated, true);
     assert.equal(checkParsed.role, 'admin');
+});
+
+test('POST /auth/unlock restores vault without new session', async () => {
+    const client = createClient();
+    const res = await client.login('admin', 'test-password');
+    assert.equal(res.status, 200);
+
+    const sessionId = client.getSessionId();
+    assert.ok(sessionId);
+
+    vault.clearSession(sessionId);
+
+    const checkLocked = await client.request({ method: 'GET', urlPath: '/auth/check' });
+    assert.equal(checkLocked.status, 200);
+    const lockedParsed = JSON.parse(checkLocked.body);
+    assert.equal(lockedParsed.sessionAuthenticated, true);
+    assert.equal(lockedParsed.vaultUnlocked, false);
+
+    const csrfToken = await client.refreshCsrfToken();
+    const unlockRes = await client.request({
+        method: 'POST',
+        urlPath: '/auth/unlock',
+        headers: { 'X-XSRF-TOKEN': csrfToken },
+        body: { password: 'test-password' }
+    });
+
+    assert.equal(unlockRes.status, 200);
+    const unlockParsed = JSON.parse(unlockRes.body);
+    assert.equal(unlockParsed.success, true);
+
+    const checkUnlocked = await client.request({ method: 'GET', urlPath: '/auth/check' });
+    const unlockedParsed = JSON.parse(checkUnlocked.body);
+    assert.equal(unlockedParsed.sessionAuthenticated, true);
+    assert.equal(unlockedParsed.vaultUnlocked, true);
 });
 
 test('POST /auth/login succeeds after a failed attempt', async () => {

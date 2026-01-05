@@ -9,13 +9,13 @@ const http = require('http');
 const url = require('url');
 
 const SCOPES = ['https://www.googleapis.com/auth/drive.file'];
-const SHARED_FOLDER_ID = '1ulDoH965gkHDCzUngvPfOJXn6xQ4cRaM';
 
 class DriveService {
     constructor(config) {
         this.drive = null;
         this.oauth2Client = null;
-        this.folderId = SHARED_FOLDER_ID;
+        this.folderId = config.DRIVE_FOLDER_ID || null;
+        this.publicSharing = Boolean(config.DRIVE_PUBLIC_SHARING);
         this.initialized = false;
         this.authUrl = null;
         this.config = config;
@@ -191,10 +191,11 @@ class DriveService {
         const fileName = path.basename(filePath);
 
         try {
+            const parents = this.folderId ? [this.folderId] : undefined;
             const res = await this.drive.files.create({
                 requestBody: {
                     name: fileName,
-                    parents: [this.folderId]
+                    ...(parents ? { parents } : {})
                 },
                 media: {
                     mimeType: mimeType || 'application/octet-stream',
@@ -203,28 +204,51 @@ class DriveService {
                 fields: 'id, name, webViewLink, webContentLink'
             });
 
-            // Herkese acik yap
-            await this.drive.permissions.create({
-                fileId: res.data.id,
-                requestBody: {
-                    role: 'reader',
-                    type: 'anyone'
-                }
-            });
+            let downloadLink = null;
+            if (this.publicSharing) {
+                await this.drive.permissions.create({
+                    fileId: res.data.id,
+                    requestBody: {
+                        role: 'reader',
+                        type: 'anyone'
+                    }
+                });
+                downloadLink = `https://drive.google.com/uc?export=download&id=${res.data.id}`;
+            }
 
-            const downloadLink = `https://drive.google.com/uc?export=download&id=${res.data.id}`;
+            const proxyUrl = `api/media/drive/${res.data.id}`;
             console.log('[DRIVE] Uploaded:', fileName, '->', res.data.id);
 
             return {
                 id: res.data.id,
                 name: res.data.name,
                 viewLink: res.data.webViewLink,
-                downloadLink: downloadLink
+                downloadLink,
+                proxyUrl
             };
         } catch (error) {
             console.error('[DRIVE] Upload error:', error.message);
             throw error;
         }
+    }
+
+    async getFileStream(fileId) {
+        if (!this.initialized) {
+            const success = await this.initialize();
+            if (!success) {
+                throw new Error('Drive not initialized - authorization required');
+            }
+        }
+
+        const resp = await this.drive.files.get(
+            { fileId, alt: 'media' },
+            { responseType: 'stream' }
+        );
+
+        return {
+            stream: resp.data,
+            contentType: resp.headers?.['content-type'] || 'application/octet-stream'
+        };
     }
 
     /**
@@ -261,8 +285,9 @@ class DriveService {
                 const result = await this.uploadFile(filePath, mimeType);
 
                 // DB guncelle
-                db.prepare('UPDATE messages SET media_url = ? WHERE media_path = ?')
-                    .run(result.downloadLink, filePath);
+                const mediaUrl = result.proxyUrl || result.downloadLink;
+                db.prepare('UPDATE messages SET media_url = ?, media_path = NULL WHERE media_path = ?')
+                    .run(mediaUrl, filePath);
 
                 // Lokal sil
                 fs.unlinkSync(filePath);

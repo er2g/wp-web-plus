@@ -7,6 +7,7 @@ const path = require('path');
 const { LIMITS, validateChatId } = require('../../lib/apiValidation');
 const { sendError } = require('../../lib/httpResponses');
 const { queryLimit, queryOffset, queryString } = require('../../lib/zodHelpers');
+const { getS3ObjectStream } = require('../../services/mediaStorage');
 const { validate } = require('../middleware/validate');
 
 const booleanLike = z.preprocess((value) => {
@@ -221,6 +222,44 @@ router.post('/enqueue', validate({ body: enqueueBodySchema }), (req, res) => {
         return res.json({ success: true, enqueued });
     } catch (error) {
         return sendError(req, res, 500, error.message);
+    }
+});
+
+router.get('/drive/:fileId', async (req, res) => {
+    const fileId = String(req.params.fileId || '').trim();
+    if (!/^[A-Za-z0-9_-]{10,200}$/.test(fileId)) {
+        return sendError(req, res, 400, 'Invalid fileId');
+    }
+
+    try {
+        const drive = req.account?.drive;
+        if (!drive) {
+            return sendError(req, res, 400, 'Drive not available');
+        }
+
+        const initialized = await drive.initialize();
+        if (!initialized) {
+            return sendError(req, res, 400, 'Drive not configured');
+        }
+
+        const result = await drive.getFileStream(fileId);
+        res.setHeader('Content-Type', result.contentType || 'application/octet-stream');
+        return result.stream.pipe(res);
+    } catch (error) {
+        return sendError(req, res, 500, error.message);
+    }
+});
+
+router.get('/s3/*', async (req, res) => {
+    const key = req.params[0] || '';
+    try {
+        const result = await getS3ObjectStream(key);
+        res.setHeader('Content-Type', result.contentType || 'application/octet-stream');
+        return result.stream.pipe(res);
+    } catch (error) {
+        const message = error.message || String(error);
+        const status = message.toLowerCase().includes('required') ? 400 : 500;
+        return sendError(req, res, status, message);
     }
 });
 

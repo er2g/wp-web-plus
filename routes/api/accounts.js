@@ -59,6 +59,15 @@ router.post('/', requireRole(['admin']), validate({ body: accountCreateSchema })
             vault.setAccountKeyForSession(accountId, dek, req.sessionID);
         }
     } catch (e) {}
+
+    try {
+        const jobQueue = req.account?.jobQueue;
+        if (req.account?.jobQueueEnabled && jobQueue && typeof jobQueue.ensureCleanupJobs === 'function') {
+            Promise.resolve(jobQueue.ensureCleanupJobs(accountId))
+                .then(() => jobQueue.syncScheduledJobs(accountId))
+                .catch(() => {});
+        }
+    } catch (e) {}
     return res.json({ success: true, account });
 });
 

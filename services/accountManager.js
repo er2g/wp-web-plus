@@ -112,6 +112,7 @@ class AccountManager {
         this.contexts = new Map();
         this.io = null;
         this.metrics = null;
+        this.jobQueue = null;
 
         const defaultConfig = getAccountConfig(DEFAULT_ACCOUNT_ID);
         migrateLegacyData(defaultConfig);
@@ -165,6 +166,7 @@ class AccountManager {
         const scriptRunner = createScriptRunner(db, whatsapp);
         const messagePipeline = createMessagePipeline({ autoReply, webhook, scriptRunner, logger, metrics: this.metrics });
 
+        const useJobQueue = Boolean(this.jobQueue?.isEnabled?.());
         const context = {
             account,
             config: accountConfig,
@@ -176,7 +178,9 @@ class AccountManager {
             scheduler,
             webhook,
             scriptRunner,
-            messagePipeline
+            messagePipeline,
+            jobQueue: this.jobQueue || null,
+            jobQueueEnabled: useJobQueue
         };
 
         const originalHandleMessage = whatsapp.handleMessage.bind(whatsapp);
@@ -199,8 +203,19 @@ class AccountManager {
         }
 
         if (config.ENABLE_BACKGROUND_JOBS) {
-            scheduler.start();
-            cleanup.start();
+            if (useJobQueue) {
+                Promise.resolve(this.jobQueue.ensureCleanupJobs(resolvedId))
+                    .then(() => this.jobQueue.syncScheduledJobs(resolvedId))
+                    .catch((error) => {
+                        logger.error('Job queue bootstrap failed', { category: 'jobs', accountId: resolvedId, error: error.message });
+                    });
+                try { cleanup.runDailyCleanup(); } catch (e) {}
+                try { cleanup.runWeeklyCleanup(); } catch (e) {}
+                logger.info('Background jobs scheduled via Redis queue', { category: 'jobs', accountId: resolvedId });
+            } else {
+                scheduler.start();
+                cleanup.start();
+            }
         } else {
             logger.info('Background jobs disabled', { category: 'lifecycle', accountId: resolvedId });
         }
@@ -229,6 +244,10 @@ class AccountManager {
                 context.cleanup?.setMetrics?.(this.metrics);
             } catch (e) {}
         }
+    }
+
+    setJobQueue(jobQueue) {
+        this.jobQueue = jobQueue || null;
     }
 
     attachAccount(req, res, next) {

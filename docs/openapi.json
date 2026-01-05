@@ -123,9 +123,11 @@
       },
       "AuthCheckResponse": {
         "type": "object",
-        "required": ["authenticated", "userId", "role", "preferences"],
+        "required": ["authenticated", "sessionAuthenticated", "vaultUnlocked", "userId", "role", "preferences"],
         "properties": {
           "authenticated": { "type": "boolean" },
+          "sessionAuthenticated": { "type": "boolean" },
+          "vaultUnlocked": { "type": "boolean" },
           "userId": { "type": ["integer", "null"] },
           "role": { "type": ["string", "null"] },
           "preferences": { "type": ["object", "null"] }
@@ -233,6 +235,45 @@
           },
           "401": {
             "description": "Invalid credentials",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          }
+        }
+      }
+    },
+    "/auth/unlock": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Unlock vault (password re-entry)",
+        "security": [{ "xsrfToken": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["password"],
+                "properties": {
+                  "password": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } }
+          },
+          "401": {
+            "description": "Invalid credentials",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+          },
+          "423": {
+            "description": "Vault locked",
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
           },
           "429": {
@@ -1262,6 +1303,38 @@
         "responses": {
           "200": { "description": "File", "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } } },
           "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/media/drive/{fileId}": {
+      "get": {
+        "tags": ["Media"],
+        "summary": "Drive media proxy fetch",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "fileId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "File", "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } } },
+          "400": { "description": "Not configured", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "500": { "description": "Error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/media/s3/{key}": {
+      "get": {
+        "tags": ["Media"],
+        "summary": "S3 media proxy fetch",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdHeader" },
+          { "name": "key", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "File", "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } } },
+          "400": { "description": "Not configured", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "500": { "description": "Error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
         }
       }
     },
