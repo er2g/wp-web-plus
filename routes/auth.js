@@ -221,6 +221,85 @@ function createAuthRouter({ redisClient, redisPrefix } = {}) {
         }
     });
 
+    function normalizeInviteCode(value) {
+        const raw = (value || '').toString().trim().toUpperCase();
+        const compact = raw.replace(/[^A-Z0-9]/g, '');
+        if (!compact) return '';
+        // Normalize as XXXX-XXXX-XXXX (12 chars) when possible; else keep compact.
+        if (compact.length === 12) {
+            return compact.match(/.{1,4}/g).join('-');
+        }
+        return raw;
+    }
+
+    router.post('/register', async (req, res, next) => {
+        try {
+            const body = req.body || {};
+            const usernameRaw = body.username;
+            const password = body.password;
+            const inviteCodeRaw = body.inviteCode || body.invite_code || body.code;
+
+            const normalizedUsername = (usernameRaw || '').trim().toLowerCase();
+            const inviteCode = normalizeInviteCode(inviteCodeRaw);
+
+            if (!normalizedUsername || !password || !inviteCode) {
+                return sendError(req, res, 400, 'Tüm alanlar gerekli');
+            }
+
+            if (!passwordMeetsPolicy(password, config.PASSWORD_POLICY)) {
+                return sendError(req, res, 400, 'Password does not meet policy');
+            }
+
+            const db = accountManager.getAccountContext(accountManager.getDefaultAccountId()).db;
+
+            const invite = db.invites.getByCode.get(inviteCode);
+            if (!invite) {
+                return sendError(req, res, 400, 'Geçersiz davet kodu');
+            }
+            if (invite.is_used) {
+                return sendError(req, res, 400, 'Bu davet kodu daha önce kullanılmış');
+            }
+
+            if (db.users.getByUsername.get(normalizedUsername)) {
+                return sendError(req, res, 409, 'Bu kullanıcı adı zaten alınmış');
+            }
+
+            const agentRole = db.roles.getByName.get('agent');
+            if (!agentRole) {
+                return sendError(req, res, 500, 'Agent role missing');
+            }
+
+            const { hashPassword } = require('../services/passwords');
+            const { hash, salt } = hashPassword(password);
+            const encryptionSalt = crypto.randomBytes(16).toString('hex');
+
+            const result = db.users.create.run(
+                normalizedUsername,
+                normalizedUsername,
+                hash,
+                salt,
+                encryptionSalt,
+                1,
+                null
+            );
+            const userId = result.lastInsertRowid;
+            db.userRoles.assign.run(userId, agentRole.id);
+
+            const marked = db.invites.markUsed.run(userId, inviteCode);
+            if (!marked || marked.changes === 0) {
+                // Invite got used concurrently; rollback user creation to avoid orphan accounts.
+                try {
+                    db.users.delete.run(userId);
+                } catch (e) {}
+                return sendError(req, res, 409, 'Bu davet kodu daha önce kullanılmış');
+            }
+
+            return res.json({ success: true, message: 'Kayıt başarılı! Giriş yapabilirsiniz.' });
+        } catch (error) {
+            return next(error);
+        }
+    });
+
     router.post('/logout', (req, res) => {
         vault.clearSession(req.sessionID);
         req.session.destroy(err => {

@@ -153,7 +153,11 @@ class InMemoryKeyVault {
             if (current.length === key.length && crypto.timingSafeEqual(current, key)) {
                 // ok, same key
             } else {
-                throw new Error('Vault key mismatch for account');
+                // Allow key rotation when another user unlocks the same account.
+                // This keeps background jobs functional for the most recently unlocked key.
+                this.accountKeys.set(accountId, key);
+                this.accountSessions.set(accountId, new Set([sessionId]));
+                return true;
             }
         } else {
             this.accountKeys.set(accountId, key);
@@ -241,4 +245,3 @@ module.exports = {
     getActiveKey,
     vault
 };
-

@@ -33,6 +33,7 @@ function createDatabase(config) {
         }
     };
     db.pragma('journal_mode = WAL');
+    db.pragma('busy_timeout = 5000');
     db.pragma('secure_delete = ON');
     db.pragma('foreign_keys = ON');
 
@@ -220,6 +221,21 @@ function createDatabase(config) {
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
         FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS invites (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code TEXT UNIQUE NOT NULL,
+        created_by INTEGER,
+        is_used INTEGER DEFAULT 0,
+        used_by INTEGER,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        used_at DATETIME,
+        FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+        FOREIGN KEY (used_by) REFERENCES users(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_invites_is_used ON invites(is_used);
+    CREATE INDEX IF NOT EXISTS idx_invites_created_at ON invites(created_at);
 
     CREATE TABLE IF NOT EXISTS contacts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -563,6 +579,27 @@ function createDatabase(config) {
                 if (!columnExists('users', 'encryption_salt')) {
                     db.exec('ALTER TABLE users ADD COLUMN encryption_salt TEXT');
                 }
+            }
+        },
+        {
+            version: 18,
+            name: 'add_invites_table',
+            apply: () => {
+                db.exec(`
+                    CREATE TABLE IF NOT EXISTS invites (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        code TEXT UNIQUE NOT NULL,
+                        created_by INTEGER,
+                        is_used INTEGER DEFAULT 0,
+                        used_by INTEGER,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        used_at DATETIME,
+                        FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+                        FOREIGN KEY (used_by) REFERENCES users(id) ON DELETE SET NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_invites_is_used ON invites(is_used);
+                    CREATE INDEX IF NOT EXISTS idx_invites_created_at ON invites(created_at);
+                `);
             }
         }
     ];
@@ -928,6 +965,22 @@ function createDatabase(config) {
         assign: db.prepare('INSERT OR REPLACE INTO user_roles (user_id, role_id) VALUES (?, ?)'),
         clear: db.prepare('DELETE FROM user_roles WHERE user_id = ?'),
         countByRole: db.prepare('SELECT COUNT(*) as count FROM user_roles WHERE role_id = ?')
+    };
+
+    const invites = {
+        create: db.prepare('INSERT INTO invites (code, created_by) VALUES (?, ?)'),
+        getByCode: db.prepare('SELECT * FROM invites WHERE code = ?'),
+        markUsed: db.prepare('UPDATE invites SET is_used = 1, used_by = ?, used_at = datetime(\'now\') WHERE code = ? AND is_used = 0'),
+        listAll: db.prepare(`
+            SELECT
+                invites.*,
+                u1.username as created_by_username,
+                u2.username as used_by_username
+            FROM invites
+            LEFT JOIN users u1 ON u1.id = invites.created_by
+            LEFT JOIN users u2 ON u2.id = invites.used_by
+            ORDER BY invites.created_at DESC
+        `)
     };
 
     const contacts = {
@@ -1684,6 +1737,7 @@ function createDatabase(config) {
         roles,
         users: wrappedUsers,
         userRoles,
+        invites,
         contacts: wrappedContacts,
         tags,
         contactTags,

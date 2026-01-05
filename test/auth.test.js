@@ -258,6 +258,48 @@ test('GET /metrics returns 401 when token is missing or wrong', async () => {
     assert.ok(wrongBody.requestId);
 });
 
+test('invite-only registration flow works (admin generates invite)', async () => {
+    const client = createClient();
+    await client.login('admin', 'test-password');
+
+    const inviteRes = await client.api('POST', '/api/invites/generate', {});
+    if (inviteRes.status !== 200) {
+        throw new Error(`invite generate failed: ${inviteRes.status} ${inviteRes.body}`);
+    }
+    const inviteParsed = JSON.parse(inviteRes.body);
+    assert.equal(inviteParsed.success, true);
+    assert.match(inviteParsed.code, /^[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$/);
+
+    const csrfToken = await client.refreshCsrfToken();
+    const username = 'friend';
+    const password = 'test-password-123';
+    const registerRes = await client.request({
+        method: 'POST',
+        urlPath: '/auth/register',
+        headers: csrfToken ? { 'X-XSRF-TOKEN': csrfToken } : {},
+        body: { username, password, inviteCode: inviteParsed.code }
+    });
+    assert.equal(registerRes.status, 200);
+    const registerParsed = JSON.parse(registerRes.body);
+    assert.equal(registerParsed.success, true);
+
+    const loginRes = await client.login(username, password);
+    if (loginRes.status !== 200) {
+        throw new Error(`login after register failed: ${loginRes.status} ${loginRes.body}`);
+    }
+    const loginParsed = JSON.parse(loginRes.body);
+    assert.equal(loginParsed.success, true);
+
+    const reuseCsrf = await client.refreshCsrfToken();
+    const reuseRes = await client.request({
+        method: 'POST',
+        urlPath: '/auth/register',
+        headers: reuseCsrf ? { 'X-XSRF-TOKEN': reuseCsrf } : {},
+        body: { username: 'friend2', password: 'test-password-123', inviteCode: inviteParsed.code }
+    });
+    assert.ok([400, 409].includes(reuseRes.status));
+});
+
 test('POST /auth/login rejects without CSRF token', async () => {
     const client = createClient();
     await client.request({ method: 'GET', urlPath: '/auth/check' });
