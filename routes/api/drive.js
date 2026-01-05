@@ -37,6 +37,7 @@ router.post('/upload', upload.single('file'), async (req, res) => {
         return sendError(req, res, 400, 'No file uploaded');
     }
 
+    const filePath = req.file.path;
     try {
         const drive = req.account.drive;
         const initialized = await drive.initialize();
@@ -45,9 +46,7 @@ router.post('/upload', upload.single('file'), async (req, res) => {
             return sendError(req, res, 400, 'Drive not configured');
         }
 
-        const result = await drive.uploadFile(req.file.path, req.file.mimetype);
-
-        fs.unlinkSync(req.file.path);
+        const result = await drive.uploadFile(filePath, req.file.mimetype);
 
         return res.json({
             success: true,
@@ -57,6 +56,12 @@ router.post('/upload', upload.single('file'), async (req, res) => {
         });
     } catch (error) {
         return sendError(req, res, 500, error.message);
+    } finally {
+        try {
+            fs.unlinkSync(filePath);
+        } catch (cleanupError) {
+            req.log?.warn?.('Drive upload cleanup failed', { error: cleanupError.message });
+        }
     }
 });
 
