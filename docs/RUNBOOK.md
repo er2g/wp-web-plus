@@ -6,7 +6,25 @@ Bu doküman, projeyi tek sunucuda **stabil** ve **ölçülebilir** şekilde çal
 
 - Node.js 18+
 - `whatsapp-web.js` için Chromium/Puppeteer bağımlılıkları (distro’ya göre değişir)
-- (Opsiyonel) Redis: `REDIS_URL` set edilirse session + Socket.IO için önerilir
+- (Önerilir) Redis: `REDIS_URL` set edilirse session + Socket.IO için önerilir (restart sonrası session kalır)
+
+### Redis (Session Store) Kurulumu
+
+Ubuntu için:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y redis-server
+sudo systemctl enable --now redis-server
+redis-cli ping
+```
+
+`.env` içine ekle:
+
+```bash
+REDIS_URL=redis://127.0.0.1:6379
+REDIS_PREFIX=wp-panel:
+```
 
 ## Kurulum
 
