@@ -201,6 +201,10 @@ function createAuthRouter({ redisClient, redisPrefix } = {}) {
                     req.session.role = user.role || 'agent';
                     try {
                         vault.setSessionKey(req.sessionID, { key: masterKey, userId: user.id });
+                        const defaultAccountId = accountManager.getDefaultAccountId();
+                        const accountId = req.session.accountId || defaultAccountId;
+                        req.session.accountId = accountId;
+                        vault.attachSessionToAccount(req.sessionID, accountId);
                     } catch (error) {
                         req.log?.error('Failed to store session key', { error: error.message });
                         return sendError(req, res, 500, 'Encryption setup error');
