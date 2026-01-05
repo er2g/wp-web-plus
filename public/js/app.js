@@ -4562,6 +4562,12 @@ function initChatAnalysisPanel() {
             const text = String(response?.analysis || '').trim();
             resultEl.textContent = text || 'Analiz sonucu bos dondu.';
             copyBtn.disabled = !text;
+            if (response?.meta?.rounds && response.meta.rounds > 1) {
+                showToast(`Analiz tamamlandi (${response.meta.rounds} parca birlestirildi)`, 'success');
+            }
+            if (response?.meta?.truncated) {
+                showToast('Analiz cikti token limitine takilip kesilmis olabilir. Mesaj sayisini dusurup tekrar deneyin.', 'warning');
+            }
         } catch (err) {
             errorEl.textContent = err.message || String(err);
             errorEl.style.display = 'block';

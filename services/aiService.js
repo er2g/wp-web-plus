@@ -66,7 +66,7 @@ class AiService {
      * Core generation function.
      * Handles text and JSON generation with optional max token looping (for long text).
      */
-    async generate({ prompt, apiKey, model, provider, maxOutputTokens = 8192, temperature = 0.3, jsonMode = false, systemInstruction = null }) {
+    async generateDetailed({ prompt, apiKey, model, provider, maxOutputTokens = 8192, temperature = 0.3, jsonMode = false, systemInstruction = null }) {
         const resolvedProvider = this.normalizeProvider(provider);
         const effectiveKey = this.resolveApiKey(resolvedProvider, apiKey);
         const effectiveModel = this.resolveModel(model);
@@ -116,7 +116,13 @@ class AiService {
             const parts = candidate.content?.parts || [];
             const text = parts.map(p => p.text).join('');
 
-            return text;
+            return {
+                text,
+                finishReason: candidate.finishReason || candidate.finish_reason || null,
+                usage: response.data?.usageMetadata || response.data?.usage || null,
+                model: effectiveModel,
+                provider: resolvedProvider
+            };
 
         } catch (error) {
             const msg = error.response?.data?.error?.message || error.message;
@@ -125,11 +131,20 @@ class AiService {
         }
     }
 
+    async generate(options) {
+        const result = await this.generateDetailed(options);
+        return result.text;
+    }
+
     /**
      * Generates text content.
      */
     async generateText(options) {
         return this.generate({ ...options, jsonMode: false });
+    }
+
+    async generateTextDetailed(options) {
+        return this.generateDetailed({ ...options, jsonMode: false });
     }
 
     /**

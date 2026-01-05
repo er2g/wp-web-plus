@@ -195,18 +195,88 @@ router.post('/analyze-chat', requireRole(['admin']), validate({ body: aiChatAnal
             ? prompt.trim()
             : 'Sohbeti analiz et, ozetle, dikkat ceken konulari ve aksiyonlari belirt.';
 
-        const payloadText = `${header}\n\nMesajlar (kisi | tarih saat | icerik):\n${messages.join('\n')}\n\nAnaliz istegi:\n${requestText}`;
+        const END_MARKER = '<<<END_OF_CHAT_ANALYSIS>>>';
 
-        const analysis = await aiService.generateText({
-            prompt: payloadText,
-            apiKey: user.ai_api_key || null,
-            provider,
-            model: selectedModel,
-            maxOutputTokens: maxTokens,
-            temperature: 0.3
+        const basePrompt = [
+            header,
+            '',
+            'Mesajlar (kisi | tarih saat | icerik):',
+            messages.join('\n'),
+            '',
+            'Analiz istegi:',
+            requestText,
+            '',
+            'Cevap kurallari:',
+            '- Turkce yaz.',
+            '- Format: (1) Kisa Ozet (max 8 madde) (2) Konular/Temalar (3) Duygu/Ton (4) Riskler (5) Aksiyon/Oneriler (max 10 madde) (6) Acik Sorular (max 5).',
+            `- Bitince tek satir olarak ${END_MARKER} yaz.`
+        ].join('\n');
+
+        const continuationPrompt = (currentText) => {
+            const tail = String(currentText || '').slice(-7000);
+            return [
+                header,
+                '',
+                'Az once yazdigin sohbet analizinin DEVAMINI yaz.',
+                'Kurallar:',
+                '- Kesinlikle tekrar etme, kaldigin yerden devam et.',
+                '- Ayni format akisini surdur; eksik bolumleri tamamla.',
+                `- Bitince tek satir olarak ${END_MARKER} yaz.`,
+                '',
+                'Simdiye kadar yazilan (son kisim):',
+                tail
+            ].join('\n');
+        };
+
+        const rounds = [];
+        const maxRounds = 4;
+        let combined = '';
+        let truncated = false;
+
+        for (let round = 0; round < maxRounds; round += 1) {
+            const promptText = round === 0 ? basePrompt : continuationPrompt(combined);
+            const result = await aiService.generateTextDetailed({
+                prompt: promptText,
+                apiKey: user.ai_api_key || null,
+                provider,
+                model: selectedModel,
+                maxOutputTokens: maxTokens,
+                temperature: 0.3
+            });
+
+            const chunk = String(result?.text || '').trim();
+            if (chunk) {
+                combined = combined ? `${combined}\n${chunk}` : chunk;
+            }
+
+            const finishReason = result?.finishReason || null;
+            rounds.push({ finishReason, chars: chunk.length });
+
+            const markerIndex = combined.indexOf(END_MARKER);
+            if (markerIndex !== -1) {
+                combined = combined.slice(0, markerIndex).trim();
+                truncated = false;
+                break;
+            }
+
+            if (finishReason === 'MAX_TOKENS') {
+                truncated = true;
+                continue;
+            }
+
+            truncated = false;
+            break;
+        }
+
+        return res.json({
+            success: true,
+            analysis: combined,
+            meta: {
+                rounds: rounds.length,
+                truncated,
+                finishReasons: rounds.map(r => r.finishReason).filter(Boolean)
+            }
         });
-
-        return res.json({ success: true, analysis });
     } catch (error) {
         return sendError(req, res, 500, error.message);
     }
