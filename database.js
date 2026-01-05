@@ -3,8 +3,17 @@
  */
 const Database = require('better-sqlite3');
 const fs = require('fs');
+const crypto = require('crypto');
 const { logger } = require('./services/logger');
 const { hashPassword } = require('./services/passwords');
+const {
+    CryptoLockedError,
+    encryptString,
+    decryptString,
+    isEncryptedValue,
+    aadForField,
+    getActiveKey
+} = require('./services/encryption');
 
 function createDatabase(config) {
     // Ensure data directory exists
@@ -24,6 +33,8 @@ function createDatabase(config) {
         }
     };
     db.pragma('journal_mode = WAL');
+    db.pragma('secure_delete = ON');
+    db.pragma('foreign_keys = ON');
 
     // Schema migrations tracking
     db.exec(`
@@ -192,6 +203,7 @@ function createDatabase(config) {
         display_name TEXT,
         password_hash TEXT NOT NULL,
         password_salt TEXT NOT NULL,
+        encryption_salt TEXT,
         is_active INTEGER DEFAULT 1,
         preferences TEXT,
         ai_api_key TEXT,
@@ -543,6 +555,15 @@ function createDatabase(config) {
                     db.exec('ALTER TABLE users ADD COLUMN ai_max_tokens INTEGER');
                 }
             }
+        },
+        {
+            version: 17,
+            name: 'add_encryption_salt_to_users',
+            apply: () => {
+                if (!columnExists('users', 'encryption_salt')) {
+                    db.exec('ALTER TABLE users ADD COLUMN encryption_salt TEXT');
+                }
+            }
         }
     ];
 
@@ -567,6 +588,85 @@ function createDatabase(config) {
     });
 
     logger.info('Database initialized', { category: 'database', dbPath: config.DB_PATH });
+
+    const accountId = config.ACCOUNT_ID || config.accountId || 'default';
+
+    const getKey = () => getActiveKey({ accountId });
+
+    const encryptField = (value, table, column, options = {}) => {
+        const {
+            allowNullWhenLocked = false,
+            allowEmptyPassthrough = false
+        } = options;
+
+        if (value === null || value === undefined) return value;
+        if (allowEmptyPassthrough && value === '') return value;
+
+        const key = getKey();
+        if (!key) {
+            if (allowNullWhenLocked) return null;
+            throw new CryptoLockedError();
+        }
+
+        return encryptString(value, key, aadForField({ accountId, table, column }));
+    };
+
+    const decryptField = (value, table, column) => {
+        if (value === null || value === undefined) return value;
+        const key = getKey();
+        if (!key) {
+            return null;
+        }
+        try {
+            return decryptString(value, key, aadForField({ accountId, table, column }));
+        } catch (error) {
+            if (!isEncryptedValue(value)) {
+                return value;
+            }
+            throw error;
+        }
+    };
+
+    const decryptRow = (row, table, columns = []) => {
+        if (!row) return row;
+        const out = { ...row };
+        for (const column of columns) {
+            if (Object.prototype.hasOwnProperty.call(out, column)) {
+                out[column] = decryptField(out[column], table, column);
+            }
+        }
+        return out;
+    };
+
+    const wrapStatement = (statement, { table, encryptArgs = [], decryptColumns = [], runOptions = {} } = {}) => {
+        if (!statement) return statement;
+
+        const wrapArgs = (args) => {
+            if (!encryptArgs.length) return args;
+            const out = args.slice();
+            for (const spec of encryptArgs) {
+                const { index, column, options } = spec;
+                if (index >= 0 && index < out.length) {
+                    out[index] = encryptField(out[index], table, column, { ...runOptions, ...(options || {}) });
+                }
+            }
+            return out;
+        };
+
+        const wrapRow = (row) => (decryptColumns.length ? decryptRow(row, table, decryptColumns) : row);
+
+        const wrapped = {};
+        if (typeof statement.run === 'function') {
+            wrapped.run = (...args) => statement.run(...wrapArgs(args));
+        }
+        if (typeof statement.get === 'function') {
+            wrapped.get = (...args) => wrapRow(statement.get(...args));
+        }
+        if (typeof statement.all === 'function') {
+            wrapped.all = (...args) => statement.all(...args).map(wrapRow);
+        }
+        return wrapped;
+    };
 
     // Prepared statements
     const messages = {
@@ -816,7 +916,8 @@ function createDatabase(config) {
         ORDER BY id ASC
         LIMIT 1
     `),
-        create: db.prepare('INSERT INTO users (username, display_name, password_hash, password_salt, is_active, preferences) VALUES (?, ?, ?, ?, ?, ?)'),
+        create: db.prepare('INSERT INTO users (username, display_name, password_hash, password_salt, encryption_salt, is_active, preferences) VALUES (?, ?, ?, ?, ?, ?, ?)'),
+        setEncryptionSalt: db.prepare('UPDATE users SET encryption_salt = ? WHERE id = ?'),
         updatePreferences: db.prepare('UPDATE users SET preferences = ? WHERE id = ?'),
         updateAiConfig: db.prepare('UPDATE users SET ai_api_key = ?, ai_model = ?, ai_max_tokens = ? WHERE id = ?'),
         delete: db.prepare('DELETE FROM users WHERE id = ?'),
@@ -1287,7 +1388,8 @@ function createDatabase(config) {
         }
 
         const { hash, salt } = hashPassword(password);
-        const result = users.create.run(username, displayName, hash, salt, 1, null);
+        const encryptionSalt = crypto.randomBytes(16).toString('hex');
+        const result = users.create.run(username, displayName, hash, salt, encryptionSalt, 1, null);
         const adminRole = roles.getByName.get('admin');
         if (adminRole) {
             userRoles.assign.run(result.lastInsertRowid, adminRole.id);
@@ -1296,33 +1398,302 @@ function createDatabase(config) {
 
     bootstrapAdmin();
 
+    const zk = {
+        decryptRow,
+        decryptField,
+        encryptField,
+        isUnlocked: () => Boolean(getKey()),
+        accountId
+    };
+
+    const wrappedMessages = {
+        ...messages,
+        save: wrapStatement(messages.save, {
+            table: 'messages',
+            runOptions: { allowNullWhenLocked: true, allowEmptyPassthrough: true },
+            encryptArgs: [
+                { index: 2, column: 'from_number' },
+                { index: 3, column: 'to_number' },
+                { index: 4, column: 'from_name' },
+                { index: 5, column: 'body', options: { allowEmptyPassthrough: true } },
+                { index: 11, column: 'quoted_body', options: { allowEmptyPassthrough: true } },
+                { index: 12, column: 'quoted_from_name' }
+            ]
+        }),
+        getByChatId: wrapStatement(messages.getByChatId, {
+            table: 'messages',
+            decryptColumns: ['from_number', 'to_number', 'from_name', 'body', 'quoted_body', 'quoted_from_name']
+        }),
+        getAll: wrapStatement(messages.getAll, {
+            table: 'messages',
+            decryptColumns: ['from_number', 'to_number', 'from_name', 'body', 'quoted_body', 'quoted_from_name']
+        })
+    };
+
+    wrappedMessages.search = {
+        all: (likeQuery) => {
+            const key = getKey();
+            if (!key) return [];
+            const needle = String(likeQuery || '').replace(/^%|%$/g, '').toLowerCase();
+            if (!needle) return [];
+
+            const scanLimit = 5000;
+            const maxResults = 100;
+            const rows = db.prepare('SELECT * FROM messages ORDER BY timestamp DESC LIMIT ?').all(scanLimit);
+            const out = [];
+            for (const row of rows) {
+                const decrypted = decryptRow(row, 'messages', ['from_number', 'to_number', 'from_name', 'body', 'quoted_body', 'quoted_from_name']);
+                const body = (decrypted.body || '').toLowerCase();
+                const quoted = (decrypted.quoted_body || '').toLowerCase();
+                if (body.includes(needle) || quoted.includes(needle)) {
+                    out.push(decrypted);
+                    if (out.length >= maxResults) break;
+                }
+            }
+            return out;
+        }
+    };
+
+    const wrappedChats = {
+        ...chats,
+        upsert: wrapStatement(chats.upsert, {
+            table: 'chats',
+            runOptions: { allowNullWhenLocked: true, allowEmptyPassthrough: true },
+            encryptArgs: [
+                { index: 1, column: 'name' },
+                { index: 4, column: 'last_message', options: { allowEmptyPassthrough: true } }
+            ]
+        }),
+        getAll: wrapStatement(chats.getAll, { table: 'chats', decryptColumns: ['name', 'last_message'] }),
+        getActive: wrapStatement(chats.getActive, { table: 'chats', decryptColumns: ['name', 'last_message'] }),
+        getArchived: wrapStatement(chats.getArchived, { table: 'chats', decryptColumns: ['name', 'last_message'] }),
+        getById: wrapStatement(chats.getById, { table: 'chats', decryptColumns: ['name', 'last_message'] })
+    };
+
+    wrappedChats.search = {
+        all: (likeQuery, limit = 50, offset = 0) => {
+            const key = getKey();
+            if (!key) return [];
+            const needle = String(likeQuery || '').replace(/^%|%$/g, '').toLowerCase();
+            if (!needle) return [];
+            const rows = db.prepare('SELECT * FROM chats ORDER BY last_message_at DESC').all();
+            const decrypted = rows.map(row => decryptRow(row, 'chats', ['name', 'last_message']));
+            const filtered = decrypted.filter(row => (row.name || '').toLowerCase().includes(needle));
+            const start = Math.max(0, Number(offset) || 0);
+            const max = Math.max(0, Number(limit) || 0);
+            return filtered.slice(start, start + max);
+        }
+    };
+
+    const wrappedContacts = {
+        ...contacts,
+        upsert: wrapStatement(contacts.upsert, {
+            table: 'contacts',
+            runOptions: { allowNullWhenLocked: true },
+            encryptArgs: [
+                { index: 1, column: 'name' },
+                { index: 2, column: 'phone' }
+            ]
+        }),
+        getByChatId: wrapStatement(contacts.getByChatId, { table: 'contacts', decryptColumns: ['name', 'phone'] })
+    };
+
+    const wrappedNotes = {
+        ...notes,
+        getByChatId: wrapStatement(notes.getByChatId, { table: 'notes', decryptColumns: ['content'] }),
+        create: wrapStatement(notes.create, {
+            table: 'notes',
+            encryptArgs: [{ index: 1, column: 'content' }]
+        }),
+        update: wrapStatement(notes.update, {
+            table: 'notes',
+            encryptArgs: [{ index: 0, column: 'content' }]
+        })
+    };
+
+    wrappedNotes.searchChatIds = {
+        all: (likeQuery) => {
+            const key = getKey();
+            if (!key) return [];
+            const needle = String(likeQuery || '').replace(/^%|%$/g, '').toLowerCase();
+            if (!needle) return [];
+            const rows = db.prepare('SELECT chat_id, content FROM notes').all();
+            const ids = new Set();
+            for (const row of rows) {
+                const content = decryptField(row.content, 'notes', 'content');
+                if (content && content.toLowerCase().includes(needle)) {
+                    ids.add(row.chat_id);
+                }
+            }
+            return Array.from(ids).map(chat_id => ({ chat_id }));
+        }
+    };
+
+    const wrappedAutoReplies = {
+        ...autoReplies,
+        getAll: wrapStatement(autoReplies.getAll, { table: 'auto_replies', decryptColumns: ['trigger_word', 'response'] }),
+        getActive: wrapStatement(autoReplies.getActive, { table: 'auto_replies', decryptColumns: ['trigger_word', 'response'] }),
+        getById: wrapStatement(autoReplies.getById, { table: 'auto_replies', decryptColumns: ['trigger_word', 'response'] }),
+        create: wrapStatement(autoReplies.create, {
+            table: 'auto_replies',
+            encryptArgs: [
+                { index: 0, column: 'trigger_word' },
+                { index: 1, column: 'response' }
+            ]
+        }),
+        update: wrapStatement(autoReplies.update, {
+            table: 'auto_replies',
+            encryptArgs: [
+                { index: 0, column: 'trigger_word' },
+                { index: 1, column: 'response' }
+            ]
+        })
+    };
+
+    const wrappedTemplates = {
+        ...messageTemplates,
+        getAll: wrapStatement(messageTemplates.getAll, { table: 'message_templates', decryptColumns: ['content', 'variables'] }),
+        getById: wrapStatement(messageTemplates.getById, { table: 'message_templates', decryptColumns: ['content', 'variables'] }),
+        create: wrapStatement(messageTemplates.create, {
+            table: 'message_templates',
+            encryptArgs: [
+                { index: 1, column: 'content' },
+                { index: 2, column: 'variables' }
+            ]
+        }),
+        update: wrapStatement(messageTemplates.update, {
+            table: 'message_templates',
+            encryptArgs: [
+                { index: 1, column: 'content' },
+                { index: 2, column: 'variables' }
+            ]
+        })
+    };
+
+    const wrappedScheduled = {
+        ...scheduled,
+        getAll: wrapStatement(scheduled.getAll, { table: 'scheduled_messages', decryptColumns: ['chat_name', 'message'] }),
+        getPending: wrapStatement(scheduled.getPending, { table: 'scheduled_messages', decryptColumns: ['chat_name', 'message'] }),
+        getRecurring: wrapStatement(scheduled.getRecurring, { table: 'scheduled_messages', decryptColumns: ['chat_name', 'message'] }),
+        getById: wrapStatement(scheduled.getById, { table: 'scheduled_messages', decryptColumns: ['chat_name', 'message'] }),
+        create: wrapStatement(scheduled.create, {
+            table: 'scheduled_messages',
+            encryptArgs: [
+                { index: 1, column: 'chat_name' },
+                { index: 2, column: 'message' }
+            ]
+        })
+    };
+
+    const wrappedUsers = {
+        ...users,
+        getById: wrapStatement(users.getById, { table: 'users', decryptColumns: ['preferences', 'ai_api_key'] }),
+        getByUsername: wrapStatement(users.getByUsername, { table: 'users', decryptColumns: ['preferences', 'ai_api_key'] }),
+        getFirstAiConfig: {
+            get: () => {
+                const row = users.getFirstAiConfig.get();
+                if (!row) return row;
+                return {
+                    apiKey: decryptField(row.apiKey, 'users', 'ai_api_key'),
+                    model: row.model,
+                    maxTokens: row.maxTokens
+                };
+            }
+        },
+        updatePreferences: wrapStatement(users.updatePreferences, {
+            table: 'users',
+            encryptArgs: [{ index: 0, column: 'preferences' }]
+        }),
+        updateAiConfig: wrapStatement(users.updateAiConfig, {
+            table: 'users',
+            encryptArgs: [{ index: 0, column: 'ai_api_key' }]
+        })
+    };
+
+    const wrappedMaintenance = {
+        ...maintenance,
+        vacuum: () => {
+            db.pragma('wal_checkpoint(TRUNCATE)');
+            db.exec('VACUUM');
+        }
+    };
+
+    const LOG_SENSITIVE_KEY = /pass(word)?|token|secret|authorization|cookie|api[_-]?key|body|content|quoted_body|from_name|from_number|to_number|phone/i;
+    const redactLogObject = (value, depth = 0, seen = new WeakSet()) => {
+        if (value === null || value === undefined) return value;
+        if (typeof value === 'string') return value.length > 2000 ? value.slice(0, 2000) + '…' : value;
+        if (typeof value !== 'object') return value;
+        if (seen.has(value) || depth > 6) return '[Truncated]';
+        seen.add(value);
+        if (Array.isArray(value)) return value.map(v => redactLogObject(v, depth + 1, seen));
+        const out = {};
+        for (const [k, v] of Object.entries(value)) {
+            out[k] = LOG_SENSITIVE_KEY.test(k) ? '[REDACTED]' : redactLogObject(v, depth + 1, seen);
+        }
+        return out;
+    };
+
+    const sanitizeLogMessage = (message) => {
+        if (message === null || message === undefined) return message;
+        const text = String(message);
+        const scrubbed = text.replace(/Bearer\\s+[A-Za-z0-9._-]+/g, 'Bearer [REDACTED]');
+        return scrubbed.length > 500 ? scrubbed.slice(0, 500) + '…' : scrubbed;
+    };
+
+    const sanitizeLogData = (data) => {
+        if (data === null || data === undefined) return data;
+        if (typeof data !== 'string') return JSON.stringify(redactLogObject(data));
+        try {
+            const parsed = JSON.parse(data);
+            return JSON.stringify(redactLogObject(parsed));
+        } catch (e) {
+            const scrubbed = data.replace(/Bearer\\s+[A-Za-z0-9._-]+/g, 'Bearer [REDACTED]');
+            return scrubbed.length > 2000 ? scrubbed.slice(0, 2000) + '…' : scrubbed;
+        }
+    };
+
+    const wrappedLogs = {
+        ...logs,
+        add: {
+            run: (level, category, message, data) => logs.add.run(level, category, sanitizeLogMessage(message), sanitizeLogData(data))
+        }
+    };
+
+    const wrappedScriptLogs = {
+        ...scriptLogs,
+        add: {
+            run: (scriptId, level, message, data) => scriptLogs.add.run(scriptId, level, sanitizeLogMessage(message), sanitizeLogData(data))
+        }
+    };
+
     return {
         db,
         close,
-        messages,
-        chats,
-        autoReplies,
-        messageTemplates,
-        scheduled,
+        crypto: zk,
+        messages: wrappedMessages,
+        chats: wrappedChats,
+        autoReplies: wrappedAutoReplies,
+        messageTemplates: wrappedTemplates,
+        scheduled: wrappedScheduled,
         webhooks,
         webhookDeliveries,
         scripts,
-        scriptLogs,
-        logs,
+        scriptLogs: wrappedScriptLogs,
+        logs: wrappedLogs,
         locks,
         roles,
-        users,
+        users: wrappedUsers,
         userRoles,
-        contacts,
+        contacts: wrappedContacts,
         tags,
         contactTags,
-        notes,
+        notes: wrappedNotes,
         whatsappSettings,
         syncRuns,
         chatSyncState,
         mediaTasks,
         profilePicTasks,
-        maintenance,
+        maintenance: wrappedMaintenance,
         reports
     };
 }

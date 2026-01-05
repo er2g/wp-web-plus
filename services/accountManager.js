@@ -12,6 +12,7 @@ const { createScriptRunner } = require('./scriptRunner');
 const { createMessagePipeline } = require('./messagePipeline');
 const { logger } = require('./logger');
 const { sendError } = require('../lib/httpResponses');
+const { vault } = require('./encryption');
 
 const ACCOUNTS_FILE = path.join(config.DATA_DIR, 'accounts.json');
 const ACCOUNTS_DIR = path.join(config.DATA_DIR, 'accounts');
@@ -61,6 +62,7 @@ function getAccountConfig(accountId) {
     const accountDataDir = path.join(ACCOUNTS_DIR, accountId);
     return {
         ...config,
+        ACCOUNT_ID: accountId,
         DATA_DIR: accountDataDir,
         SESSION_DIR: path.join(accountDataDir, 'session'),
         DB_PATH: path.join(accountDataDir, 'whatsapp.db'),
@@ -245,6 +247,12 @@ class AccountManager {
             const fallbackAccount = this.findAccount(fallbackId);
             if (fallbackAccount) {
                 req.session.accountId = fallbackId;
+                try {
+                    vault.attachSessionToAccount(req.sessionID, fallbackId);
+                } catch (error) {
+                    vault.clearSession(req.sessionID);
+                    return sendError(req, res, 403, 'Vault key mismatch');
+                }
                 req.account = this.getAccountContext(fallbackId);
                 return next();
             }
@@ -252,6 +260,12 @@ class AccountManager {
         }
 
         req.session.accountId = accountId;
+        try {
+            vault.attachSessionToAccount(req.sessionID, accountId);
+        } catch (error) {
+            vault.clearSession(req.sessionID);
+            return sendError(req, res, 403, 'Vault key mismatch');
+        }
         req.account = this.getAccountContext(accountId);
         return next();
     }

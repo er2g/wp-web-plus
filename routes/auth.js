@@ -5,7 +5,9 @@ const express = require('express');
 const config = require('../config');
 const accountManager = require('../services/accountManager');
 const { passwordMeetsPolicy, verifyPassword } = require('../services/passwords');
+const { deriveMasterKey, vault } = require('../services/encryption');
 const { sendError } = require('../lib/httpResponses');
+const crypto = require('crypto');
 
 const isProduction = process.env.NODE_ENV === 'production';
 
@@ -168,6 +170,27 @@ function createAuthRouter({ redisClient, redisPrefix } = {}) {
 
             if (user && user.is_active && verifyPassword(password, user.password_salt, user.password_hash)) {
                 await clearAttempts(ip, req);
+                vault.clearSession(req.sessionID);
+
+                let encryptionSalt = user.encryption_salt;
+                if (!encryptionSalt) {
+                    encryptionSalt = crypto.randomBytes(16).toString('hex');
+                    try {
+                        db.users.setEncryptionSalt.run(encryptionSalt, user.id);
+                    } catch (error) {
+                        req.log?.error('Failed to set encryption salt', { error: error.message });
+                        return sendError(req, res, 500, 'Encryption setup error');
+                    }
+                }
+
+                let masterKey;
+                try {
+                    masterKey = deriveMasterKey(password, encryptionSalt);
+                } catch (error) {
+                    req.log?.error('Failed to derive master key', { error: error.message });
+                    return sendError(req, res, 500, 'Encryption setup error');
+                }
+
                 req.session.regenerate(err => {
                     if (err) {
                         req.log?.error('Failed to regenerate session after login', { error: err.message });
@@ -176,6 +199,12 @@ function createAuthRouter({ redisClient, redisPrefix } = {}) {
                     req.session.authenticated = true;
                     req.session.userId = user.id;
                     req.session.role = user.role || 'agent';
+                    try {
+                        vault.setSessionKey(req.sessionID, { key: masterKey, userId: user.id });
+                    } catch (error) {
+                        req.log?.error('Failed to store session key', { error: error.message });
+                        return sendError(req, res, 500, 'Encryption setup error');
+                    }
                     return res.json({ success: true });
                 });
                 return;
@@ -189,6 +218,7 @@ function createAuthRouter({ redisClient, redisPrefix } = {}) {
     });
 
     router.post('/logout', (req, res) => {
+        vault.clearSession(req.sessionID);
         req.session.destroy(err => {
             if (err) {
                 req.log?.error('Failed to destroy session on logout', { error: err.message });
@@ -205,10 +235,11 @@ function createAuthRouter({ redisClient, redisPrefix } = {}) {
 
     router.get('/check', (req, res) => {
         let preferences = null;
+        const vaultUnlocked = Boolean(req.session?.authenticated && vault.hasSessionKey(req.sessionID));
         if (req.session && req.session.authenticated && req.session.userId) {
             const db = accountManager.getAccountContext(accountManager.getDefaultAccountId()).db;
             const user = db.users.getById.get(req.session.userId);
-            if (user && user.preferences) {
+            if (vaultUnlocked && user && user.preferences) {
                 try {
                     preferences = JSON.parse(user.preferences);
                 } catch (e) {}
@@ -216,7 +247,8 @@ function createAuthRouter({ redisClient, redisPrefix } = {}) {
         }
 
         return res.json({
-            authenticated: req.session && req.session.authenticated === true,
+            authenticated: req.session && req.session.authenticated === true && vaultUnlocked,
+            vaultUnlocked,
             userId: req.session?.userId || null,
             role: req.session?.role || null,
             preferences

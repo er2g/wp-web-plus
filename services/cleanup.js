@@ -120,6 +120,13 @@ class CleanupService {
         try {
             const cutoff = Date.now() - this.config.MESSAGE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
             const messageResult = this.db.maintenance.cleanupMessages.run(cutoff);
+            if (messageResult.changes > 0 && typeof this.db?.maintenance?.vacuum === 'function') {
+                try {
+                    this.db.maintenance.vacuum();
+                } catch (e) {
+                    this.db.logs.add.run('warn', 'cleanup', 'VACUUM after message cleanup failed', JSON.stringify({ error: e.message }));
+                }
+            }
 
             this.recordSummary('weekly', {
                 messagesDeleted: messageResult.changes,

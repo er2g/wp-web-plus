@@ -21,7 +21,6 @@ async function start() {
     });
 
     let shuttingDown = false;
-    let whatsappInitTimer = null;
 
     async function shutdown(reason, exitCode = 0) {
         if (shuttingDown) {
@@ -30,11 +29,6 @@ async function start() {
             return;
         }
         shuttingDown = true;
-
-        if (whatsappInitTimer) {
-            clearTimeout(whatsappInitTimer);
-            whatsappInitTimer = null;
-        }
 
         logger.info('Shutting down...', { category: 'lifecycle', reason });
 
@@ -94,13 +88,7 @@ async function start() {
         logger.info('Password: [PROTECTED]');
         logger.info('='.repeat(50));
 
-        const defaultContext = accountManager.getAccountContext(accountManager.getDefaultAccountId());
-
-        whatsappInitTimer = setTimeout(() => {
-            defaultContext.whatsapp.initialize().catch(err => {
-                logger.error('WhatsApp init error', { error: err.message });
-            });
-        }, 2000);
+        // WhatsApp initialization is triggered by an authenticated (unlocked) UI connection via Socket.IO.
     });
 
     process.on('SIGINT', () => {

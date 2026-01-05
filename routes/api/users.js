@@ -8,6 +8,7 @@ const { validate } = require('../middleware/validate');
 const { sendError } = require('../../lib/httpResponses');
 const { hashPassword, passwordMeetsPolicy } = require('../../services/passwords');
 const accountManager = require('../../services/accountManager');
+const crypto = require('crypto');
 
 const intLike = (message) => z.preprocess(
     (value) => {
@@ -83,7 +84,8 @@ router.post('/', requireRole(['admin']), validate({ body: userCreateSchema }), (
     }
 
     const { hash, salt } = hashPassword(password);
-    const result = req.account.db.users.create.run(username, display_name || username, hash, salt, 1);
+    const encryptionSalt = crypto.randomBytes(16).toString('hex');
+    const result = req.account.db.users.create.run(username, display_name || username, hash, salt, encryptionSalt, 1, null);
     req.account.db.userRoles.assign.run(result.lastInsertRowid, roleId);
     return res.json({ success: true, id: result.lastInsertRowid });
 });

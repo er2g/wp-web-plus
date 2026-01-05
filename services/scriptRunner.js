@@ -344,6 +344,14 @@ class ScriptRunner {
     async processMessage(msgData) {
         if (!msgData) return;
 
+        if (typeof this.db?.crypto?.isUnlocked === 'function' && !this.db.crypto.isUnlocked()) {
+            return;
+        }
+
+        if (typeof msgData.body !== 'string') {
+            return;
+        }
+
         const scripts = this.db.scripts.getByTrigger.all('message');
 
         for (const script of scripts) {

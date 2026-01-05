@@ -106,16 +106,6 @@ router.get('/items', validate({ query: mediaItemsQuerySchema }), (req, res) => {
         }
     }
 
-    if (q) {
-        where.push(`(
-            COALESCE(c.name, '') LIKE ?
-            OR COALESCE(m.body, '') LIKE ?
-            OR COALESCE(m.chat_id, '') LIKE ?
-        )`);
-        const needle = '%' + q + '%';
-        params.push(needle, needle, needle);
-    }
-
     const knownTypes = ['image', 'gif', 'video', 'document', 'audio', 'ptt', 'sticker'];
     if (kind && kind !== 'all') {
         if (kind === 'image') {
@@ -138,12 +128,17 @@ router.get('/items', validate({ query: mediaItemsQuerySchema }), (req, res) => {
 
     const whereSql = where.length ? ('WHERE ' + where.join(' AND ')) : '';
     const effectiveLimit = Math.min(201, Number(limit) + 1);
+    const qLower = q ? q.toLowerCase() : '';
+    const scanLimit = qLower
+        ? Math.min(20000, Math.max(5000, (Number(offset) + Number(limit) + 1) * 20))
+        : effectiveLimit;
+    const scanOffset = qLower ? 0 : offset;
 
     const rows = req.account.db.db.prepare(`
         SELECT
             m.message_id,
             m.chat_id,
-            COALESCE(c.name, m.chat_id) AS chat_name,
+            c.name AS chat_name,
             COALESCE(c.is_group, 0) AS chat_is_group,
             COALESCE(c.is_archived, 0) AS chat_is_archived,
             m.type,
@@ -160,10 +155,29 @@ router.get('/items', validate({ query: mediaItemsQuerySchema }), (req, res) => {
         ${whereSql}
         ORDER BY m.timestamp DESC
         LIMIT ? OFFSET ?
-    `).all(...params, effectiveLimit, offset);
+    `).all(...params, scanLimit, scanOffset);
 
-    const hasMore = rows.length > limit;
-    const trimmed = hasMore ? rows.slice(0, limit) : rows;
+    const decryptField = req.account.db.crypto.decryptField;
+    const normalized = rows.map((row) => ({
+        ...row,
+        chat_name: decryptField(row.chat_name, 'chats', 'name') || row.chat_id,
+        body: decryptField(row.body, 'messages', 'body')
+    }));
+
+    const filteredRows = qLower
+        ? normalized.filter((row) => {
+            const chatName = (row.chat_name || '').toLowerCase();
+            const bodyText = (row.body || '').toLowerCase();
+            const chatId = (row.chat_id || '').toLowerCase();
+            return chatName.includes(qLower) || bodyText.includes(qLower) || chatId.includes(qLower);
+        })
+        : normalized;
+
+    const pageRows = qLower
+        ? filteredRows.slice(Number(offset) || 0, (Number(offset) || 0) + effectiveLimit)
+        : filteredRows;
+    const hasMore = pageRows.length > limit;
+    const trimmed = hasMore ? pageRows.slice(0, limit) : pageRows;
 
     const items = trimmed.map((row) => {
         const normalizedType = row.type || '';

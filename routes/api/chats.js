@@ -102,7 +102,8 @@ router.get('/', (req, res) => {
     const chats = req.account.db.db.prepare(
         `SELECT * FROM chats WHERE is_archived = ? AND chat_id IN (${placeholders}) ORDER BY last_message_at DESC`
     ).all(archivedFlag, ...chatIds);
-    return res.json(chats);
+    const decrypted = chats.map((row) => req.account.db.crypto.decryptRow(row, 'chats', ['name', 'last_message']));
+    return res.json(decrypted);
 });
 
 router.get('/search', validate({ query: chatSearchQuerySchema }), (req, res) => {
@@ -134,45 +135,32 @@ router.get('/search', validate({ query: chatSearchQuerySchema }), (req, res) => 
         return res.json([]);
     }
 
-    if (!chatIds && query) {
-        const results = req.account.db.db.prepare(`
+    const qLower = (query || '').toLowerCase();
+    const start = Math.max(0, Number(offset) || 0);
+    const max = Math.max(0, Number(limit) || 0);
+
+    let baseChats;
+    if (chatIds) {
+        const ids = Array.from(chatIds);
+        const placeholders = ids.map(() => '?').join(',');
+        const rows = req.account.db.db.prepare(`
             SELECT * FROM chats
             WHERE is_archived = ?
-              AND name LIKE ?
+              AND chat_id IN (${placeholders})
             ORDER BY last_message_at DESC
-            LIMIT ? OFFSET ?
-        `).all(archivedFlag, '%' + query + '%', limit, offset);
-        return res.json(results);
+        `).all(archivedFlag, ...ids);
+        baseChats = rows.map((row) => req.account.db.crypto.decryptRow(row, 'chats', ['name', 'last_message']));
+    } else {
+        baseChats = archived
+            ? req.account.db.chats.getArchived.all()
+            : req.account.db.chats.getActive.all();
     }
 
-    const filterIds = chatIds ? Array.from(chatIds) : null;
-    if (query) {
-        const placeholders = filterIds ? filterIds.map(() => '?').join(',') : '';
-        const params = [archivedFlag, '%' + query + '%'];
-        if (filterIds) {
-            params.push(...filterIds);
-        }
-        params.push(limit, offset);
-        const results = req.account.db.db.prepare(`
-            SELECT * FROM chats
-            WHERE is_archived = ?
-              AND name LIKE ?
-              ${filterIds ? `AND chat_id IN (${placeholders})` : ''}
-            ORDER BY last_message_at DESC
-            LIMIT ? OFFSET ?
-        `).all(...params);
-        return res.json(results);
-    }
+    const filtered = qLower
+        ? baseChats.filter((chat) => (chat.name || '').toLowerCase().includes(qLower))
+        : baseChats;
 
-    const placeholders = filterIds.map(() => '?').join(',');
-    const results = req.account.db.db.prepare(`
-        SELECT * FROM chats
-        WHERE is_archived = ?
-          AND chat_id IN (${placeholders})
-        ORDER BY last_message_at DESC
-        LIMIT ? OFFSET ?
-    `).all(archivedFlag, ...filterIds, limit, offset);
-    return res.json(results);
+    return res.json(filtered.slice(start, start + max));
 });
 
 router.post('/:id/archive', validate({ params: chatIdParamSchema }), async (req, res) => {

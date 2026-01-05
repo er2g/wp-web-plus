@@ -18,6 +18,7 @@ const { sendError } = require('./lib/httpResponses');
 const accountManager = require('./services/accountManager');
 const { logger, requestContext } = require('./services/logger');
 const { requireAuth, requireRole } = require('./routes/middleware/auth');
+const { vault } = require('./services/encryption');
 
 const authRoutes = require('./routes/auth');
 const apiRoutes = require('./routes/api');
@@ -439,7 +440,7 @@ function createApp() {
     app.use('/api', apiIpLimiter, apiUserLimiter, apiRoutes);
 
     app.get('/', (req, res) => {
-        if (req.session && req.session.authenticated) {
+        if (req.session && req.session.authenticated && vault.hasSessionKey(req.sessionID)) {
             res.sendFile(path.join(__dirname, 'public', 'index.html'));
         } else {
             res.sendFile(path.join(__dirname, 'public', 'login.html'));
@@ -460,13 +461,25 @@ function createApp() {
 
     io.on('connection', (socket) => {
         const session = socket.request.session;
-        if (!session || !session.authenticated) {
+        if (!session || !session.authenticated || !vault.hasSessionKey(socket.request.sessionID)) {
             socket.disconnect();
             return;
         }
 
         const requestedAccount = socket.handshake.auth?.accountId;
-        const accountId = requestedAccount || session.accountId || accountManager.getDefaultAccountId();
+        let accountId = requestedAccount || session.accountId || accountManager.getDefaultAccountId();
+        if (!accountManager.findAccount(accountId)) {
+            accountId = accountManager.getDefaultAccountId();
+        }
+
+        try {
+            vault.attachSessionToAccount(socket.request.sessionID, accountId);
+        } catch (error) {
+            vault.clearSession(socket.request.sessionID);
+            socket.disconnect();
+            return;
+        }
+
         const context = accountManager.getAccountContext(accountId);
         const resolvedAccountId = context?.account?.id || accountId;
         session.accountId = resolvedAccountId;

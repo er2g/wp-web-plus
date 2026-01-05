@@ -57,7 +57,8 @@ router.get('/', validate({ query: listQuerySchema }), (req, res) => {
     });
 
     const notesByChat = {};
-    noteRows.forEach(note => {
+    noteRows.forEach(noteRaw => {
+        const note = req.account.db.crypto.decryptRow(noteRaw, 'notes', ['content']);
         if (!notesByChat[note.chat_id]) {
             notesByChat[note.chat_id] = [];
         }

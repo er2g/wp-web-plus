@@ -129,6 +129,11 @@ class SchedulerService {
             return;
         }
 
+        if (typeof this.db?.crypto?.isUnlocked === 'function' && !this.db.crypto.isUnlocked()) {
+            this.recordJob('scheduler.tick', 'locked');
+            return;
+        }
+
         this.tickInProgress = true;
         const startNs = process.hrtime.bigint();
         try {

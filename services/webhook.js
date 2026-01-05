@@ -48,6 +48,11 @@ class WebhookService {
             return;
         }
 
+        if (typeof this.db?.crypto?.isUnlocked === 'function' && !this.db.crypto.isUnlocked()) {
+            this.safeCountDelivery(event, 'skipped');
+            return;
+        }
+
         const webhooks = this.db.webhooks.getActive.all();
 
         for (const webhook of webhooks) {

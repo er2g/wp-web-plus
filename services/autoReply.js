@@ -40,6 +40,14 @@ class AutoReplyService {
             return false;
         }
 
+        if (typeof this.db?.crypto?.isUnlocked === 'function' && !this.db.crypto.isUnlocked()) {
+            return false;
+        }
+
+        if (typeof msgData.body !== 'string') {
+            return false;
+        }
+
         // Check cooldown
         const lastReplyTime = this.cooldowns.get(msgData.chatId);
         if (lastReplyTime && Date.now() - lastReplyTime < this.COOLDOWN_MS) {
@@ -54,6 +62,9 @@ class AutoReplyService {
         let chatTagIds = null;
 
         for (const rule of rules) {
+            if (typeof rule?.trigger_word !== 'string' || typeof rule?.response !== 'string') {
+                continue;
+            }
             // Check Tag Constraints
             if (rule.required_tag_id || rule.exclude_tag_id) {
                 if (chatTagIds === null) {
