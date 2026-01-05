@@ -86,9 +86,21 @@ const FONT_FAMILY_PRESETS = {
 
 let selectedAttachment = null;
 let attachmentSendMode = 'media'; // 'media' | 'sticker'
+let cameraMode = 'photo'; // 'photo' | 'video'
+let cameraFacingMode = 'environment';
+let cameraStream = null;
+let cameraRecorder = null;
+let cameraRecorderMimeType = '';
+let cameraRecordedChunks = [];
+let cameraFlashEnabled = true;
+let cameraReady = false;
+let cameraCapturedBlob = null;
+let cameraCapturedKind = null;
+let cameraReviewUrl = null;
 let replyTarget = null; // { messageId, fromName, previewText }
 const pendingOutgoing = new Map(); // tempId -> { tempId, chatId, body, timestamp, serverMessageId }
 let chatAutoScrollSeq = 0;
+let aiAssistantHistory = [];
 
 let notificationSoundAudio = null;
 let notificationSoundAudioSrc = null;
@@ -129,6 +141,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupAttachmentPicker();
     initEmojiPicker();
     updateStickerButtonUI();
+    setupPasteHandler();
     setupMessagesListScroll();
     setupChatMessagesScroll();
     initializeApp();
@@ -139,6 +152,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!e.target.closest('.dropdown')) {
             document.querySelectorAll('.dropdown-menu.show').forEach(m => m.classList.remove('show'));
         }
+        if (!e.target.closest('#attachMenu') && !e.target.closest('.attach-btn')) {
+            closeAttachMenu();
+        }
         if (!e.target.closest('#emojiPicker') && !e.target.closest('.emoji-btn')) {
             closeEmojiPicker();
         }
@@ -147,6 +163,10 @@ document.addEventListener('DOMContentLoaded', () => {
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
             closeEmojiPicker();
+            closeAttachMenu();
+            if (document.getElementById('cameraOverlay')) {
+                closeCameraCapture();
+            }
         }
     });
 });
@@ -1394,6 +1414,16 @@ function showTab(tabName) {
 
 function openReports() {
     window.location.href = '/reports.html';
+}
+
+function openChatAnalysis() {
+    if (!currentChat) {
+        showToast('Once bir sohbet secin', 'warning');
+        return;
+    }
+    const menu = document.getElementById('chatMenu');
+    if (menu) menu.classList.remove('show');
+    showModal('chat-analysis');
 }
 
 // Connection Status
@@ -3384,10 +3414,38 @@ async function recoverMedia() {
 
 // Attachments
 function toggleAttachMenu() {
-    const input = document.getElementById('mediaInput');
-    if (input) {
-        input.click();
+    const menu = document.getElementById('attachMenu');
+    const btn = document.querySelector('.attach-btn');
+    if (!menu) {
+        const input = document.getElementById('mediaInput');
+        if (input) input.click();
+        return;
     }
+    const willOpen = !menu.classList.contains('show');
+    menu.classList.toggle('show', willOpen);
+    if (btn) btn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+}
+
+function closeAttachMenu() {
+    const menu = document.getElementById('attachMenu');
+    const btn = document.querySelector('.attach-btn');
+    if (!menu) return;
+    menu.classList.remove('show');
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+}
+
+function openFilePicker(preferredType) {
+    closeAttachMenu();
+    const input = document.getElementById('mediaInput');
+    if (!input) return;
+    const defaultAccept = 'image/*,video/*';
+    let accept = defaultAccept;
+    if (preferredType === 'photo') accept = 'image/*';
+    else if (preferredType === 'video') accept = 'video/*';
+    input.setAttribute('accept', accept);
+    input.value = '';
+    input.click();
+    setTimeout(() => input.setAttribute('accept', defaultAccept), 0);
 }
 
 function setupAttachmentPicker() {
@@ -3396,7 +3454,14 @@ function setupAttachmentPicker() {
     input.addEventListener('change', handleMediaSelect);
 }
 
+function setupPasteHandler() {
+    const input = document.getElementById('messageInput');
+    if (!input) return;
+    input.addEventListener('paste', handleChatPaste);
+}
+
 function handleMediaSelect(event) {
+    closeAttachMenu();
     const file = event.target.files && event.target.files[0];
     if (!file) return;
     selectedAttachment = file;
@@ -3408,6 +3473,34 @@ function handleMediaSelect(event) {
     renderAttachmentPreview();
 }
 
+function handleChatPaste(event) {
+    const clipboard = event.clipboardData;
+    if (!clipboard) return;
+
+    const files = clipboard.files || [];
+    let file = files.length ? files[0] : null;
+
+    if (!file) {
+        const items = clipboard.items || [];
+        for (const item of items) {
+            if (!item || typeof item.type !== 'string') continue;
+            if (!item.type.startsWith('image/') && !item.type.startsWith('video/')) continue;
+            file = item.getAsFile ? item.getAsFile() : null;
+            if (file) break;
+        }
+    }
+
+    if (!file) return;
+    event.preventDefault();
+    selectedAttachment = file;
+    if (!file.type.startsWith('image/') && attachmentSendMode === 'sticker') {
+        attachmentSendMode = 'media';
+    }
+    updateStickerButtonUI();
+    renderAttachmentPreview();
+    showToast('Panodan medya eklendi', 'success');
+}
+
 function renderAttachmentPreview() {
     const preview = document.getElementById('attachmentPreview');
     if (!preview) return;
@@ -3416,7 +3509,8 @@ function renderAttachmentPreview() {
         preview.innerHTML = '';
         return;
     }
-    const canSticker = selectedAttachment.type.startsWith('image/');
+    const fileType = typeof selectedAttachment.type === 'string' ? selectedAttachment.type : '';
+    const canSticker = fileType.startsWith('image/');
     const modeBadge = (canSticker && attachmentSendMode === 'sticker')
         ? '<span class="attachment-badge">Sticker</span>'
         : '';
@@ -3440,6 +3534,463 @@ function clearAttachment() {
         input.value = '';
     }
     renderAttachmentPreview();
+}
+
+function renderCameraOverlay() {
+    closeCameraCapture(true);
+    const overlay = document.createElement('div');
+    overlay.id = 'cameraOverlay';
+    overlay.className = 'camera-overlay';
+    overlay.innerHTML = `
+        <div class="camera-shell">
+            <div class="camera-bar">
+                <div class="camera-status">
+                    <div id="cameraModeLabel">${cameraMode === 'video' ? 'Video cekimi' : 'Fotograf cekimi'}</div>
+                    <div class="camera-hint" id="cameraStatusHint">Kamera aciliyor...</div>
+                </div>
+                <div class="camera-bar-actions">
+                    <button class="ghost-btn" type="button" id="cameraFlashBtn" onclick="toggleCameraFlash()">
+                        <i class="bi bi-lightning-charge-fill"></i>
+                        <span>${cameraFlashEnabled ? 'Flash acik' : 'Flash kapali'}</span>
+                    </button>
+                    <button class="ghost-btn" type="button" onclick="switchCameraFacing()">
+                        <i class="bi bi-arrow-repeat"></i>
+                        <span>Kamera degistir</span>
+                    </button>
+                    <button class="ghost-btn" type="button" onclick="closeCameraCapture()">
+                        <i class="bi bi-x-lg"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="camera-preview-wrap">
+                <video id="cameraPreview" autoplay playsinline muted></video>
+                <div class="camera-review" id="cameraReview" style="display:none;"></div>
+                <div class="camera-flash" id="cameraFlash"></div>
+            </div>
+            <div class="camera-controls">
+                <div class="camera-mode-switch">
+                    <button type="button" class="camera-mode-btn" data-camera-mode="photo">Fotograf</button>
+                    <button type="button" class="camera-mode-btn" data-camera-mode="video">Video</button>
+                </div>
+                <div class="camera-actions">
+                    <button class="btn btn-secondary" type="button" id="cameraRetakeBtn" style="display:none;">Tekrar cek</button>
+                    <button class="btn btn-secondary" type="button" onclick="closeCameraCapture()">Iptal</button>
+                    <button class="btn btn-primary" type="button" id="cameraActionBtn">${cameraMode === 'video' ? 'Video cek' : 'Fotograf cek'}</button>
+                </div>
+            </div>
+        </div>
+    `;
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closeCameraCapture(); });
+    document.body.appendChild(overlay);
+
+    const actionBtn = document.getElementById('cameraActionBtn');
+    if (actionBtn) {
+        actionBtn.addEventListener('click', () => {
+            if (cameraMode === 'video') toggleVideoRecording();
+            else capturePhotoFromCamera();
+        });
+    }
+    const modeButtons = overlay.querySelectorAll('.camera-mode-btn');
+    modeButtons.forEach(btn => {
+        btn.addEventListener('click', () => changeCameraMode(btn.dataset.cameraMode));
+    });
+
+    updateCameraModeUI();
+}
+
+function openCameraCapture(mode = 'photo') {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        showToast('Cihaz kamerasi desteklenmiyor veya engellendi', 'error');
+        openFilePicker(mode === 'video' ? 'video' : 'photo');
+        return;
+    }
+    if (mode === 'video' && typeof MediaRecorder === 'undefined') {
+        showToast('Tarayici video kaydini desteklemiyor. Yerlesik kamera aciliyor.', 'warning');
+        openFilePicker('video');
+        return;
+    }
+    cameraMode = mode === 'video' ? 'video' : 'photo';
+    cameraRecorderMimeType = '';
+    cameraRecordedChunks = [];
+    cameraReady = false;
+    cameraCapturedBlob = null;
+    cameraCapturedKind = null;
+    if (cameraReviewUrl) {
+        try { URL.revokeObjectURL(cameraReviewUrl); } catch (e) {}
+        cameraReviewUrl = null;
+    }
+    closeAttachMenu();
+    renderCameraOverlay();
+    startCameraStream();
+}
+
+function changeCameraMode(mode) {
+    const normalized = mode === 'video' ? 'video' : 'photo';
+    if (cameraRecorder && cameraRecorder.state === 'recording') {
+        showToast('Kayit surerken mod degistirilemez', 'info');
+        return;
+    }
+    if (cameraMode === normalized && !cameraCapturedBlob) return;
+    cameraMode = normalized;
+    cameraRecorderMimeType = '';
+    cameraRecordedChunks = [];
+    cameraReady = false;
+    cameraCapturedBlob = null;
+    cameraCapturedKind = null;
+    if (cameraReviewUrl) {
+        try { URL.revokeObjectURL(cameraReviewUrl); } catch (e) {}
+        cameraReviewUrl = null;
+    }
+    updateCameraModeUI();
+    startCameraStream();
+}
+
+function updateCameraModeUI(isRecording) {
+    const overlay = document.getElementById('cameraOverlay');
+    if (!overlay) return;
+    overlay.querySelectorAll('.camera-mode-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.cameraMode === cameraMode);
+    });
+        const label = document.getElementById('cameraModeLabel');
+        if (label) label.textContent = cameraMode === 'video' ? 'Video cekimi' : 'Fotograf cekimi';
+        const actionBtn = document.getElementById('cameraActionBtn');
+        const recording = typeof isRecording === 'boolean'
+            ? isRecording
+            : Boolean(cameraRecorder && cameraRecorder.state === 'recording');
+        const hasCapture = Boolean(cameraCapturedBlob);
+        const retakeBtn = document.getElementById('cameraRetakeBtn');
+        if (retakeBtn) {
+            retakeBtn.style.display = hasCapture ? 'inline-flex' : 'none';
+            retakeBtn.onclick = () => retakeCameraCapture();
+        }
+        if (actionBtn) {
+            if (hasCapture) {
+                actionBtn.textContent = 'Sohbete ekle';
+                actionBtn.classList.remove('recording');
+                actionBtn.onclick = () => confirmCameraAttachment();
+            } else if (recording) {
+                actionBtn.textContent = 'Kaydi durdur';
+                actionBtn.classList.add('recording');
+                actionBtn.onclick = () => toggleVideoRecording();
+            } else {
+                actionBtn.textContent = cameraMode === 'video' ? 'Video cek' : 'Fotograf cek';
+                actionBtn.classList.remove('recording');
+                actionBtn.onclick = () => {
+                    if (cameraMode === 'video') toggleVideoRecording();
+                    else capturePhotoFromCamera();
+                };
+            }
+        }
+        const flashBtn = document.getElementById('cameraFlashBtn');
+        if (flashBtn) {
+            flashBtn.classList.toggle('active', cameraFlashEnabled);
+            const text = flashBtn.querySelector('span');
+            if (text) text.textContent = cameraFlashEnabled ? 'Flash acik' : 'Flash kapali';
+        }
+        const previewWrap = document.querySelector('.camera-preview-wrap');
+        const review = document.getElementById('cameraReview');
+        const video = document.getElementById('cameraPreview');
+        if (previewWrap && review && video) {
+            if (hasCapture) {
+                previewWrap.classList.add('review-mode');
+                review.style.display = 'flex';
+                video.style.display = 'none';
+            } else {
+                previewWrap.classList.remove('review-mode');
+                review.style.display = 'none';
+                video.style.display = '';
+            }
+        }
+    }
+
+function setCameraStatus(text) {
+    const el = document.getElementById('cameraStatusHint');
+    if (el) el.textContent = text;
+}
+
+async function startCameraStream() {
+    const preview = document.getElementById('cameraPreview');
+    if (!preview) return;
+    cancelVideoRecording(true);
+    stopCameraStream();
+    cameraReady = false;
+    setCameraStatus('Kamera aciliyor...');
+    const constraints = {
+        video: {
+            facingMode: cameraFacingMode,
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+        },
+        audio: cameraMode === 'video'
+    };
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    cameraStream = stream;
+    preview.srcObject = stream;
+    await preview.play().catch(() => {});
+    cameraReady = true;
+    setCameraStatus(cameraMode === 'video' ? 'Kayda hazir' : 'Fotograf icin hazir');
+    if (cameraCapturedBlob) {
+        cameraCapturedBlob = null;
+        cameraCapturedKind = null;
+        if (cameraReviewUrl) {
+            try { URL.revokeObjectURL(cameraReviewUrl); } catch (e) {}
+            cameraReviewUrl = null;
+        }
+        updateCameraModeUI(false);
+    }
+} catch (err) {
+    cameraReady = false;
+    setCameraStatus('Kamera acilamadi');
+        console.error('Camera error', err);
+        showToast('Kamera acilamadi: ' + (err && err.message ? err.message : 'Bilinmeyen hata'), 'error');
+    }
+}
+
+function stopCameraStream() {
+    if (!cameraStream) return;
+    cameraStream.getTracks().forEach(track => {
+        try { track.stop(); } catch (e) {}
+    });
+    cameraStream = null;
+}
+
+function closeCameraCapture(silent = false) {
+    cancelVideoRecording(true);
+    stopCameraStream();
+    cameraReady = false;
+    cameraCapturedBlob = null;
+    cameraCapturedKind = null;
+    if (cameraReviewUrl) {
+        try { URL.revokeObjectURL(cameraReviewUrl); } catch (e) {}
+        cameraReviewUrl = null;
+    }
+    const overlay = document.getElementById('cameraOverlay');
+    if (overlay) overlay.remove();
+    if (!silent) closeAttachMenu();
+}
+
+function toggleCameraFlash() {
+    cameraFlashEnabled = !cameraFlashEnabled;
+    updateCameraModeUI();
+}
+
+function switchCameraFacing() {
+    if (cameraRecorder && cameraRecorder.state === 'recording') {
+        showToast('Kayit surerken kamera degistirilemez', 'info');
+        return;
+    }
+    cameraFacingMode = cameraFacingMode === 'environment' ? 'user' : 'environment';
+    startCameraStream();
+}
+
+function triggerFlashEffect() {
+    if (!cameraFlashEnabled) return;
+    const flash = document.getElementById('cameraFlash');
+    if (!flash) return;
+    flash.classList.add('show');
+    setTimeout(() => flash.classList.remove('show'), 180);
+}
+
+function capturePhotoFromCamera() {
+    const video = document.getElementById('cameraPreview');
+    if (!video || !cameraStream) {
+        showToast('Kamera hazir degil', 'warning');
+        return;
+    }
+    if (!cameraReady || !video.videoWidth || !video.videoHeight) {
+        showToast('Kamera hazirlaniyor, lutfen bir saniye bekleyin', 'info');
+        return;
+    }
+    const takeShot = () => {
+        const trackSettings = cameraStream.getVideoTracks()[0]?.getSettings?.() || {};
+        const width = trackSettings.width || video.videoWidth || 1280;
+        const height = trackSettings.height || video.videoHeight || 720;
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, width, height);
+        canvas.toBlob((blob) => {
+            if (!blob) {
+                showToast('Fotograf yakalanamadi', 'error');
+                return;
+            }
+            enterCameraReview(blob, 'photo');
+        }, 'image/jpeg', 0.92);
+    };
+    if (cameraFlashEnabled) {
+        triggerFlashEffect();
+        setTimeout(takeShot, 130);
+    } else {
+        takeShot();
+    }
+}
+
+function enterCameraReview(blob, kind) {
+    if (!blob) return;
+    cameraCapturedBlob = blob;
+    cameraCapturedKind = kind === 'video' ? 'video' : 'photo';
+    if (cameraReviewUrl) {
+        try { URL.revokeObjectURL(cameraReviewUrl); } catch (e) {}
+        cameraReviewUrl = null;
+    }
+    const review = document.getElementById('cameraReview');
+    const previewWrap = document.querySelector('.camera-preview-wrap');
+    const videoEl = document.getElementById('cameraPreview');
+    if (review && previewWrap && videoEl) {
+        const url = URL.createObjectURL(blob);
+        cameraReviewUrl = url;
+        const isVideo = cameraCapturedKind === 'video';
+        review.innerHTML = isVideo
+            ? `<video src="${escapeHtml(url)}" controls playsinline loop style="max-width:100%; max-height:100%; border-radius:12px; background:#000;"></video>`
+            : `<img src="${escapeHtml(url)}" alt="" style="max-width:100%; max-height:100%; border-radius:12px; object-fit:contain; background:#000;" />`;
+        previewWrap.classList.add('review-mode');
+        review.style.display = 'flex';
+        videoEl.style.display = 'none';
+    }
+    setCameraStatus(isCameraVideoMode() ? 'Kayit tamamlandi' : 'Fotograf hazir');
+    updateCameraModeUI(false);
+}
+
+function retakeCameraCapture() {
+    cameraCapturedBlob = null;
+    cameraCapturedKind = null;
+    if (cameraReviewUrl) {
+        try { URL.revokeObjectURL(cameraReviewUrl); } catch (e) {}
+        cameraReviewUrl = null;
+    }
+    const review = document.getElementById('cameraReview');
+    const previewWrap = document.querySelector('.camera-preview-wrap');
+    const videoEl = document.getElementById('cameraPreview');
+    if (review) {
+        review.innerHTML = '';
+        review.style.display = 'none';
+    }
+    if (previewWrap) previewWrap.classList.remove('review-mode');
+    if (videoEl) videoEl.style.display = '';
+    setCameraStatus(cameraMode === 'video' ? 'Kayda hazir' : 'Fotograf icin hazir');
+    updateCameraModeUI(false);
+}
+
+function isCameraVideoMode() {
+    return cameraMode === 'video';
+}
+
+function toggleVideoRecording() {
+    if (cameraRecorder && cameraRecorder.state === 'recording') {
+        stopVideoRecording();
+    } else {
+        startVideoRecording();
+    }
+}
+
+function startVideoRecording() {
+    if (!cameraStream) {
+        showToast('Kamera hazir degil', 'warning');
+        return;
+    }
+    if (typeof MediaRecorder === 'undefined') {
+        showToast('Tarayici video kaydini desteklemiyor', 'error');
+        return;
+    }
+    cameraRecordedChunks = [];
+    const mimeOptions = [
+        'video/webm;codecs=vp9,opus',
+        'video/webm;codecs=vp8,opus',
+        'video/webm',
+        'video/mp4'
+    ];
+    const options = {};
+    for (const mime of mimeOptions) {
+        if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(mime)) {
+            options.mimeType = mime;
+            cameraRecorderMimeType = mime;
+            break;
+        }
+    }
+    try {
+        cameraRecorder = options.mimeType ? new MediaRecorder(cameraStream, options) : new MediaRecorder(cameraStream);
+    } catch (err) {
+        console.error('MediaRecorder error', err);
+        showToast('Video kaydi baslatilamadi: ' + (err && err.message ? err.message : 'Bilinmeyen hata'), 'error');
+        return;
+    }
+    setCameraStatus('Kayit devam ediyor...');
+    triggerFlashEffect();
+    cameraRecorder.ondataavailable = (e) => {
+        if (e && e.data && e.data.size > 0) {
+            cameraRecordedChunks.push(e.data);
+        }
+    };
+    cameraRecorder.onstop = finalizeVideoRecording;
+    cameraRecorder.start();
+    updateCameraModeUI(true);
+}
+
+function stopVideoRecording() {
+    if (!cameraRecorder || cameraRecorder.state !== 'recording') return;
+    setCameraStatus('Kayit durduruluyor...');
+    cameraRecorder.stop();
+    updateCameraModeUI(false);
+}
+
+function cancelVideoRecording(silent = false) {
+    if (cameraRecorder && cameraRecorder.state === 'recording') {
+        cameraRecorder.ondataavailable = null;
+        cameraRecorder.onstop = null;
+        try { cameraRecorder.stop(); } catch (e) {}
+    }
+    cameraRecorder = null;
+    cameraRecorderMimeType = '';
+    cameraRecordedChunks = [];
+    if (!silent) setCameraStatus('Kayit iptal edildi');
+    updateCameraModeUI(false);
+}
+
+function finalizeVideoRecording() {
+    const chunks = cameraRecordedChunks.slice();
+    cameraRecorder = null;
+    cameraRecordedChunks = [];
+    updateCameraModeUI(false);
+    if (!chunks.length) {
+        setCameraStatus('Kaydedilecek goruntu yok');
+        return;
+    }
+    const type = cameraRecorderMimeType || chunks[0]?.type || 'video/webm';
+    const blob = new Blob(chunks, { type });
+    enterCameraReview(blob, 'video');
+}
+
+function attachCameraBlob(blob, kind) {
+    if (!blob) return null;
+    const mimeType = blob.type || (kind === 'photo' ? 'image/jpeg' : 'video/webm');
+    const extension = mimeType.includes('mp4') ? 'mp4'
+        : (mimeType.includes('webm') ? 'webm'
+            : (kind === 'photo' ? 'jpg' : 'mp4'));
+    const name = `${kind === 'photo' ? 'photo' : 'video'}-${Date.now()}.${extension}`;
+    let file = null;
+    try {
+        file = new File([blob], name, { type: mimeType });
+    } catch (e) {
+        file = blob;
+        try { file.name = name; } catch (err) {}
+    }
+    if (kind === 'video' && attachmentSendMode === 'sticker') {
+        attachmentSendMode = 'media';
+    }
+    return file;
+}
+
+function confirmCameraAttachment() {
+    if (!cameraCapturedBlob) return;
+    const file = attachCameraBlob(cameraCapturedBlob, cameraCapturedKind || 'photo');
+    if (!file) return;
+    selectedAttachment = file;
+    renderAttachmentPreview();
+    updateStickerButtonUI();
+    showToast(cameraCapturedKind === 'video' ? 'Video eklendi' : 'Fotograf eklendi', 'success');
+    closeCameraCapture(true);
 }
 
 async function sendMessageWithAttachment(message, file, options = {}) {
@@ -3795,6 +4346,11 @@ function showModal(feature) {
             title = 'Dashboard';
             content = getDashboardContent();
             break;
+        case 'chat-analysis':
+            maxWidth = '900px';
+            title = 'Sohbet Analizi';
+            content = getChatAnalysisContent();
+            break;
         case 'scripts':
             title = 'Script Yoneticisi';
             content = getScriptsContent();
@@ -3841,6 +4397,11 @@ function showModal(feature) {
             content = getDriveContent();
             checkDriveStatus();
             break;
+        case 'ai-assistant':
+            maxWidth = '900px';
+            title = 'AI Asistan';
+            content = getAiAssistantContent();
+            break;
         default:
             return;
     }
@@ -3850,6 +4411,14 @@ function showModal(feature) {
         '<div class="modal-header"><h3>' + title + '</h3><i class="bi bi-x-lg close-btn" onclick="closeModal()"></i></div>' +
         '<div class="modal-body">' + content + '</div>' +
         '</div></div>';
+
+    if (feature === 'ai-assistant') {
+        initAiAssistantPanel();
+    }
+
+    if (feature === 'chat-analysis') {
+        initChatAnalysisPanel();
+    }
 }
 
 function closeModal() {
@@ -3864,6 +4433,219 @@ function getDashboardContent() {
         '<div class="stat-card"><div class="icon orange"><i class="bi bi-arrow-down-left"></i></div><div class="info"><div class="value" id="statReceived">-</div><div class="label">Alinan</div></div></div>' +
         '<div class="stat-card"><div class="icon red"><i class="bi bi-calendar-day"></i></div><div class="info"><div class="value" id="statToday">-</div><div class="label">Bugun</div></div></div>' +
         '</div>';
+}
+
+function getAiAssistantContent() {
+    return '' +
+    '<div class="ai-assistant-shell">' +
+        '<div class="ai-assistant-header">' +
+            '<div>' +
+                '<div class="title">AI Admin Asistan</div>' +
+                '<div class="subtitle">Script ve bot yonetimi icin yardimci</div>' +
+            '</div>' +
+            '<div class="ai-assistant-status"><i class="bi bi-robot"></i><span>Hazir</span></div>' +
+        '</div>' +
+        '<div class="ai-assistant-body">' +
+            '<div class="ai-assistant-messages" id="aiAssistantMessages"></div>' +
+            '<div class="ai-assistant-typing" id="aiAssistantTyping"><i class="bi bi-three-dots"></i> AI yaziyor...</div>' +
+        '</div>' +
+        '<div class="ai-assistant-input">' +
+            '<textarea id="aiAssistantInput" rows="1" placeholder="\'Abdulkadir sohbetine bot ata\' gibi bir komut yaz..." oninput="autoResizeAiAssistant(this)"></textarea>' +
+            '<button class="btn btn-primary" id="aiAssistantSend" onclick="sendAiAssistantMessage()"><i class="bi bi-send-fill"></i></button>' +
+        '</div>' +
+    '</div>';
+}
+
+function getChatAnalysisContent() {
+    return '' +
+        '<div style="display:flex; flex-direction:column; gap:12px;">' +
+            '<div class="settings-item" style="border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; margin: 0;">' +
+                '<div class="info" style="flex:1;">' +
+                    '<div class="title" id="chatAnalysisChatTitle">Sohbet</div>' +
+                    '<div class="subtitle" id="chatAnalysisLoadedInfo">Mesajlar hazirlaniyor...</div>' +
+                '</div>' +
+            '</div>' +
+            '<div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">' +
+                '<label style="font-size: 12px; color: var(--text-secondary);">Mesaj sayisi</label>' +
+                '<input type="number" class="form-input" id="chatAnalysisCount" min="10" max="250" step="10" value="60" style="width: 110px;">' +
+                '<button class="btn btn-secondary btn-sm" type="button" id="chatAnalysisLoadMoreBtn"><i class="bi bi-arrow-down"></i> Daha fazla yukle</button>' +
+                '<button class="btn btn-primary btn-sm" type="button" id="chatAnalysisRunBtn"><i class="bi bi-graph-up-arrow"></i> Analiz Et</button>' +
+                '<button class="btn btn-secondary btn-sm" type="button" id="chatAnalysisCopyBtn" disabled><i class="bi bi-clipboard"></i> Kopyala</button>' +
+            '</div>' +
+            '<div>' +
+                '<label style="display:block; font-size: 12px; color: var(--text-secondary); margin-bottom: 6px;">Analiz istegi (opsiyonel)</label>' +
+                '<textarea class="form-input" id="chatAnalysisPrompt" rows="3" placeholder="Orn: Konulari, sikayetleri, duyguyu ve aksiyonlari ozetle..."></textarea>' +
+            '</div>' +
+            '<div id="chatAnalysisLoading" style="display:none; color: var(--text-secondary); font-size: 12px;"><i class="bi bi-three-dots"></i> Analiz yapiliyor...</div>' +
+            '<div id="chatAnalysisError" style="display:none; color: #e74c3c; font-size: 12px;"></div>' +
+            '<pre id="chatAnalysisResult" style="white-space: pre-wrap; word-break: break-word; margin: 0; padding: 12px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-secondary); min-height: 160px;"></pre>' +
+        '</div>';
+}
+
+function initChatAnalysisPanel() {
+    const titleEl = document.getElementById('chatAnalysisChatTitle');
+    const infoEl = document.getElementById('chatAnalysisLoadedInfo');
+    const countEl = document.getElementById('chatAnalysisCount');
+    const promptEl = document.getElementById('chatAnalysisPrompt');
+    const runBtn = document.getElementById('chatAnalysisRunBtn');
+    const loadMoreBtn = document.getElementById('chatAnalysisLoadMoreBtn');
+    const copyBtn = document.getElementById('chatAnalysisCopyBtn');
+    const loadingEl = document.getElementById('chatAnalysisLoading');
+    const errorEl = document.getElementById('chatAnalysisError');
+    const resultEl = document.getElementById('chatAnalysisResult');
+
+    if (!titleEl || !infoEl || !countEl || !promptEl || !runBtn || !loadMoreBtn || !copyBtn || !loadingEl || !errorEl || !resultEl) {
+        return;
+    }
+
+    const chatName = (document.getElementById('chatName')?.textContent || '').trim() || currentChat;
+    titleEl.textContent = `Sohbet: ${chatName}`;
+    if (!promptEl.value) {
+        promptEl.value = 'Sohbeti analiz et, ozetle, dikkat ceken konulari ve aksiyonlari belirt.';
+    }
+
+    const updateLoadedInfo = () => {
+        const loaded = (chatMessagesPagination.chatId === currentChat) ? chatMessagesPagination.items.length : 0;
+        const requested = parseInt(countEl.value, 10) || 0;
+        infoEl.textContent = `Yuklu mesaj: ${loaded} • Analiz icin secilecek: ${Math.min(loaded, Math.max(0, requested))}`;
+        loadMoreBtn.disabled = !currentChat || (chatMessagesPagination.chatId === currentChat && !chatMessagesPagination.hasMore);
+    };
+
+    updateLoadedInfo();
+
+    countEl.addEventListener('input', updateLoadedInfo);
+
+    loadMoreBtn.addEventListener('click', async () => {
+        if (!currentChat) return;
+        errorEl.style.display = 'none';
+        try {
+            const nextTarget = Math.min(250, ((chatMessagesPagination.chatId === currentChat) ? chatMessagesPagination.items.length : 0) + CHAT_MESSAGE_PAGE_SIZE);
+            await ensureChatMessagesLoadedForAnalysis(currentChat, nextTarget);
+        } catch (err) {
+            errorEl.textContent = err.message || String(err);
+            errorEl.style.display = 'block';
+        } finally {
+            updateLoadedInfo();
+        }
+    });
+
+    runBtn.addEventListener('click', async () => {
+        if (!currentChat) return;
+
+        errorEl.style.display = 'none';
+        resultEl.textContent = '';
+        copyBtn.disabled = true;
+
+        const requested = Math.max(10, Math.min(250, parseInt(countEl.value, 10) || 60));
+
+        loadingEl.style.display = 'block';
+        runBtn.disabled = true;
+        loadMoreBtn.disabled = true;
+
+        try {
+            await ensureChatMessagesLoadedForAnalysis(currentChat, requested);
+            updateLoadedInfo();
+
+            const messageLines = buildChatAnalysisLines(currentChat, requested);
+            if (!messageLines.length) {
+                throw new Error('Analiz icin mesaj bulunamadi (once sohbeti acip mesajlari yukleyin).');
+            }
+
+            const payload = {
+                chatId: currentChat,
+                chatName,
+                prompt: (promptEl?.value || '').trim() || undefined,
+                messages: messageLines
+            };
+
+            const response = await api('api/ai/analyze-chat', 'POST', payload);
+            const text = String(response?.analysis || '').trim();
+            resultEl.textContent = text || 'Analiz sonucu bos dondu.';
+            copyBtn.disabled = !text;
+        } catch (err) {
+            errorEl.textContent = err.message || String(err);
+            errorEl.style.display = 'block';
+            showToast(errorEl.textContent, 'error');
+        } finally {
+            loadingEl.style.display = 'none';
+            runBtn.disabled = false;
+            updateLoadedInfo();
+        }
+    });
+
+    copyBtn.addEventListener('click', async () => {
+        const text = String(resultEl.textContent || '').trim();
+        if (!text) return;
+        try {
+            await navigator.clipboard.writeText(text);
+            showToast('Kopyalandi', 'success');
+        } catch (err) {
+            showToast('Kopyalama basarisiz: ' + (err.message || String(err)), 'error');
+        }
+    });
+}
+
+async function ensureChatMessagesLoadedForAnalysis(chatId, desiredCount) {
+    const target = Math.max(1, Math.min(250, parseInt(String(desiredCount), 10) || 0));
+    if (!chatId) return 0;
+
+    if (chatMessagesPagination.chatId !== chatId) {
+        await loadChatMessages(chatId, { reset: true });
+    }
+
+    let guard = 0;
+    while (chatMessagesPagination.chatId === chatId
+        && chatMessagesPagination.items.length < target
+        && chatMessagesPagination.hasMore
+        && guard < 20
+    ) {
+        guard += 1;
+        await loadChatMessages(chatId, { reset: false });
+    }
+
+    return (chatMessagesPagination.chatId === chatId) ? chatMessagesPagination.items.length : 0;
+}
+
+function buildChatAnalysisLines(chatId, limit) {
+    const requested = Math.max(1, Math.min(250, parseInt(String(limit), 10) || 0));
+    if (!chatId) return [];
+    if (chatMessagesPagination.chatId !== chatId) return [];
+
+    const sorted = [...(chatMessagesPagination.items || [])].sort((a, b) => {
+        const aTs = normalizeTimestamp(a?.timestamp) || 0;
+        const bTs = normalizeTimestamp(b?.timestamp) || 0;
+        return aTs - bTs;
+    });
+
+    const slice = sorted.slice(-requested);
+    const lines = [];
+
+    for (const message of slice) {
+        const line = formatChatAnalysisLine(message, chatId);
+        if (line) lines.push(line);
+        if (lines.length >= 1000) break;
+    }
+
+    return lines;
+}
+
+function formatChatAnalysisLine(message, chatIdForContext) {
+    if (!message) return '';
+    const sender = message.is_from_me ? 'Ben' : (formatSenderName(getDisplayNameFromMessage(message, chatIdForContext)) || 'Karsi');
+    const when = formatDateTime(message.timestamp) || '';
+
+    const type = String(message.type || '').trim().toLowerCase();
+    const rawBody = String(message.body || '').replace(/\s+/g, ' ').trim();
+    let content = rawBody;
+
+    if (!content) {
+        if (type === 'revoked') content = '[mesaj silindi]';
+        else if (type) content = `[${type}]`;
+        else content = '[bos]';
+    }
+
+    content = content.slice(0, 1600);
+    return `${sender} | ${when} | ${content}`;
 }
 
 // Scripts Content
@@ -3909,6 +4691,142 @@ async function loadScriptsData() {
         }).join('');
     } catch (err) {
         console.error('Scripts load error:', err);
+    }
+}
+
+function sanitizeAiAssistantText(text) {
+    if (typeof text !== 'string') return '';
+    let next = text;
+    next = next.replace(/```[\s\S]*?TOOL[_\s]*CALL[\s\S]*?```/gi, '');
+    next = next.replace(/TOOL[_\s]*CALL\s*:?[^\n]*\{[\s\S]*?\}/gi, '');
+    next = next.replace(/^.*TOOL[_\s]*CALL.*$/gmi, '');
+    next = next.replace(/^.*TOOL[_\s]*RESULT.*$/gmi, '');
+    next = next.replace(/\n{3,}/g, '\n\n').trim();
+    next = next.replace(/^[\][]{}()\s]+/, '').trim();
+    while (next && /[\]})]$/.test(next)) {
+        next = next.slice(0, -1).trimEnd();
+    }
+    return next;
+}
+
+function formatAiAssistantMessage(text) {
+    let formatted = escapeHtml(text || '');
+    formatted = formatted.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
+    formatted = formatted.replace(/`([^`]+)`/g, '<code>$1</code>');
+    formatted = formatted.replace(/\n/g, '<br>');
+    return formatted;
+}
+
+function appendAiAssistantMessage(role, text) {
+    const list = document.getElementById('aiAssistantMessages');
+    if (!list) return;
+    const row = document.createElement('div');
+    row.className = `ai-msg-row ${role}`;
+
+    const bubble = document.createElement('div');
+    bubble.className = `ai-msg-bubble ${role}`;
+
+    if (role === 'assistant') {
+        const sender = document.createElement('div');
+        sender.className = 'ai-msg-sender';
+        sender.textContent = 'AI Assistant';
+        bubble.appendChild(sender);
+    } else if (role === 'system') {
+        const sender = document.createElement('div');
+        sender.className = 'ai-msg-sender';
+        sender.textContent = 'Sistem';
+        bubble.appendChild(sender);
+    }
+
+    const body = document.createElement('div');
+    body.className = 'ai-msg-text';
+    body.innerHTML = formatAiAssistantMessage(text);
+    bubble.appendChild(body);
+
+    const time = document.createElement('div');
+    time.className = 'ai-msg-time';
+    const now = new Date();
+    time.textContent = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0');
+    bubble.appendChild(time);
+
+    row.appendChild(bubble);
+    list.appendChild(row);
+    list.scrollTop = list.scrollHeight;
+}
+
+function autoResizeAiAssistant(textarea) {
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = Math.min(textarea.scrollHeight, 140) + 'px';
+}
+
+function initAiAssistantPanel() {
+    aiAssistantHistory = [];
+    const list = document.getElementById('aiAssistantMessages');
+    if (list) {
+        list.innerHTML = '';
+        const welcome = 'Merhaba! Bot/script olusturma, scriptleri listeleme veya sohbet bazli otomasyon icin istekte bulunabilirsiniz.';
+        appendAiAssistantMessage('assistant', welcome);
+        aiAssistantHistory.push({ role: 'assistant', text: welcome });
+    }
+
+    const typing = document.getElementById('aiAssistantTyping');
+    if (typing) typing.style.display = 'none';
+
+    const input = document.getElementById('aiAssistantInput');
+    if (input && input.dataset.bound !== '1') {
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendAiAssistantMessage();
+            }
+        });
+        input.dataset.bound = '1';
+    }
+    if (input) {
+        input.value = '';
+        autoResizeAiAssistant(input);
+        setTimeout(() => input.focus(), 50);
+    }
+}
+
+async function sendAiAssistantMessage() {
+    const input = document.getElementById('aiAssistantInput');
+    const sendBtn = document.getElementById('aiAssistantSend');
+    const typing = document.getElementById('aiAssistantTyping');
+    if (!input) return;
+
+    const text = input.value.trim();
+    if (!text) return;
+
+    appendAiAssistantMessage('user', text);
+    aiAssistantHistory.push({ role: 'user', text });
+    if (aiAssistantHistory.length > 20) aiAssistantHistory = aiAssistantHistory.slice(-20);
+
+    input.value = '';
+    autoResizeAiAssistant(input);
+    if (sendBtn) sendBtn.disabled = true;
+    if (typing) typing.style.display = 'block';
+
+    try {
+        const data = await api('api/ai/admin-chat', 'POST', {
+            message: text,
+            history: aiAssistantHistory
+        });
+        const replyRaw = data?.response || '';
+        let reply = sanitizeAiAssistantText(replyRaw);
+        if (!reply) {
+            reply = 'Islem tamamlandi.';
+        }
+        appendAiAssistantMessage('assistant', reply);
+        aiAssistantHistory.push({ role: 'assistant', text: reply });
+        if (aiAssistantHistory.length > 20) aiAssistantHistory = aiAssistantHistory.slice(-20);
+    } catch (err) {
+        appendAiAssistantMessage('system', 'Hata: ' + (err.message || 'Bilinmeyen hata'));
+    } finally {
+        if (typing) typing.style.display = 'none';
+        if (sendBtn) sendBtn.disabled = false;
+        if (input) input.focus();
     }
 }
 
@@ -6451,6 +7369,7 @@ Object.assign(window, {
     switchSidebarTab,
     showTab,
     openReports,
+    openChatAnalysis,
     toggleApiModelInput,
     saveApiSettings,
     toggleSetting,
@@ -6481,6 +7400,9 @@ Object.assign(window, {
     toggleEmojiPicker,
     toggleAttachMenu,
     openMediaLightbox,
+    openCameraCapture,
+    toggleCameraFlash,
+    switchCameraFacing,
     submitAutoReply,
     startTemplateEdit,
     submitTemplate,

@@ -33,10 +33,56 @@ class ScriptRunner {
         this.warnedMissingScope = new Set();
         this.aiConfigProvider = typeof options.aiConfigProvider === 'function' ? options.aiConfigProvider : null;
         this.scriptStorage = new Map();
+        this.botMessageRegistry = new Map(); // messageId -> { chatId, ts, body }
+        this.botMessageFallback = new Map(); // chatId -> [{ body, ts }]
     }
 
     setWhatsApp(whatsapp) {
         this.whatsapp = whatsapp;
+    }
+
+    trackBotSend(result, chatId, body) {
+        const now = Date.now();
+        const msgId = result?.id?._serialized || result?.id || result?._serialized || null;
+        if (msgId) {
+            this.botMessageRegistry.set(msgId, { chatId, ts: now, body: String(body || '') });
+            if (this.botMessageRegistry.size > 500) {
+                // Trim oldest roughly by timestamp
+                const entries = Array.from(this.botMessageRegistry.entries()).sort((a, b) => a[1].ts - b[1].ts);
+                for (let i = 0; i < 100 && entries.length; i++) {
+                    const [key] = entries.shift();
+                    this.botMessageRegistry.delete(key);
+                }
+            }
+        } else {
+            const key = String(chatId || '');
+            const list = this.botMessageFallback.get(key) || [];
+            list.push({ body: String(body || ''), ts: now });
+            if (list.length > 50) list.shift();
+            this.botMessageFallback.set(key, list);
+        }
+    }
+
+    isBotMessage(row) {
+        const messageId = row.message_id || row.messageId || row.id;
+        if (messageId && this.botMessageRegistry.has(messageId)) return true;
+        const chatId = row.chat_id || row.chatId || '';
+        const body = (row.body || '').trim();
+        if (!body) return false;
+        const candidates = this.botMessageFallback.get(String(chatId)) || [];
+        const ts = Number(row.timestamp) || Date.now();
+        const matched = candidates.find(item => item.body === body && Math.abs(ts - item.ts) < 8000);
+        return Boolean(matched);
+    }
+
+    getRecentMessages(chatId, limit = 50, offset = 0) {
+        const safeLimit = Math.max(1, Math.min(200, Number.parseInt(String(limit ?? 50), 10) || 50));
+        const safeOffset = Math.max(0, Number.parseInt(String(offset ?? 0), 10) || 0);
+        try {
+            return this.db.messages.getByChatId.all(chatId, safeLimit, safeOffset);
+        } catch (e) {
+            return [];
+        }
     }
 
     getSharedAiConfig() {
@@ -163,7 +209,9 @@ class ScriptRunner {
                     if (!self.whatsapp || !self.whatsapp.isReady()) {
                         throw new Error('WhatsApp not connected');
                     }
-                    return await self.whatsapp.sendMessage(targetChatId, message);
+                    const result = await self.whatsapp.sendMessage(targetChatId, message);
+                    self.trackBotSend(result, targetChatId, message);
+                    return result;
                 },
                 writable: false, configurable: false
             },
@@ -176,7 +224,9 @@ class ScriptRunner {
                     if (allowedChatSet && !allowedChatSet.has(triggerData.chatId)) {
                         throw new Error('Kapsam engeli: Bu sohbete yanit gonderilemez');
                     }
-                    return await self.whatsapp.sendMessage(triggerData.chatId, message);
+                    const result = await self.whatsapp.sendMessage(triggerData.chatId, message);
+                    self.trackBotSend(result, triggerData.chatId, message);
+                    return result;
                 },
                 writable: false, configurable: false
             },
@@ -187,11 +237,59 @@ class ScriptRunner {
                 writable: false, configurable: false
             },
             getMessages: {
-                value: (chatId, limit = 50, offset = 0) => self.db.messages.getByChatId.all(chatId, limit, offset),
+                value: (chatId, limit = 50, offset = 0) => self.getRecentMessages(chatId, limit, offset),
                 writable: false, configurable: false
             },
             searchMessages: {
                 value: (query) => self.db.messages.search.all('%' + query + '%'),
+                writable: false, configurable: false
+            },
+
+            buildHistory: {
+                value: (options = {}) => {
+                    const chatId = options.chatId || triggerData?.chatId;
+                    if (!chatId) return [];
+                    const limit = Math.max(1, Math.min(200, Number.parseInt(String(options.limit ?? 40), 10) || 40));
+                    const rows = self.getRecentMessages(chatId, limit, 0).slice().reverse();
+                    const botLabel = options.botLabel || 'Bot';
+                    const userLabel = options.userLabel || 'Kullanici';
+                    const peerLabel = options.peerLabel || 'Karsi';
+                    const seenIds = new Set();
+                    return rows.map((row) => {
+                        if (row.message_id && seenIds.has(row.message_id)) return null;
+                        if (row.message_id) seenIds.add(row.message_id);
+                        const isFromMe = row.is_from_me === 1 || row.isFromMe === 1 || row.isFromMe === true;
+                        const isBot = isFromMe && self.isBotMessage(row);
+                        const role = isBot ? 'BOT' : (isFromMe ? 'USER' : 'PEER');
+                        const sender = isBot
+                            ? botLabel
+                            : (isFromMe ? userLabel : (row.from_name || row.fromName || peerLabel));
+                        return {
+                            role,
+                            sender,
+                            text: row.body || '',
+                            timestamp: row.timestamp || Date.now(),
+                            chatId: row.chat_id || chatId,
+                            isFromMe,
+                            raw: row
+                        };
+                    }).filter(Boolean);
+                },
+                writable: false, configurable: false
+            },
+
+            formatHistory: {
+                value: (history = [], options = {}) => {
+                    const includeTimestamps = options.includeTimestamps !== false;
+                    return history.map((entry, idx) => {
+                        const date = entry.timestamp ? new Date(entry.timestamp) : null;
+                        const timePart = includeTimestamps && date
+                            ? `[${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}] `
+                            : '';
+                        const indexPart = options.includeIndex ? `${idx + 1}. ` : '';
+                        return `${indexPart}${timePart}${entry.sender} (${entry.role}): ${entry.text}`;
+                    }).join('\n');
+                },
                 writable: false, configurable: false
             },
 

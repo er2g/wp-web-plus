@@ -86,7 +86,7 @@ class AdminAgent {
             
             // Garbage filter: Remove messages that are just symbols or empty
             // This fixes the issue where previous "}" bugs pollute the context
-            if (!text || text.length < 2 || /^[\}\]\{\)\.]+$/.test(text)) {
+            if (!text || text.length < 2 || /^[\]{}).]+$/.test(text)) {
                 continue;
             }
 
@@ -103,8 +103,46 @@ class AdminAgent {
 
     isGarbageOutput(text) {
         const trimmed = (text || '').trim();
-        if (!trimmed || trimmed.length < 2) return true;
-        return /^[\]\[\{\}\(\)\.\s]+$/.test(trimmed);
+        if (!trimmed || trimmed.length < 3) return true;
+        return /^[\][]{}().\s]+$/.test(trimmed);
+    }
+
+    cleanFinalResponseText(text) {
+        let clean = (text || '').trim();
+        clean = clean.replace(/^[\][]{}()\s]+/, '').trim();
+        while (clean && /[\]})]$/.test(clean)) {
+            clean = clean.slice(0, -1).trimEnd();
+        }
+        return clean || text;
+    }
+
+    buildFallbackMessage(actionLog = [], lastToolResult = null, userMessage = '') {
+        const normalizedResult = (result) => {
+            if (typeof result === 'string') return result;
+            if (result && typeof result === 'object') return JSON.stringify(result);
+            return '';
+        };
+
+        if (lastToolResult) {
+            return `Islem sonucu: ${normalizedResult(lastToolResult)}`;
+        }
+
+        if (actionLog.length) {
+            const last = actionLog[actionLog.length - 1];
+            if (last.tool === 'create_script') {
+                return `Script olusturuldu: ${normalizedResult(last.result)}`;
+            }
+            if (last.tool === 'find_chat') {
+                return `Sohbet arama sonucu: ${normalizedResult(last.result)}`;
+            }
+            return `Islem tamamlandi: ${normalizedResult(last.result)}`;
+        }
+
+        const trimmed = String(userMessage || '').trim();
+        if (trimmed) {
+            return `Talep alindi: ${trimmed}`;
+        }
+        return 'Asistan yaniti alinamadi, lutfen tekrar deneyin.';
     }
 
     getSystemPrompt() {
@@ -153,10 +191,13 @@ JSON OUTPUT SCHEMA:
         async process(history, userMessage, userContext) {
             let currentHistory = this.normalizeHistory(history);
             currentHistory.push({ role: 'user', text: userMessage });
-    
+
             const maxTurns = 5; // Prevent infinite loops
             let turn = 0;
-    
+            let invalidResponses = 0;
+            let lastToolResult = null;
+            const actionLog = [];
+
             while (turn < maxTurns) {
                 turn++;
     
@@ -191,8 +232,12 @@ JSON OUTPUT SCHEMA:
                         let toolResult;
                         try {
                             toolResult = await tool.execute(response.tool_params || {});
+                            lastToolResult = toolResult;
+                            actionLog.push({ tool: response.tool_name, result: toolResult });
                         } catch (err) {
                             toolResult = `Error executing ${response.tool_name}: ${err.message}`;
+                            lastToolResult = toolResult;
+                            actionLog.push({ tool: response.tool_name, result: toolResult });
                         }
     
                         // Add tool result to history as a system/observation message
@@ -207,14 +252,32 @@ JSON OUTPUT SCHEMA:
                         const text = String(response.final_response).trim();
                         if (this.isGarbageOutput(text)) {
                             logger.warn('AdminAgent produced garbage final response', { text });
-                            currentHistory.push({
-                                role: 'user',
-                                text: `[SYSTEM NOTICE]: Invalid assistant reply "${text}". Respond again with a clear sentence or use tools.`
-                            });
-                            continue;
+                            invalidResponses += 1;
+                            if (invalidResponses >= 2) {
+                                return this.buildFallbackMessage(actionLog, lastToolResult, userMessage);
+                            } else {
+                                currentHistory.push({
+                                    role: 'user',
+                                    text: `[SYSTEM NOTICE]: Invalid assistant reply "${text}". Respond again with a clear sentence or use tools.`
+                                });
+                                continue;
+                            }
                         }
                         if (text) {
-                            return text;
+                            const cleaned = this.cleanFinalResponseText(text);
+                            const isStillGarbage = !cleaned || this.isGarbageOutput(cleaned);
+                            if (isStillGarbage) {
+                                invalidResponses += 1;
+                                if (invalidResponses >= 2) {
+                                    return this.buildFallbackMessage(actionLog, lastToolResult, userMessage);
+                                }
+                                currentHistory.push({
+                                    role: 'user',
+                                    text: `[SYSTEM NOTICE]: Invalid assistant reply "${cleaned}". Respond again clearly.`
+                                });
+                                continue;
+                            }
+                            return cleaned;
                         }
                         // If invalid but thought exists, return thought
                         if (response.thought) return response.thought;
@@ -231,7 +294,10 @@ JSON OUTPUT SCHEMA:
                 }
             }
     
-            return "I tried to process your request but ran into a loop.";
+            if (lastToolResult) {
+                return `Islem sonucu: ${String(lastToolResult)}`;
+            }
+            return "Asistan yaniti alinamadi, lutfen tekrar deneyin.";
         }
     }
     module.exports = AdminAgent;

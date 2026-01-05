@@ -1,6 +1,6 @@
 /**
  * WhatsApp Web Panel - AI Assistant Service
- * Integrates with Gemini or Vertex AI for text generation
+ * Integrates with Gemini or Vertex AI for text and JSON generation
  */
 const axios = require('axios');
 const config = require('../config');
@@ -10,19 +10,25 @@ class AiService {
     constructor() {
         this.apiKey = config.GEMINI_API_KEY;
         this.vertexApiKey = config.VERTEX_API_KEY;
-        this.model = 'gemini-2.5-flash'; // Default model
+        this.model = 'gemini-1.5-flash'; // Optimized for speed and cost
         this.provider = 'gemini';
         this.geminiBaseUrl = 'https://generativelanguage.googleapis.com/v1beta/models';
         this.vertexBaseUrl = 'https://aiplatform.googleapis.com/v1';
     }
 
+    /**
+     * Normalize provider string to 'gemini' or 'vertex'
+     */
     normalizeProvider(provider) {
         const normalized = String(provider || '').trim().toLowerCase();
         if (!normalized) return this.provider || 'gemini';
-        if (normalized === 'vertex' || normalized === 'aiplatform' || normalized === 'vertexai') return 'vertex';
+        if (['vertex', 'aiplatform', 'vertexai'].includes(normalized)) return 'vertex';
         return 'gemini';
     }
 
+    /**
+     * Resolve API Key based on provider
+     */
     resolveApiKey(provider, apiKey) {
         const trimmed = typeof apiKey === 'string' ? apiKey.trim() : '';
         if (trimmed) return trimmed;
@@ -31,32 +37,21 @@ class AiService {
     }
 
     resolveModel(model) {
-        const trimmed = typeof model === 'string' ? model.trim() : '';
-        return trimmed || this.model;
+        return (typeof model === 'string' && model.trim()) ? model.trim() : this.model;
     }
 
     buildVertexModelResource(model) {
         const raw = typeof model === 'string' ? model.trim() : '';
         if (!raw) return `publishers/google/models/${this.model}`;
 
-        // If someone pastes a full URL, extract the resource path after /v1/.
-        if (/^https?:\/\//i.test(raw)) {
-            try {
-                const url = new URL(raw);
-                const pathname = String(url.pathname || '');
-                const withoutPrefix = pathname.replace(/^\/?v1\//, '').replace(/^\/+/, '');
-                const withoutOp = withoutPrefix.split(':')[0];
-                if (withoutOp) return withoutOp;
-            } catch (e) {}
-        }
-
+        // Extract clean model ID/path
         const noQuery = raw.split('?')[0];
-        const withoutOp = noQuery.split(':')[0];
-        const normalized = withoutOp.replace(/^\/?v1\//, '').replace(/^\/+/, '');
-        if (normalized.includes('/')) {
-            return normalized;
+        let normalized = noQuery.replace(/^https?:\/\/.*\/v1\//, '').replace(/^\/+/, '');
+        
+        if (!normalized.includes('/')) {
+            return `publishers/google/models/${normalized}`;
         }
-        return `publishers/google/models/${normalized}`;
+        return normalized;
     }
 
     buildRequestUrl({ provider, model, apiKey, method }) {
@@ -67,94 +62,117 @@ class AiService {
         return `${this.geminiBaseUrl}/${model}:${method}?key=${encodeURIComponent(apiKey)}`;
     }
 
-    async generateText({ prompt, apiKey, model, provider, maxOutputTokens = 4096, temperature = 0.3 }) {
+    /**
+     * Core generation function.
+     * Handles text and JSON generation with optional max token looping (for long text).
+     */
+    async generate({ prompt, apiKey, model, provider, maxOutputTokens = 8192, temperature = 0.3, jsonMode = false, systemInstruction = null }) {
         const resolvedProvider = this.normalizeProvider(provider);
         const effectiveKey = this.resolveApiKey(resolvedProvider, apiKey);
         const effectiveModel = this.resolveModel(model);
-        if (!effectiveKey) {
-            throw new Error('AI API key is not configured');
+
+        if (!effectiveKey) throw new Error('AI API key is not configured');
+        if (!prompt) throw new Error('Prompt is required');
+
+        const generationConfig = {
+            temperature,
+            topK: 40,
+            topP: 0.95,
+            maxOutputTokens
+        };
+
+        // Enable JSON mode if requested (Gemini 1.5+ supports this natively)
+        if (jsonMode) {
+            generationConfig.responseMimeType = "application/json";
         }
-        if (!prompt) {
-            throw new Error('Prompt is required');
+
+        const requestBody = {
+            contents: [{
+                role: 'user',
+                parts: [{ text: String(prompt) }]
+            }],
+            generationConfig
+        };
+
+        if (systemInstruction) {
+            requestBody.systemInstruction = {
+                parts: [{ text: systemInstruction }]
+            };
         }
 
         try {
-            const originalPrompt = String(prompt);
-            const maxContinuations = 3;
-            let accumulated = '';
-            let attemptPrompt = originalPrompt;
-
-            for (let attempt = 0; attempt <= maxContinuations; attempt++) {
-                const url = this.buildRequestUrl({
-                    provider: resolvedProvider,
-                    model: effectiveModel,
-                    apiKey: effectiveKey,
-                    method: 'generateContent'
-                });
-                const response = await axios.post(
-                    url,
-                    {
-                        contents: [{
-                            role: 'user',
-                            parts: [{ text: attemptPrompt }]
-                        }],
-                        generationConfig: {
-                            temperature,
-                            topK: 40,
-                            topP: 0.95,
-                            maxOutputTokens
-                        }
-                    }
-                );
-
-                const candidate = response.data?.candidates?.[0];
-                const parts = candidate?.content?.parts || [];
-                const chunk = parts.map(part => part?.text || '').join('');
-                if (chunk) {
-                    accumulated += chunk;
-                }
-
-                const finishReasonRaw = candidate?.finishReason ?? candidate?.finish_reason;
-                const finishReason = typeof finishReasonRaw === 'string'
-                    ? finishReasonRaw.trim().toUpperCase()
-                    : String(finishReasonRaw || '').trim().toUpperCase();
-
-                const isMaxTokens = finishReason === 'MAX_TOKENS'
-                    || finishReason === 'MAX_OUTPUT_TOKENS'
-                    || finishReason.includes('MAX_TOKENS');
-                if (!isMaxTokens || attempt >= maxContinuations) {
-                    break;
-                }
-
-                const tail = accumulated.slice(-2000);
-                attemptPrompt = [
-                    'Your previous response was cut off because it hit the maximum output token limit.',
-                    '',
-                    'Original request:',
-                    originalPrompt,
-                    '',
-                    'Partial answer so far (tail):',
-                    tail,
-                    '',
-                    'Continue EXACTLY from where you left off.',
-                    '- Do NOT repeat any text you already wrote.',
-                    '- Do NOT restart or summarize.',
-                    '- Do NOT add prefaces like "Sure" or "Continuing".',
-                    '- If the continuation starts a new word, include a leading space.'
-                ].join('\n');
-            }
-
-            const text = accumulated.trim();
-            if (!text) {
-                throw new Error('No response from AI');
-            }
-            return text;
-        } catch (error) {
-            logger.error('AI text generation failed', {
-                error: error.message,
-                response: error.response?.data
+            const url = this.buildRequestUrl({
+                provider: resolvedProvider,
+                model: effectiveModel,
+                apiKey: effectiveKey,
+                method: 'generateContent'
             });
-            throw new Error('AI generation failed: ' + (error.response?.data?.error?.message || error.message));
+
+            const response = await axios.post(url, requestBody);
+
+            const candidate = response.data?.candidates?.[0];
+            if (!candidate) throw new Error('No candidates returned from AI');
+
+            const parts = candidate.content?.parts || [];
+            const text = parts.map(p => p.text).join('');
+
+            return text;
+
+        } catch (error) {
+            const msg = error.response?.data?.error?.message || error.message;
+            logger.error('AI Service Error', { error: msg, provider: resolvedProvider, model: effectiveModel });
+            throw new Error(`AI generation failed: ${msg}`);
+        }
+    }
+
+    /**
+     * Generates text content.
+     */
+    async generateText(options) {
+        return this.generate({ ...options, jsonMode: false });
+    }
+
+    /**
+     * Helper to strip markdown code blocks and conversational text from JSON string
+     */
+    cleanJson(text) {
+        if (typeof text !== 'string') return '';
+        let clean = text.trim();
+        
+        // Find the first '{' and the last '}'
+        const firstBrace = clean.indexOf('{');
+        const lastBrace = clean.lastIndexOf('}');
+
+        if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+            clean = clean.slice(firstBrace, lastBrace + 1);
+        }
+        
+        return clean;
+    }
+
+    /**
+     * Generates and parses JSON content.
+     * Retries once on parse error.
+     */
+    async generateJson(options) {
+        try {
+            const rawText = await this.generate({ ...options, jsonMode: true });
+            const jsonText = this.cleanJson(rawText);
+            return JSON.parse(jsonText);
+        } catch (error) {
+            // Simple retry logic for JSON parsing issues
+            logger.warn('JSON Parse failed, retrying once...', { error: error.message });
+            try {
+                const retryText = await this.generate({ 
+                    ...options, 
+                    jsonMode: true, 
+                    prompt: options.prompt + "\n\nError parsing previous JSON. Ensure valid JSON format (no markdown)." 
+                });
+                const cleanRetry = this.cleanJson(retryText);
+                return JSON.parse(cleanRetry);
+            } catch (retryError) {
+                throw new Error('Failed to generate valid JSON: ' + retryError.message);
+            }
         }
     }
 }

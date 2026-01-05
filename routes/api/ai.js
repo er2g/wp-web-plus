@@ -4,6 +4,7 @@ const { z } = require('zod');
 
 const aiService = require('../../services/aiService');
 const accountManager = require('../../services/accountManager');
+const { logger } = require('../../services/logger');
 const { requireRole } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { sendError } = require('../../lib/httpResponses');
@@ -95,11 +96,17 @@ router.post('/admin-chat', requireRole(['admin']), validate({ body: adminChatSch
 
     // Agent operates on the ACTIVE account's DB
     const agent = new AdminAgent(req.account.db);
-    const response = await agent.process(history, message, {
+    let response = await agent.process(history, message, {
         apiKey,
         provider,
         model: user.ai_model // Agent can override this if needed, but passing user pref is good
     });
+
+    const trimmed = String(response || '').trim();
+    if (!trimmed || trimmed.length < 3 || /^[\][]{}().\s]+$/.test(trimmed)) {
+        logger.warn('AdminChat response sanitized', { response: trimmed });
+        response = 'İstek alındı, bot/script işlemi tamamlandığında Scripts bölümünden kontrol edebilirsiniz.';
+    }
 
     return res.json({ success: true, response });
 });

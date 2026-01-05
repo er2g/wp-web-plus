@@ -5,6 +5,21 @@ const typingIndicator = document.getElementById('typingIndicator');
 
 let history = []; // Stores conversation history context
 
+function sanitizeAssistantText(text) {
+    if (typeof text !== 'string') return '';
+    let next = text;
+    next = next.replace(/```[\s\S]*?TOOL[_\s]*CALL[\s\S]*?```/gi, '');
+    next = next.replace(/TOOL[_\s]*CALL\s*:?[^\n]*\{[\s\S]*?\}/gi, '');
+    next = next.replace(/^.*TOOL[_\s]*CALL.*$/gmi, '');
+    next = next.replace(/^.*TOOL[_\s]*RESULT.*$/gmi, '');
+    next = next.replace(/\n{3,}/g, '\n\n').trim();
+    next = next.replace(/^[\][]{}()\s]+/, '').trim();
+    while (next && /[\]})]$/.test(next)) {
+        next = next.slice(0, -1).trimEnd();
+    }
+    return next;
+}
+
 // Auto-resize textarea is now handled in HTML inline script or CSS, 
 // but we keep the event listener if needed for other logic.
 messageInput.addEventListener('keydown', function(e) {
@@ -51,7 +66,11 @@ async function sendMessage() {
         }
 
         const data = await response.json();
-        const reply = data.response;
+        const replyRaw = data.response;
+        let reply = sanitizeAssistantText(replyRaw);
+        if (!reply) {
+            reply = 'Islem tamamlandi.';
+        }
 
         // Add assistant message to UI
         appendMessage('assistant', reply);

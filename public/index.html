@@ -274,17 +274,32 @@
 	                <button class="icon-btn" onclick="openTemplatePicker()" title="Sablon Sec">
 	                    <i class="bi bi-card-text"></i>
 	                </button>
-	                <button class="icon-btn attach-btn" onclick="toggleAttachMenu()">
+	                <button class="icon-btn attach-btn" type="button" onclick="toggleAttachMenu()" aria-haspopup="true" aria-expanded="false">
 	                    <i class="bi bi-paperclip"></i>
-                </button>
-                <input type="file" id="mediaInput" class="file-input" />
-                <div class="chat-input-container">
-                    <textarea id="messageInput" placeholder="Bir mesaj yazin" rows="1" onkeydown="handleInputKeydown(event)" oninput="autoResizeInput(this)"></textarea>
-                </div>
-                <button class="send-btn" onclick="sendMessage()">
-                    <i class="bi bi-send-fill"></i>
-                    </button>
-                </div>
+	                </button>
+	                <div class="attach-menu" id="attachMenu">
+	                    <div class="attach-menu-title">Medya ekle</div>
+	                    <button class="attach-menu-item" type="button" onclick="openFilePicker()">
+	                        <i class="bi bi-folder2-open"></i>
+	                        <span>Dosya yukle</span>
+	                    </button>
+	                    <button class="attach-menu-item" type="button" onclick="openCameraCapture('photo')">
+	                        <i class="bi bi-camera-fill"></i>
+	                        <span>Fotograf cek</span>
+	                    </button>
+	                    <button class="attach-menu-item" type="button" onclick="openCameraCapture('video')">
+	                        <i class="bi bi-camera-video-fill"></i>
+	                        <span>Video cek</span>
+	                    </button>
+	                </div>
+	                <input type="file" id="mediaInput" class="file-input" accept="image/*,video/*" capture="environment" />
+	                <div class="chat-input-container">
+	                    <textarea id="messageInput" placeholder="Bir mesaj yazin" rows="1" onkeydown="handleInputKeydown(event)" oninput="autoResizeInput(this)"></textarea>
+	                </div>
+	                <button class="send-btn" onclick="sendMessage()">
+	                    <i class="bi bi-send-fill"></i>
+	                </button>
+	            </div>
             </div>
         </div>
     </div>
@@ -312,7 +327,7 @@
                     <div class="subtitle">Ozel JavaScript scriptleri</div>
                 </div>
             </div>
-            <div class="feature-item" onclick="window.location.href='admin-chat.html'">
+            <div class="feature-item" onclick="showTab('ai-assistant')">
                 <div class="icon purple"><i class="bi bi-robot"></i></div>
                 <div class="info">
                     <div class="title">AI Asistan</div>
