@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { z } = require('zod');
+const fs = require('fs');
 
 const { createAccountUpload } = require('../middleware/upload');
 const { validateChatId, validateMessage } = require('../../lib/apiValidation');
@@ -45,23 +46,32 @@ const sendBodySchema = z.object({
 });
 
 router.post('/', upload.single('media'), validate({ body: sendBodySchema }), async (req, res) => {
+    const mediaPath = req.file?.path;
     try {
         const { chatId, message, quotedMessageId, sendAsSticker } = req.validatedBody;
         const messageText = message || '';
-        if (!messageText && !req.file) {
+        if (!messageText && !mediaPath) {
             return sendError(req, res, 400, 'chatId and message or media required');
         }
-        const options = req.file ? { mediaPath: req.file.path } : {};
+        const options = mediaPath ? { mediaPath } : {};
         if (quotedMessageId) {
             options.quotedMessageId = quotedMessageId;
         }
-        if (req.file && sendAsSticker === true) {
+        if (mediaPath && sendAsSticker === true) {
             options.sendAsSticker = true;
         }
         const result = await req.account.whatsapp.sendMessage(chatId, messageText, options);
         return res.json({ success: true, messageId: result.id._serialized });
     } catch (error) {
         return sendError(req, res, 500, error.message);
+    } finally {
+        if (mediaPath) {
+            try {
+                fs.unlinkSync(mediaPath);
+            } catch (cleanupError) {
+                req.log?.warn?.('Send media cleanup failed', { error: cleanupError.message });
+            }
+        }
     }
 });
 
