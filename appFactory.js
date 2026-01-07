@@ -21,7 +21,9 @@ const { requireAuth, requireRole } = require('./routes/middleware/auth');
 
 const authRoutes = require('./routes/auth');
 const apiRoutes = require('./routes/api');
+const mobileRoutes = require('./routes/mobile');
 const openapiSpec = require('./docs/openapi.json');
+const { normalizeAccessToken, verifyAccessToken } = require('./services/mobileAuth');
 
 function createApp() {
     const app = express();
@@ -350,7 +352,14 @@ function createApp() {
     app.use(sessionMiddleware);
 
     const csrfProtection = csrf();
-    app.use(csrfProtection);
+    app.use((req, res, next) => {
+        const routePath = req.path || req.url || '';
+        const authHeader = req.headers?.authorization || '';
+        if (routePath.startsWith('/api/mobile') || routePath.startsWith('/auth/mobile') || String(authHeader).trim().toLowerCase().startsWith('bearer ')) {
+            return next();
+        }
+        return csrfProtection(req, res, next);
+    });
 
     app.use((req, res, next) => {
         if (typeof req.csrfToken === 'function') {
@@ -444,6 +453,7 @@ function createApp() {
         keyGenerator: (req) => req.session?.accountId || req.sessionID || ipKeyGenerator(req.ip || '')
     });
 
+    app.use('/api/mobile', apiIpLimiter, mobileRoutes);
     app.use('/api', apiIpLimiter, apiUserLimiter, apiRoutes);
 
     app.get('/', (req, res) => {
@@ -463,21 +473,51 @@ function createApp() {
     });
 
     io.use((socket, next) => {
-        sessionMiddleware(socket.request, {}, next);
+        sessionMiddleware(socket.request, {}, (err) => {
+            if (err) return next(err);
+            const session = socket.request.session;
+            if (session && session.authenticated) {
+                return next();
+            }
+
+            const tokenCandidate = socket.handshake?.auth?.token || socket.handshake?.headers?.authorization || null;
+            const token = normalizeAccessToken(tokenCandidate);
+            if (!token) {
+                return next(new Error('Not authenticated'));
+            }
+            try {
+                const payload = verifyAccessToken(token);
+                socket.request.auth = {
+                    type: 'bearer',
+                    userId: payload?.sub ? parseInt(payload.sub, 10) : null,
+                    role: payload?.role || null,
+                    accountId: payload?.accountId || null
+                };
+                if (!socket.request.auth.userId) {
+                    return next(new Error('Not authenticated'));
+                }
+                return next();
+            } catch (e) {
+                return next(new Error('Not authenticated'));
+            }
+        });
     });
 
     io.on('connection', (socket) => {
         const session = socket.request.session;
-        if (!session || !session.authenticated) {
+        const bearerAuth = socket.request.auth;
+        if ((!session || !session.authenticated) && (!bearerAuth || bearerAuth.type !== 'bearer')) {
             socket.disconnect();
             return;
         }
 
         const requestedAccount = socket.handshake.auth?.accountId;
-        const accountId = requestedAccount || session.accountId || accountManager.getDefaultAccountId();
+        const accountId = requestedAccount || session?.accountId || bearerAuth?.accountId || accountManager.getDefaultAccountId();
         const context = accountManager.getAccountContext(accountId);
         const resolvedAccountId = context?.account?.id || accountId;
-        session.accountId = resolvedAccountId;
+        if (session && session.authenticated) {
+            session.accountId = resolvedAccountId;
+        }
 
         socket.join(resolvedAccountId);
         logger.info('Client connected', { socketId: socket.id, accountId: resolvedAccountId });

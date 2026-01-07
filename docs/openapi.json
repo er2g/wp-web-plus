@@ -3,7 +3,7 @@
   "info": {
     "title": "WhatsApp Web Panel API",
     "version": "1.0.0",
-    "description": "Cookie tabanli oturum (express-session) + CSRF korumali API. /api altindaki mutating (POST/PUT/DELETE) endpoint'ler icin CSRF header gonderilmelidir."
+    "description": "Cookie tabanli oturum (express-session) + CSRF korumali API. Mobil icin /api/mobile altinda token tabanli (Bearer JWT) endpoint'ler vardir; Bearer ile gelen isteklerde CSRF aranmaz."
   },
   "servers": [
     {
@@ -13,6 +13,7 @@
   "tags": [
     { "name": "Health" },
     { "name": "Auth" },
+    { "name": "Mobile" },
     { "name": "Accounts" },
     { "name": "WhatsApp" },
     { "name": "Chats" },
@@ -49,6 +50,11 @@
         "type": "apiKey",
         "in": "header",
         "name": "X-XSRF-TOKEN"
+      },
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
       }
     },
     "parameters": {
@@ -129,6 +135,53 @@
           "userId": { "type": ["integer", "null"] },
           "role": { "type": ["string", "null"] },
           "preferences": { "type": ["object", "null"] }
+        }
+      },
+      "MobileTokenResponse": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "accessToken": { "type": "string" },
+          "refreshToken": { "type": "string" },
+          "tokenType": { "type": "string" },
+          "expiresInSec": { "type": "integer" }
+        }
+      },
+      "MobileLoginRequest": {
+        "type": "object",
+        "required": ["username", "password"],
+        "properties": {
+          "username": { "type": "string" },
+          "password": { "type": "string" },
+          "accountId": { "type": "string" },
+          "deviceId": { "type": "string" },
+          "platform": { "type": "string" },
+          "pushProvider": { "type": "string", "enum": ["fcm", "apns"] },
+          "pushToken": { "type": "string" },
+          "appVersion": { "type": "string" },
+          "locale": { "type": "string" },
+          "timezone": { "type": "string" }
+        }
+      },
+      "MobileRefreshRequest": {
+        "type": "object",
+        "required": ["refreshToken"],
+        "properties": {
+          "refreshToken": { "type": "string" },
+          "accountId": { "type": "string" }
+        }
+      },
+      "MobileDeviceUpsertRequest": {
+        "type": "object",
+        "required": ["deviceId"],
+        "properties": {
+          "deviceId": { "type": "string" },
+          "platform": { "type": "string" },
+          "pushProvider": { "type": "string", "enum": ["fcm", "apns"] },
+          "pushToken": { "type": "string" },
+          "appVersion": { "type": "string" },
+          "locale": { "type": "string" },
+          "timezone": { "type": "string" }
         }
       }
     }
@@ -252,6 +305,163 @@
             "description": "Success",
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } }
           }
+        }
+      }
+    },
+    "/api/mobile/login": {
+      "post": {
+        "tags": ["Mobile"],
+        "summary": "Mobil login (Bearer JWT)",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MobileLoginRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Tokens", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MobileTokenResponse" } } } },
+          "401": { "description": "Invalid credentials", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/mobile/refresh": {
+      "post": {
+        "tags": ["Mobile"],
+        "summary": "Refresh token rotate",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MobileRefreshRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Tokens", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MobileTokenResponse" } } } },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/mobile/logout": {
+      "post": {
+        "tags": ["Mobile"],
+        "summary": "Logout (revoke refresh token)",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "refreshToken": { "type": "string" },
+                  "all": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Success", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/mobile/me": {
+      "get": {
+        "tags": ["Mobile"],
+        "summary": "Current user + mobile settings",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/mobile/accounts": {
+      "get": {
+        "tags": ["Mobile"],
+        "summary": "List WhatsApp accounts",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": { "description": "Accounts", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/mobile/devices": {
+      "get": {
+        "tags": ["Mobile"],
+        "summary": "List registered devices",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": { "description": "Devices", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } }
+        }
+      },
+      "put": {
+        "tags": ["Mobile"],
+        "summary": "Upsert device push token",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MobileDeviceUpsertRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Success", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/mobile/devices/{deviceId}": {
+      "delete": {
+        "tags": ["Mobile"],
+        "summary": "Deactivate device",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "deviceId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Success", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } }
+        }
+      }
+    },
+    "/api/mobile/notification-settings": {
+      "get": {
+        "tags": ["Mobile"],
+        "summary": "Get global notification settings",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": { "description": "Settings", "content": { "application/json": { "schema": { "type": "object" } } } }
+        }
+      },
+      "put": {
+        "tags": ["Mobile"],
+        "summary": "Update global notification settings",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": {
+          "200": { "description": "Success", "content": { "application/json": { "schema": { "type": "object" } } } }
+        }
+      }
+    },
+    "/api/mobile/chats/{id}/notification-settings": {
+      "get": {
+        "tags": ["Mobile"],
+        "summary": "Get chat notification settings (mute)",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "$ref": "#/components/parameters/AccountIdHeader" }
+        ],
+        "responses": {
+          "200": { "description": "Settings", "content": { "application/json": { "schema": { "type": "object" } } } }
+        }
+      },
+      "put": {
+        "tags": ["Mobile"],
+        "summary": "Update chat notification settings (mute)",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "$ref": "#/components/parameters/AccountIdHeader" }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": {
+          "200": { "description": "Success", "content": { "application/json": { "schema": { "type": "object" } } } }
         }
       }
     },

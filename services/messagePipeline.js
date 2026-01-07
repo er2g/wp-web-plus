@@ -1,7 +1,7 @@
 const { randomUUID, randomBytes } = require('crypto');
 const { requestContext } = require('./logger');
 
-function createMessagePipeline({ autoReply, webhook, scriptRunner, logger, metrics }) {
+function createMessagePipeline({ autoReply, webhook, scriptRunner, pushNotifier, logger, metrics }) {
     const generateTraceId = () => (typeof randomUUID === 'function' ? randomUUID() : randomBytes(16).toString('hex'));
 
     function safeInc(counter, labels) {
@@ -51,7 +51,7 @@ function createMessagePipeline({ autoReply, webhook, scriptRunner, logger, metri
         }
     }
 
-    async function processMessage({ msgData, fromMe, accountId }) {
+    async function processMessage({ msgData, fromMe, accountId, accountDb }) {
         if (!msgData) return;
         const traceId = generateTraceId();
         const direction = fromMe ? 'outgoing' : 'incoming';
@@ -75,6 +75,11 @@ function createMessagePipeline({ autoReply, webhook, scriptRunner, logger, metri
 
                 await runSafely('webhook', () => webhook?.trigger?.('message', msgData, { traceId, accountId }), meta);
                 await runSafely('scriptRunner', () => scriptRunner?.processMessage?.(msgData), meta);
+                if (!fromMe) {
+                    await runSafely('push', () => pushNotifier?.notifyIncomingMessage?.({ accountId, msgData, accountDb }), meta);
+                } else {
+                    countTask('push', 'skipped');
+                }
             } finally {
                 const durationSeconds = Number(process.hrtime.bigint() - pipelineStartNs) / 1e9;
                 safeObserve(metrics?.messagePipelineDurationSeconds, { direction }, durationSeconds);

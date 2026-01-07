@@ -115,7 +115,18 @@ const envSchema = z.object({
     SCRIPT_LOG_RETENTION_DAYS: positiveInt(30),
     MESSAGE_RETENTION_DAYS: positiveInt(90),
 
-    LOG_LEVEL: requiredString('info')
+    LOG_LEVEL: requiredString('info'),
+
+    // Mobile API (token-based auth)
+    MOBILE_JWT_SECRET: optionalString(),
+    MOBILE_ACCESS_TOKEN_TTL_SEC: positiveInt(15 * 60),
+    MOBILE_REFRESH_TOKEN_TTL_DAYS: positiveInt(30),
+    MOBILE_MAX_DEVICES_PER_USER: positiveInt(20),
+
+    // Push notifications (optional)
+    PUSH_NOTIFICATIONS_ENABLED: booleanLike(false),
+    PUSH_FCM_SERVER_KEY: optionalString(),
+    PUBLIC_BASE_URL: optionalString()
 }).passthrough();
 
 let env;
@@ -220,5 +231,16 @@ module.exports = {
     WEBHOOK_QUEUE_LIMIT: env.WEBHOOK_QUEUE_LIMIT,
     
     // Logging
-    LOG_LEVEL: env.LOG_LEVEL
+    LOG_LEVEL: env.LOG_LEVEL,
+
+    // Mobile API
+    MOBILE_JWT_SECRET: env.MOBILE_JWT_SECRET || env.SESSION_SECRET,
+    MOBILE_ACCESS_TOKEN_TTL_SEC: env.MOBILE_ACCESS_TOKEN_TTL_SEC,
+    MOBILE_REFRESH_TOKEN_TTL_DAYS: env.MOBILE_REFRESH_TOKEN_TTL_DAYS,
+    MOBILE_MAX_DEVICES_PER_USER: env.MOBILE_MAX_DEVICES_PER_USER,
+
+    // Push notifications
+    PUSH_NOTIFICATIONS_ENABLED: env.PUSH_NOTIFICATIONS_ENABLED,
+    PUSH_FCM_SERVER_KEY: env.PUSH_FCM_SERVER_KEY,
+    PUBLIC_BASE_URL: env.PUBLIC_BASE_URL
 };

@@ -210,6 +210,66 @@ function createDatabase(config) {
         FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
     );
 
+    -- Mobile API auth + push notification support
+    CREATE TABLE IF NOT EXISTS mobile_refresh_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        token_hash TEXT UNIQUE NOT NULL,
+        device_id TEXT,
+        issued_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        revoked_at INTEGER,
+        replaced_by_hash TEXT,
+        ip TEXT,
+        user_agent TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_mobile_refresh_tokens_user ON mobile_refresh_tokens(user_id);
+    CREATE INDEX IF NOT EXISTS idx_mobile_refresh_tokens_expires ON mobile_refresh_tokens(expires_at);
+    CREATE INDEX IF NOT EXISTS idx_mobile_refresh_tokens_device ON mobile_refresh_tokens(device_id);
+
+    CREATE TABLE IF NOT EXISTS mobile_devices (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        device_id TEXT NOT NULL,
+        platform TEXT,
+        push_provider TEXT DEFAULT 'fcm',
+        push_token TEXT,
+        app_version TEXT,
+        locale TEXT,
+        timezone TEXT,
+        last_seen_at INTEGER,
+        is_active INTEGER DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, device_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_mobile_devices_user ON mobile_devices(user_id);
+    CREATE INDEX IF NOT EXISTS idx_mobile_devices_token ON mobile_devices(push_token);
+
+    CREATE TABLE IF NOT EXISTS mobile_notification_settings (
+        user_id INTEGER PRIMARY KEY,
+        enabled INTEGER DEFAULT 1,
+        show_sender_name INTEGER DEFAULT 1,
+        show_sender_photo INTEGER DEFAULT 1,
+        show_message_preview INTEGER DEFAULT 1,
+        sound TEXT,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS mobile_chat_notification_settings (
+        user_id INTEGER NOT NULL,
+        account_id TEXT NOT NULL,
+        chat_id TEXT NOT NULL,
+        muted_until INTEGER,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (user_id, account_id, chat_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_mobile_chat_notif_user ON mobile_chat_notification_settings(user_id);
+
     CREATE TABLE IF NOT EXISTS contacts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         chat_id TEXT UNIQUE,
@@ -833,6 +893,108 @@ function createDatabase(config) {
         count: db.prepare('SELECT COUNT(*) as count FROM users')
     };
 
+    const mobileRefreshTokens = {
+        create: db.prepare(`
+            INSERT INTO mobile_refresh_tokens
+            (user_id, token_hash, device_id, issued_at, expires_at, revoked_at, replaced_by_hash, ip, user_agent)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `),
+        getByHash: db.prepare('SELECT * FROM mobile_refresh_tokens WHERE token_hash = ?'),
+        revokeByHash: db.prepare('UPDATE mobile_refresh_tokens SET revoked_at = ?, replaced_by_hash = ? WHERE token_hash = ? AND revoked_at IS NULL'),
+        revokeAllByUser: db.prepare('UPDATE mobile_refresh_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL'),
+        cleanupExpired: db.prepare('DELETE FROM mobile_refresh_tokens WHERE expires_at < ?')
+    };
+
+    const mobileDevices = {
+        upsert: db.prepare(`
+            INSERT INTO mobile_devices
+            (user_id, device_id, platform, push_provider, push_token, app_version, locale, timezone, last_seen_at, is_active, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'))
+            ON CONFLICT(user_id, device_id) DO UPDATE SET
+                platform = COALESCE(excluded.platform, mobile_devices.platform),
+                push_provider = COALESCE(excluded.push_provider, mobile_devices.push_provider),
+                push_token = COALESCE(excluded.push_token, mobile_devices.push_token),
+                app_version = COALESCE(excluded.app_version, mobile_devices.app_version),
+                locale = COALESCE(excluded.locale, mobile_devices.locale),
+                timezone = COALESCE(excluded.timezone, mobile_devices.timezone),
+                last_seen_at = COALESCE(excluded.last_seen_at, mobile_devices.last_seen_at),
+                is_active = 1,
+                updated_at = datetime('now')
+        `),
+        getAllByUserId: db.prepare(`
+            SELECT *
+            FROM mobile_devices
+            WHERE user_id = ?
+            ORDER BY updated_at DESC
+        `),
+        getActivePushTargetsByUserId: db.prepare(`
+            SELECT device_id, push_provider, push_token
+            FROM mobile_devices
+            WHERE user_id = ?
+              AND is_active = 1
+              AND push_token IS NOT NULL
+              AND push_token != ''
+        `),
+        deactivate: db.prepare(`
+            UPDATE mobile_devices
+            SET is_active = 0, updated_at = datetime('now')
+            WHERE user_id = ? AND device_id = ?
+        `),
+        deactivateAllByUserId: db.prepare(`
+            UPDATE mobile_devices
+            SET is_active = 0, updated_at = datetime('now')
+            WHERE user_id = ?
+        `),
+        countActiveByUserId: db.prepare(`
+            SELECT COUNT(*) as count
+            FROM mobile_devices
+            WHERE user_id = ? AND is_active = 1
+        `)
+    };
+
+    const mobileNotificationSettings = {
+        getByUserId: db.prepare('SELECT * FROM mobile_notification_settings WHERE user_id = ?'),
+        upsert: db.prepare(`
+            INSERT INTO mobile_notification_settings
+            (user_id, enabled, show_sender_name, show_sender_photo, show_message_preview, sound, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(user_id) DO UPDATE SET
+                enabled = excluded.enabled,
+                show_sender_name = excluded.show_sender_name,
+                show_sender_photo = excluded.show_sender_photo,
+                show_message_preview = excluded.show_message_preview,
+                sound = excluded.sound,
+                updated_at = datetime('now')
+        `),
+        ensureDefault: db.prepare(`
+            INSERT INTO mobile_notification_settings
+            (user_id, enabled, show_sender_name, show_sender_photo, show_message_preview, sound, updated_at)
+            VALUES (?, 1, 1, 1, 1, NULL, datetime('now'))
+            ON CONFLICT(user_id) DO NOTHING
+        `)
+    };
+
+    const mobileChatNotificationSettings = {
+        getByKey: db.prepare(`
+            SELECT *
+            FROM mobile_chat_notification_settings
+            WHERE user_id = ? AND account_id = ? AND chat_id = ?
+        `),
+        upsertMutedUntil: db.prepare(`
+            INSERT INTO mobile_chat_notification_settings
+            (user_id, account_id, chat_id, muted_until, updated_at)
+            VALUES (?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(user_id, account_id, chat_id) DO UPDATE SET
+                muted_until = excluded.muted_until,
+                updated_at = datetime('now')
+        `),
+        clearMute: db.prepare(`
+            UPDATE mobile_chat_notification_settings
+            SET muted_until = NULL, updated_at = datetime('now')
+            WHERE user_id = ? AND account_id = ? AND chat_id = ?
+        `)
+    };
+
     const userRoles = {
         assign: db.prepare('INSERT OR REPLACE INTO user_roles (user_id, role_id) VALUES (?, ?)'),
         clear: db.prepare('DELETE FROM user_roles WHERE user_id = ?'),
@@ -1322,6 +1484,10 @@ function createDatabase(config) {
         locks,
         roles,
         users,
+        mobileRefreshTokens,
+        mobileDevices,
+        mobileNotificationSettings,
+        mobileChatNotificationSettings,
         userRoles,
         contacts,
         tags,

@@ -9,16 +9,18 @@ test('message pipeline runs all tasks for incoming messages', async () => {
         autoReply: { processMessage: async () => calls.push('autoReply') },
         webhook: { trigger: async (event) => calls.push(`webhook:${event}`) },
         scriptRunner: { processMessage: async () => calls.push('scriptRunner') },
+        pushNotifier: { notifyIncomingMessage: async () => calls.push('push') },
         logger: { error: () => {} }
     });
 
     await pipeline.process({
         msgData: { messageId: 'm1', chatId: 'c1' },
         fromMe: false,
-        accountId: 'a1'
+        accountId: 'a1',
+        accountDb: {}
     });
 
-    assert.deepEqual(calls, ['autoReply', 'webhook:message', 'scriptRunner']);
+    assert.deepEqual(calls, ['autoReply', 'webhook:message', 'scriptRunner', 'push']);
 });
 
 test('message pipeline skips autoReply for outgoing messages', async () => {
@@ -68,6 +70,7 @@ test('message pipeline increments metrics when provided', async () => {
         autoReply: { processMessage: async () => {} },
         webhook: { trigger: async () => {} },
         scriptRunner: { processMessage: async () => {} },
+        pushNotifier: { notifyIncomingMessage: async () => {} },
         logger: { error: () => {} },
         metrics: {
             messagePipelineMessagesTotal: { inc: (labels) => messages.push(labels) },
@@ -85,7 +88,8 @@ test('message pipeline increments metrics when provided', async () => {
     assert.deepEqual(tasks, [
         { task: 'autoReply', outcome: 'success' },
         { task: 'webhook', outcome: 'success' },
-        { task: 'scriptRunner', outcome: 'success' }
+        { task: 'scriptRunner', outcome: 'success' },
+        { task: 'push', outcome: 'success' }
     ]);
 });
 
@@ -96,6 +100,7 @@ test('message pipeline observes duration metrics when provided', async () => {
         autoReply: { processMessage: async () => {} },
         webhook: { trigger: async () => {} },
         scriptRunner: { processMessage: async () => {} },
+        pushNotifier: { notifyIncomingMessage: async () => {} },
         logger: { error: () => {} },
         metrics: {
             messagePipelineDurationSeconds: {
@@ -118,11 +123,12 @@ test('message pipeline observes duration metrics when provided', async () => {
     assert.equal(Number.isFinite(pipelineDurations[0].value), true);
     assert.equal(pipelineDurations[0].value >= 0, true);
 
-    assert.equal(taskDurations.length, 3);
+    assert.equal(taskDurations.length, 4);
     assert.deepEqual(taskDurations.map(entry => entry.labels), [
         { task: 'autoReply', outcome: 'success' },
         { task: 'webhook', outcome: 'success' },
-        { task: 'scriptRunner', outcome: 'success' }
+        { task: 'scriptRunner', outcome: 'success' },
+        { task: 'push', outcome: 'success' }
     ]);
     assert.equal(taskDurations.every(entry => Number.isFinite(entry.value) && entry.value >= 0), true);
 });

@@ -10,6 +10,7 @@ const { createSchedulerService } = require('./scheduler');
 const { createWebhookService } = require('./webhook');
 const { createScriptRunner } = require('./scriptRunner');
 const { createMessagePipeline } = require('./messagePipeline');
+const { createMobilePushNotifier } = require('./mobilePushNotifier');
 const { logger } = require('./logger');
 const { sendError } = require('../lib/httpResponses');
 
@@ -110,6 +111,10 @@ class AccountManager {
         this.contexts = new Map();
         this.io = null;
         this.metrics = null;
+        this.mobilePushNotifier = createMobilePushNotifier({
+            getDefaultDb: () => this.getAccountContext(this.getDefaultAccountId()).db,
+            logger
+        });
 
         const defaultConfig = getAccountConfig(DEFAULT_ACCOUNT_ID);
         migrateLegacyData(defaultConfig);
@@ -167,7 +172,14 @@ class AccountManager {
             return defaultContext?.db?.users?.getFirstAiConfig?.get?.() || null;
         };
         const scriptRunner = createScriptRunner(db, whatsapp, { aiConfigProvider });
-        const messagePipeline = createMessagePipeline({ autoReply, webhook, scriptRunner, logger, metrics: this.metrics });
+        const messagePipeline = createMessagePipeline({
+            autoReply,
+            webhook,
+            scriptRunner,
+            pushNotifier: this.mobilePushNotifier,
+            logger,
+            metrics: this.metrics
+        });
 
         const context = {
             account,
@@ -191,7 +203,8 @@ class AccountManager {
                 messagePipeline.schedule({
                     msgData: result.msgData,
                     fromMe,
-                    accountId: resolvedId
+                    accountId: resolvedId,
+                    accountDb: db
                 });
             }
 
@@ -239,7 +252,8 @@ class AccountManager {
         const headerAccountId = req.headers['x-account-id'];
         const queryAccountId = req.query.accountId;
         const sessionAccountId = req.session?.accountId;
-        const accountId = headerAccountId || queryAccountId || sessionAccountId || this.getDefaultAccountId();
+        const bearerAccountId = req.auth?.type === 'bearer' ? req.auth?.accountId : null;
+        const accountId = headerAccountId || queryAccountId || bearerAccountId || sessionAccountId || this.getDefaultAccountId();
 
         if (!isValidAccountId(accountId)) {
             return sendError(req, res, 400, 'Invalid account id');
@@ -250,14 +264,18 @@ class AccountManager {
             const fallbackId = this.getDefaultAccountId();
             const fallbackAccount = this.findAccount(fallbackId);
             if (fallbackAccount) {
-                req.session.accountId = fallbackId;
+                if (req.session && req.auth?.type !== 'bearer') {
+                    req.session.accountId = fallbackId;
+                }
                 req.account = this.getAccountContext(fallbackId);
                 return next();
             }
             return sendError(req, res, 404, 'Account not found');
         }
 
-        req.session.accountId = accountId;
+        if (req.session && req.auth?.type !== 'bearer') {
+            req.session.accountId = accountId;
+        }
         req.account = this.getAccountContext(accountId);
         return next();
     }
