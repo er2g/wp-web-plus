@@ -9,4 +9,5 @@ check_logs.js
 .DS_Store
 public/mobile/
 public/*.apk
+public/*.sha256
 routes/*.bak.*
