@@ -2196,7 +2196,7 @@ class WhatsAppClient {
                 : '';
             const lastAt = lastMsg?.timestamp
                 ? lastMsg.timestamp * 1000
-                : (chat.timestamp ? chat.timestamp * 1000 : Date.now());
+                : (chat.timestamp ? chat.timestamp * 1000 : (Number(existingChat?.last_message_at) || 0));
             const existingChat = this.db.chats.getById.get(chatId);
             const profilePic = existingChat?.profile_pic || this.chatProfileCache.get(chatId) || null;
             this.db.chats.upsert.run(

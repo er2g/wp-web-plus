@@ -37,7 +37,7 @@ function TabsNavigator() {
         tabBarInactiveTintColor: colors.subtext,
       }}
     >
-      <Tabs.Screen name="PanelTab" component={PanelWebViewScreen} options={{ title: 'Panel' }} />
+      <Tabs.Screen name="PanelTab" component={PanelWebViewScreen} options={{ title: 'Panel', headerShown: false }} />
       <Tabs.Screen name="PhoneTab" component={SettingsScreen} options={{ title: 'Telefon' }} />
     </Tabs.Navigator>
   );

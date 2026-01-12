@@ -265,6 +265,7 @@ function createDatabase(config) {
         account_id TEXT NOT NULL,
         chat_id TEXT NOT NULL,
         muted_until INTEGER,
+        android_channel TEXT,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (user_id, account_id, chat_id)
     );
@@ -621,6 +622,15 @@ function createDatabase(config) {
             apply: () => {
                 if (!columnExists('mobile_notification_settings', 'android_channel')) {
                     db.exec(`ALTER TABLE mobile_notification_settings ADD COLUMN android_channel TEXT DEFAULT 'messages_strong'`);
+                }
+            }
+        },
+        {
+            version: 19,
+            name: 'add_android_channel_to_mobile_chat_notification_settings',
+            apply: () => {
+                if (!columnExists('mobile_chat_notification_settings', 'android_channel')) {
+                    db.exec(`ALTER TABLE mobile_chat_notification_settings ADD COLUMN android_channel TEXT`);
                 }
             }
         }
@@ -997,6 +1007,14 @@ function createDatabase(config) {
             VALUES (?, ?, ?, ?, datetime('now'))
             ON CONFLICT(user_id, account_id, chat_id) DO UPDATE SET
                 muted_until = excluded.muted_until,
+                updated_at = datetime('now')
+        `),
+        upsertAndroidChannel: db.prepare(`
+            INSERT INTO mobile_chat_notification_settings
+            (user_id, account_id, chat_id, android_channel, updated_at)
+            VALUES (?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(user_id, account_id, chat_id) DO UPDATE SET
+                android_channel = excluded.android_channel,
                 updated_at = datetime('now')
         `),
         clearMute: db.prepare(`

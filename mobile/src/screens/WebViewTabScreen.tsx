@@ -12,6 +12,31 @@ function normalizeUrl(url: string) {
   return trimmed;
 }
 
+const injectedMobileFix = `
+(function () {
+  try {
+    var head = document.head || document.getElementsByTagName('head')[0];
+    if (!head) return;
+
+    var meta = document.querySelector('meta[name="viewport"]');
+    if (!meta) {
+      meta = document.createElement('meta');
+      meta.setAttribute('name', 'viewport');
+      head.appendChild(meta);
+    }
+    meta.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no');
+
+    var style = document.getElementById('__wp_panel_mobile_fix');
+    if (!style) {
+      style = document.createElement('style');
+      style.id = '__wp_panel_mobile_fix';
+      style.textContent = 'html, body { overflow-x: hidden !important; overscroll-behavior-x: none !important; }';
+      head.appendChild(style);
+    }
+  } catch (e) {}
+})(); true;
+`;
+
 function isExternalUrl(url: string) {
   const u = String(url || '').trim().toLowerCase();
   return (
@@ -73,7 +98,14 @@ export function WebViewTabScreen(props: { url: string; headers?: Record<string, 
         userAgent={userAgent}
         sharedCookiesEnabled
         thirdPartyCookiesEnabled
+        injectedJavaScriptBeforeContentLoaded={injectedMobileFix}
         setSupportMultipleWindows={false}
+        bounces={false}
+        overScrollMode="never"
+        showsHorizontalScrollIndicator={false}
+        showsVerticalScrollIndicator={false}
+        setBuiltInZoomControls={false}
+        setDisplayZoomControls={false}
         onLoadStart={() => setLoading(true)}
         onLoadEnd={() => setLoading(false)}
         onNavigationStateChange={onNavigationStateChange}

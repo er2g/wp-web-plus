@@ -129,6 +129,8 @@ const chatNotifSchema = z.object({
         const parsed = typeof v === 'number' ? v : parseInt(String(v), 10);
         return Number.isFinite(parsed) ? parsed : v;
     }, z.union([z.number().int().nonnegative(), z.null()]).optional())
+    ,
+    androidChannel: z.union([z.enum(['messages', 'messages_strong']), z.null()]).optional()
 }).strict();
 
 const pushTestSchema = z.object({
@@ -367,19 +369,29 @@ router.put('/chats/:id/notification-settings', requireAuth, validate({ params: c
     const accountId = String(req.headers['x-account-id'] || req.query.accountId || req.auth?.accountId || accountManager.getDefaultAccountId());
     const chatId = req.validatedParams.id;
 
-    if (req.validatedBody.mutedUntil === undefined) {
-        return sendError(req, res, 400, 'mutedUntil required');
+    if (req.validatedBody.mutedUntil === undefined && req.validatedBody.androidChannel === undefined) {
+        return sendError(req, res, 400, 'No changes provided');
     }
 
-    if (req.validatedBody.mutedUntil === null) {
-        db.mobileChatNotificationSettings.clearMute.run(userId, accountId, chatId);
-        const row = db.mobileChatNotificationSettings.getByKey.get(userId, accountId, chatId);
-        return res.json({ success: true, settings: row || { user_id: userId, account_id: accountId, chat_id: chatId, muted_until: null } });
+    if (req.validatedBody.mutedUntil !== undefined) {
+        if (req.validatedBody.mutedUntil === null) {
+            db.mobileChatNotificationSettings.clearMute.run(userId, accountId, chatId);
+        } else {
+            db.mobileChatNotificationSettings.upsertMutedUntil.run(userId, accountId, chatId, req.validatedBody.mutedUntil);
+        }
     }
 
-    db.mobileChatNotificationSettings.upsertMutedUntil.run(userId, accountId, chatId, req.validatedBody.mutedUntil);
     const row = db.mobileChatNotificationSettings.getByKey.get(userId, accountId, chatId);
-    return res.json({ success: true, settings: row });
+
+    if (req.validatedBody.androidChannel !== undefined) {
+        db.mobileChatNotificationSettings.upsertAndroidChannel.run(userId, accountId, chatId, req.validatedBody.androidChannel);
+    }
+
+    const after = db.mobileChatNotificationSettings.getByKey.get(userId, accountId, chatId);
+    return res.json({
+        success: true,
+        settings: after || { user_id: userId, account_id: accountId, chat_id: chatId, muted_until: null, android_channel: null }
+    });
 });
 
 router.get('/push/status', requireAuth, (req, res) => {

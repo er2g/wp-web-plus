@@ -6,6 +6,9 @@ const config = require('../config');
 const FCM_ENDPOINT = 'https://fcm.googleapis.com/fcm/send';
 const FCM_V1_SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
 
+const PUSH_DEBOUNCE_MS = 1200;
+const PUSH_MAX_SYNC_BACKLOG_AGE_MS = 60_000;
+
 function normalizeAbsoluteUrl(pathOrUrl) {
     if (!pathOrUrl) return null;
     const raw = String(pathOrUrl);
@@ -69,12 +72,14 @@ async function sendFcmLegacy({ serverKey, tokens, notification, data }) {
     let sent = 0;
 
     for (const batch of batches) {
+        const collapseKey = notification?.tag || undefined;
         await axios.post(
             FCM_ENDPOINT,
             {
                 registration_ids: batch,
                 priority: 'high',
                 content_available: true,
+                ...(collapseKey ? { collapse_key: collapseKey } : {}),
                 notification,
                 data
             },
@@ -144,6 +149,14 @@ function createMobilePushNotifier({ getDefaultDb, logger }) {
     const serviceAccount = readServiceAccount();
     const v1ProjectId = serviceAccount?.project_id ? String(serviceAccount.project_id) : null;
 
+    const pendingByKey = new Map();
+
+    function makeChatTag({ accountId, chatId }) {
+        const raw = `${String(accountId || '')}:${String(chatId || '')}`;
+        const hash = crypto.createHash('sha1').update(raw).digest('hex').slice(0, 24);
+        return `chat_${hash}`;
+    }
+
     let cachedV1Token = null;
     let cachedV1TokenExpMs = 0;
 
@@ -177,7 +190,7 @@ function createMobilePushNotifier({ getDefaultDb, logger }) {
         return accessToken;
     }
 
-    async function sendFcmV1({ tokens, notification, data, channelId }) {
+    async function sendFcmV1({ tokens, notification, data, channelId, tag, notificationCount }) {
         if (!serviceAccount || !v1ProjectId) return { ok: false, error: 'Missing service account' };
         if (!Array.isArray(tokens) || tokens.length === 0) return { ok: true, sent: 0 };
 
@@ -187,6 +200,8 @@ function createMobilePushNotifier({ getDefaultDb, logger }) {
         const endpoint = `https://fcm.googleapis.com/v1/projects/${encodeURIComponent(v1ProjectId)}/messages:send`;
         const image = notification?.image ? String(notification.image) : null;
         const resolvedChannelId = channelId || notification?.android_channel_id || 'messages_strong';
+        const resolvedTag = tag || notification?.tag || null;
+        const resolvedCount = Number.isFinite(notificationCount) ? notificationCount : null;
 
         let sent = 0;
         for (const token of tokens) {
@@ -204,6 +219,8 @@ function createMobilePushNotifier({ getDefaultDb, logger }) {
                             priority: 'HIGH',
                             notification: {
                                 channel_id: resolvedChannelId,
+                                ...(resolvedTag ? { tag: resolvedTag } : {}),
+                                ...(resolvedCount && resolvedCount > 1 ? { notification_count: resolvedCount } : {}),
                                 ...(image ? { image } : {})
                             }
                         },
@@ -231,6 +248,14 @@ function createMobilePushNotifier({ getDefaultDb, logger }) {
 
         const defaultDb = getDefaultDb();
         const nowMs = Date.now();
+        const msgTs = Number(msgData.timestamp) || 0;
+
+        try {
+            const running = accountDb?.syncRuns?.getRunning?.get?.() || null;
+            if (running && msgTs && (nowMs - msgTs) > PUSH_MAX_SYNC_BACKLOG_AGE_MS) {
+                return { ok: true, skipped: true, reason: 'sync_backlog' };
+            }
+        } catch (e) {}
 
         const chat = accountDb?.chats?.getById?.get?.(msgData.chatId) || null;
         const chatName = chat?.name || msgData.fromName || msgData.chatId;
@@ -238,7 +263,14 @@ function createMobilePushNotifier({ getDefaultDb, logger }) {
 
         const users = defaultDb.users.getAll.all().filter(u => u.is_active);
 
-        let totalSent = 0;
+        const previewFromMsg = () => {
+            const body = String(msgData.body || '').trim();
+            if (body) return body;
+            if (msgData.type === 'document') return '[Dosya]';
+            if (msgData.type && msgData.type !== 'chat') return '[Medya]';
+            return '';
+        };
+
         for (const user of users) {
             const settings = defaultDb.mobileNotificationSettings.getByUserId.get(user.id) || {
                 enabled: 1,
@@ -250,12 +282,15 @@ function createMobilePushNotifier({ getDefaultDb, logger }) {
             };
 
             if (settings.enabled === 0) continue;
-            const channelId = settings.android_channel === 'messages' ? 'messages' : 'messages_strong';
 
             const chatSettings = defaultDb.mobileChatNotificationSettings.getByKey.get(user.id, accountId, msgData.chatId);
             if (chatSettings?.muted_until && Number(chatSettings.muted_until) > nowMs) {
                 continue;
             }
+
+            const channelId = chatSettings?.android_channel
+                ? (chatSettings.android_channel === 'messages' ? 'messages' : 'messages_strong')
+                : (settings.android_channel === 'messages' ? 'messages' : 'messages_strong');
 
             const pushTargets = defaultDb.mobileDevices.getActivePushTargetsByUserId.all(user.id);
             const tokens = pushTargets
@@ -263,49 +298,82 @@ function createMobilePushNotifier({ getDefaultDb, logger }) {
                 .map(target => target.push_token);
             if (tokens.length === 0) continue;
 
-            const title = settings.show_sender_name === 0 ? 'Yeni mesaj' : chatName;
-            const body = settings.show_message_preview === 0
-                ? 'Yeni mesaj'
-                : String(msgData.body || (msgData.type === 'document' ? '[Dosya]' : '[Medya]') || '').slice(0, 200);
-            const image = settings.show_sender_photo === 0 ? null : normalizeChatPhotoUrl({ accountId, chatPhoto });
+            const key = `${user.id}:${String(accountId || '')}:${String(msgData.chatId || '')}`;
+            const pending = pendingByKey.get(key);
+            const tag = makeChatTag({ accountId, chatId: msgData.chatId });
 
-            const notification = {
-                title,
-                body,
-                android_channel_id: channelId,
-                ...(image ? { image } : {})
-            };
-
-            const data = {
-                event: 'message',
-                accountId: String(accountId || ''),
-                chatId: String(msgData.chatId || ''),
-                messageId: String(msgData.messageId || ''),
-                fromName: String(msgData.fromName || ''),
-                hasMedia: msgData.type && msgData.type !== 'chat' ? '1' : '0'
-            };
-
-            try {
-                const result = serviceAccount
-                    ? await sendFcmV1({ tokens, notification, data, channelId })
-                    : await sendFcmLegacy({
-                        serverKey: config.PUSH_FCM_SERVER_KEY,
-                        tokens,
-                        notification,
-                        data
-                    });
-                if (result.ok) totalSent += result.sent || 0;
-            } catch (error) {
-                logger?.warn?.('FCM push failed', {
-                    category: 'push',
-                    accountId,
-                    userId: user.id,
-                    error: error?.message || String(error)
-                });
+            if (pending) {
+                pending.count += 1;
+                const nextPreview = previewFromMsg();
+                if (nextPreview) pending.lastPreview = nextPreview;
+                pending.lastMessageId = msgData.messageId || pending.lastMessageId;
+                pending.lastFromName = msgData.fromName || pending.lastFromName;
+                pending.channelId = channelId;
+                continue;
             }
+
+            const entry = {
+                timer: null,
+                count: 1,
+                lastPreview: previewFromMsg() || null,
+                lastMessageId: msgData.messageId,
+                lastFromName: msgData.fromName || null,
+                channelId
+            };
+
+            entry.timer = setTimeout(async () => {
+                pendingByKey.delete(key);
+
+                const title = settings.show_sender_name === 0 ? 'Yeni mesaj' : chatName;
+                const snippet = String(entry.lastPreview || 'Yeni mesaj').slice(0, 200);
+                const body = settings.show_message_preview === 0
+                    ? (entry.count > 1 ? `(${entry.count} yeni mesaj)` : 'Yeni mesaj')
+                    : (entry.count > 1 ? `(${entry.count} yeni mesaj) ${snippet}` : snippet || 'Yeni mesaj');
+
+                const image = settings.show_sender_photo === 0 ? null : normalizeChatPhotoUrl({ accountId, chatPhoto });
+
+                const notification = {
+                    title,
+                    body,
+                    android_channel_id: entry.channelId,
+                    tag,
+                    ...(image ? { image } : {})
+                };
+
+                const data = {
+                    event: 'message',
+                    accountId: String(accountId || ''),
+                    chatId: String(msgData.chatId || ''),
+                    messageId: String(entry.lastMessageId || ''),
+                    fromName: String(entry.lastFromName || ''),
+                    hasMedia: msgData.type && msgData.type !== 'chat' ? '1' : '0',
+                    count: String(entry.count)
+                };
+
+                try {
+                    const result = serviceAccount
+                        ? await sendFcmV1({ tokens, notification, data, channelId: entry.channelId, tag, notificationCount: entry.count })
+                        : await sendFcmLegacy({
+                            serverKey: config.PUSH_FCM_SERVER_KEY,
+                            tokens,
+                            notification,
+                            data
+                        });
+                    void result;
+                } catch (error) {
+                    logger?.warn?.('FCM push failed', {
+                        category: 'push',
+                        accountId,
+                        userId: user.id,
+                        error: error?.message || String(error)
+                    });
+                }
+            }, PUSH_DEBOUNCE_MS);
+
+            pendingByKey.set(key, entry);
         }
 
-        return { ok: true, sent: totalSent };
+        return { ok: true, queued: true };
     }
 
     async function sendTestPush({ userId, title, body, imageUrl, data }) {
@@ -327,6 +395,7 @@ function createMobilePushNotifier({ getDefaultDb, logger }) {
             title: String(title || 'Test'),
             body: String(body || 'Test notification'),
             android_channel_id: channelId,
+            tag: 'test',
             ...(imageUrl ? { image: normalizeAbsoluteUrl(imageUrl) } : {})
         };
 
@@ -335,7 +404,9 @@ function createMobilePushNotifier({ getDefaultDb, logger }) {
                 tokens,
                 notification,
                 data: data && typeof data === 'object' ? data : { event: 'test' },
-                channelId
+                channelId,
+                tag: 'test',
+                notificationCount: 1
             })
             : await sendFcmLegacy({
                 serverKey: config.PUSH_FCM_SERVER_KEY,
