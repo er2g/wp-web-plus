@@ -3,16 +3,11 @@ import Constants from 'expo-constants';
 import { WebViewTabScreen } from './WebViewTabScreen';
 
 function joinPhoneUrl(panelUrl: string) {
-  const trimmed = String(panelUrl || '').trim();
-  const base = trimmed || 'https://rammfire.com/wp/';
-  try {
-    // Critical: keep `/phone` WITHOUT trailing slash so relative requests like `api/mobile/me`
-    // resolve to `${base}api/mobile/me` instead of `${base}phone/api/mobile/me`.
-    const normalizedBase = base.endsWith('/') ? base : `${base}/`;
-    return new URL('phone', normalizedBase).toString();
-  } catch {
-    return 'https://rammfire.com/wp/phone';
-  }
+  const base = String(panelUrl || '').trim() || 'https://rammfire.com/wp/';
+  // Critical: keep `/phone` WITHOUT trailing slash so relative requests like `api/mobile/me`
+  // resolve to `${base}api/mobile/me` instead of `${base}phone/api/mobile/me`.
+  const normalizedBase = base.replace(/\/+$/, '') + '/';
+  return normalizedBase + 'phone';
 }
 
 export function PhoneWebViewScreen() {
