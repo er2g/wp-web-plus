@@ -23,7 +23,7 @@ class AdminAgent {
 
     hasRecentAssignmentNotice(history = []) {
         if (!Array.isArray(history) || history.length === 0) return false;
-        const tail = history.slice(-8);
+        const tail = history.slice(-4);
         return tail.some((entry) => String(entry?.text || '').includes('[AI_ASSIGN_NOTICE]'));
     }
 
@@ -66,6 +66,23 @@ class AdminAgent {
         });
 
         return true;
+    }
+
+    shouldGateAiAssignmentTools(history, userMessage) {
+        const userText = String(userMessage || '').trim();
+        if (!userText) return false;
+
+        // Gate if the user just requested an assignment but hasn't provided any details yet.
+        if (this.isAiAssignmentRequest(userText) && !this.hasAssignmentDetails(userText)) {
+            return true;
+        }
+
+        // Gate if we're in a very recent assignment context and the user still hasn't provided details.
+        if (this.hasRecentAssignmentNotice(history) && !this.hasAssignmentDetails(userText)) {
+            return true;
+        }
+
+        return false;
     }
 
     defineTools() {
@@ -285,10 +302,12 @@ JSON OUTPUT SCHEMA:
             // Nudge the model to ask clarifying questions (persona/boundaries/trigger)
             // instead of creating a script immediately.
             this.injectAssignmentClarificationNotice(currentHistory, userText);
+            const gateAssignmentTools = this.shouldGateAiAssignmentTools(currentHistory, userText);
 
             const maxTurns = 5; // Prevent infinite loops
             let turn = 0;
             let invalidResponses = 0;
+            let assignmentToolBlocks = 0;
             let lastToolResult = null;
             const actionLog = [];
 
@@ -313,6 +332,22 @@ JSON OUTPUT SCHEMA:
                     logger.info('AdminAgent Decision', response);
     
                     if (response.tool_name) {
+                        if (gateAssignmentTools) {
+                            assignmentToolBlocks += 1;
+                            currentHistory.push({
+                                role: 'user',
+                                text: [
+                                    '[SYSTEM NOTICE]',
+                                    'Do not use tools yet. Ask short clarifying questions about persona/tone, when to reply (trigger), and boundaries. Wait for user answers, then proceed.'
+                                ].join(' ')
+                            });
+
+                            if (assignmentToolBlocks >= 2) {
+                                return 'AI atamasi yapmadan once botun karakterini/tonu, ne zaman cevap verecegini (tetik kurali) ve sinirlarini (yasak konular) netlestirelim. Bunlari yazar misin?';
+                            }
+                            continue;
+                        }
+
                         // Execute Tool
                         const tool = this.tools[response.tool_name];
                         if (!tool) {

@@ -305,3 +305,46 @@ test('AI admin chat asks clarifying questions before assigning a bot to a chat',
     const scripts = defaultContext.db.scripts.getAll.all();
     assert.equal(scripts.length, 0);
 });
+
+test('AI admin chat blocks tool usage for AI assignment until details provided', async () => {
+    const client = createClient();
+    const loginRes = await client.login('admin', 'test-password');
+    assert.equal(loginRes.status, 200);
+
+    const configRes = await client.api('POST', '/api/ai/config', { apiKey: 'local-ai-key' });
+    assert.equal(configRes.status, 200);
+
+    const chatId = 'abdulkadir-123@c.us';
+    defaultContext.db.chats.upsert.run(chatId, 'Abdulkadir', 0, null, 'Hello', Date.now(), 0);
+
+    const responses = [
+        {
+            thought: 'Try to jump straight to tools (should be blocked)',
+            tool_name: 'find_chat',
+            tool_params: { query: 'abdulkadir' },
+            final_response: null
+        },
+        {
+            thought: 'Ask clarifying questions instead',
+            tool_name: null,
+            tool_params: null,
+            final_response: 'Botun karakteri nasil olsun, hangi mesajlara cevap versin ve hangi konulara girmesin?'
+        }
+    ];
+
+    let callCount = 0;
+    aiService.generateJson = async (options) => responses[Math.min(callCount++, responses.length - 1)];
+
+    const res = await client.api('POST', '/api/ai/admin-chat', {
+        message: 'Abdulkadir sohbetine AI ata',
+        history: []
+    });
+    assert.equal(res.status, 200);
+    const parsed = JSON.parse(res.body);
+    assert.equal(parsed.success, true);
+    assert.match(parsed.response, /karakter/i);
+    assert.ok(callCount >= 2);
+
+    const scripts = defaultContext.db.scripts.getAll.all();
+    assert.equal(scripts.length, 0);
+});
