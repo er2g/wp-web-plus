@@ -174,7 +174,9 @@ export function SessionProvider(props: { children: ReactNode }) {
   }, [baseUrl, clearPersisted, refreshBootstrap]);
 
   useEffect(() => {
-    bootstrapFromStorage();
+    bootstrapFromStorage().catch(() => {
+      setStatus('signedOut');
+    });
   }, [bootstrapFromStorage]);
 
   const signIn = useCallback(
