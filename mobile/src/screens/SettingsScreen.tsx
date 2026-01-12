@@ -28,7 +28,14 @@ export function SettingsScreen() {
   const [sound, setSound] = useState(session.notificationSettings?.sound || '');
   const [accountModal, setAccountModal] = useState(false);
   const [deviceId, setDeviceId] = useState<string | null>(null);
-  const [pushStatus, setPushStatus] = useState<{ enabled: boolean; hasServerKey: boolean; publicBaseUrl: string | null } | null>(null);
+  const [pushStatus, setPushStatus] = useState<{
+    enabled: boolean;
+    mode: string;
+    hasServerKey: boolean;
+    hasServiceAccount: boolean;
+    projectId: string | null;
+    publicBaseUrl: string | null;
+  } | null>(null);
 
   useEffect(() => {
     setSound(session.notificationSettings?.sound || '');
@@ -228,9 +235,11 @@ export function SettingsScreen() {
           subtitle={
             pushStatus
               ? pushStatus.enabled
-                ? pushStatus.hasServerKey
-                  ? 'Açık (FCM hazır)'
-                  : 'Açık (FCM anahtarı yok)'
+                ? pushStatus.mode === 'v1'
+                  ? `Açık (v1: ${pushStatus.projectId || '-'})`
+                  : pushStatus.hasServerKey
+                    ? 'Açık (legacy key)'
+                    : 'Açık (sender eksik)'
                 : 'Kapalı'
               : '-'
           }

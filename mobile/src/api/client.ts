@@ -214,7 +214,14 @@ export function createApiClient() {
     mobileMe,
     mobileLogout,
     mobilePushStatus: async (input: { accessToken: string }) => {
-      return requestJson<{ enabled: boolean; hasServerKey: boolean; publicBaseUrl: string | null }>('/api/mobile/push/status', {
+      return requestJson<{
+        enabled: boolean;
+        mode: 'v1' | 'legacy' | 'disabled' | string;
+        hasServerKey: boolean;
+        hasServiceAccount: boolean;
+        projectId: string | null;
+        publicBaseUrl: string | null;
+      }>('/api/mobile/push/status', {
         method: 'GET',
         headers: { Authorization: `Bearer ${input.accessToken}` },
       });

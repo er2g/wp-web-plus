@@ -380,7 +380,10 @@ router.put('/chats/:id/notification-settings', requireAuth, validate({ params: c
 });
 
 router.get('/push/status', requireAuth, (req, res) => {
-    return res.json(accountManager.mobilePushNotifier?.getStatus?.() || { enabled: false, hasServerKey: false, publicBaseUrl: null });
+    return res.json(
+        accountManager.mobilePushNotifier?.getStatus?.()
+        || { enabled: false, mode: 'disabled', hasServerKey: false, hasServiceAccount: false, projectId: null, publicBaseUrl: null }
+    );
 });
 
 router.post('/push/test', requireAuth, validate({ body: pushTestSchema }), async (req, res) => {

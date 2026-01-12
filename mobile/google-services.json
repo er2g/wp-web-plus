@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "677090223577",
+    "project_id": "gen-harmoni",
+    "storage_bucket": "gen-harmoni.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:677090223577:android:46c6ce888f5112879025c8",
+        "android_client_info": {
+          "package_name": "er2g.wppanel"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAGDN4N5UyI3QDaRWc7tuFH6P-Frn2H8Yk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -11,3 +11,4 @@ public/mobile/
 public/*.apk
 public/*.sha256
 routes/*.bak.*
+secrets/

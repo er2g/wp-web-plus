@@ -126,6 +126,8 @@ const envSchema = z.object({
     // Push notifications (optional)
     PUSH_NOTIFICATIONS_ENABLED: booleanLike(false),
     PUSH_FCM_SERVER_KEY: optionalString(),
+    PUSH_FCM_SERVICE_ACCOUNT_JSON: optionalString(),
+    PUSH_FCM_SERVICE_ACCOUNT_PATH: optionalString(),
     PUBLIC_BASE_URL: optionalString()
 }).passthrough();
 
@@ -242,5 +244,7 @@ module.exports = {
     // Push notifications
     PUSH_NOTIFICATIONS_ENABLED: env.PUSH_NOTIFICATIONS_ENABLED,
     PUSH_FCM_SERVER_KEY: env.PUSH_FCM_SERVER_KEY,
+    PUSH_FCM_SERVICE_ACCOUNT_JSON: env.PUSH_FCM_SERVICE_ACCOUNT_JSON,
+    PUSH_FCM_SERVICE_ACCOUNT_PATH: env.PUSH_FCM_SERVICE_ACCOUNT_PATH,
     PUBLIC_BASE_URL: env.PUBLIC_BASE_URL
 };
