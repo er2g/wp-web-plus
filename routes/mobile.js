@@ -130,6 +130,13 @@ const chatNotifSchema = z.object({
     }, z.union([z.number().int().nonnegative(), z.null()]).optional())
 }).strict();
 
+const pushTestSchema = z.object({
+    title: z.preprocess((v) => (typeof v === 'string' ? v.trim() : v), z.string().min(1).max(80)).optional(),
+    body: z.preprocess((v) => (typeof v === 'string' ? v.trim() : v), z.string().min(1).max(200)).optional(),
+    imageUrl: optionalTrimmedString(),
+    data: z.record(z.string().max(120)).optional()
+}).strict();
+
 const router = express.Router();
 
 router.post('/login', validate({ body: loginBodySchema }), (req, res) => {
@@ -370,6 +377,28 @@ router.put('/chats/:id/notification-settings', requireAuth, validate({ params: c
     db.mobileChatNotificationSettings.upsertMutedUntil.run(userId, accountId, chatId, req.validatedBody.mutedUntil);
     const row = db.mobileChatNotificationSettings.getByKey.get(userId, accountId, chatId);
     return res.json({ success: true, settings: row });
+});
+
+router.get('/push/status', requireAuth, (req, res) => {
+    return res.json(accountManager.mobilePushNotifier?.getStatus?.() || { enabled: false, hasServerKey: false, publicBaseUrl: null });
+});
+
+router.post('/push/test', requireAuth, validate({ body: pushTestSchema }), async (req, res) => {
+    const userId = req.auth?.userId || req.session?.userId;
+    if (!userId) return sendError(req, res, 401, 'Not authenticated');
+
+    try {
+        const result = await accountManager.mobilePushNotifier?.sendTestPush?.({
+            userId,
+            title: req.validatedBody.title || undefined,
+            body: req.validatedBody.body || undefined,
+            imageUrl: req.validatedBody.imageUrl || undefined,
+            data: req.validatedBody.data || undefined
+        });
+        return res.json({ success: true, result: result || null });
+    } catch (error) {
+        return sendError(req, res, 500, error?.message || 'Push failed');
+    }
 });
 
 module.exports = router;

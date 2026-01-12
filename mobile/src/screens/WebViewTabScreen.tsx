@@ -28,7 +28,7 @@ function isExternalUrl(url: string) {
   );
 }
 
-export function WebViewTabScreen(props: { url: string; debugLabel?: string }) {
+export function WebViewTabScreen(props: { url: string; headers?: Record<string, string> | undefined; debugLabel?: string }) {
   const webViewRef = useRef<WebView>(null);
   const [canGoBack, setCanGoBack] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -69,7 +69,7 @@ export function WebViewTabScreen(props: { url: string; debugLabel?: string }) {
     <View style={styles.container}>
       <WebView
         ref={webViewRef}
-        source={{ uri: initialUrl }}
+        source={{ uri: initialUrl, headers: props.headers }}
         userAgent={userAgent}
         sharedCookiesEnabled
         thirdPartyCookiesEnabled
@@ -138,4 +138,3 @@ const styles = StyleSheet.create({
   },
   debugText: { color: colors.subtext, fontSize: 10 },
 });
-

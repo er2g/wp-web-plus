@@ -28,6 +28,7 @@ export function SettingsScreen() {
   const [sound, setSound] = useState(session.notificationSettings?.sound || '');
   const [accountModal, setAccountModal] = useState(false);
   const [deviceId, setDeviceId] = useState<string | null>(null);
+  const [pushStatus, setPushStatus] = useState<{ enabled: boolean; hasServerKey: boolean; publicBaseUrl: string | null } | null>(null);
 
   useEffect(() => {
     setSound(session.notificationSettings?.sound || '');
@@ -36,6 +37,14 @@ export function SettingsScreen() {
   useEffect(() => {
     getOrCreateDeviceId().then(setDeviceId).catch(() => setDeviceId(null));
   }, []);
+
+  useEffect(() => {
+    if (session.status !== 'signedIn') return;
+    void session
+      .callApi((accessToken) => api.mobilePushStatus({ accessToken }))
+      .then(setPushStatus)
+      .catch(() => setPushStatus(null));
+  }, [api, session]);
 
   async function applyNotifPatch(patch: any) {
     setBusy(true);
@@ -102,8 +111,8 @@ export function SettingsScreen() {
       const registration = await registerForPushAsync();
       if (!registration) {
         Alert.alert(
-          'Push yapılandırılmadı',
-          'Bu APK build’inde push bildirimleri devre dışı. Push için Android tarafında Firebase (google-services.json) yapılandırması gerekiyor.'
+          'Push aktif değil',
+          'Bildirim izni verilmemiş olabilir ya da Android tarafında Firebase (google-services.json) yapılandırması eksik olabilir.'
         );
         return;
       }
@@ -124,6 +133,24 @@ export function SettingsScreen() {
 
       await session.refreshBootstrap();
       Alert.alert('OK', 'Push token kaydedildi.');
+    } catch (err) {
+      Alert.alert('Hata', err instanceof Error ? err.message : 'Bilinmeyen hata');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleTestPush() {
+    setBusy(true);
+    try {
+      const result = await session.callApi((accessToken) =>
+        api.mobilePushTest({
+          accessToken,
+          title: 'WpPanel Test',
+          body: 'Bildirim geldi mi?',
+        })
+      );
+      Alert.alert('Test sonucu', JSON.stringify(result.result || result, null, 2));
     } catch (err) {
       Alert.alert('Hata', err instanceof Error ? err.message : 'Bilinmeyen hata');
     } finally {
@@ -197,12 +224,25 @@ export function SettingsScreen() {
         <Text style={styles.sectionTitle}>Cihaz / Push</Text>
         <Row title="DeviceId" subtitle={deviceId || '-'} />
         <Row
+          title="Sunucu push"
+          subtitle={
+            pushStatus
+              ? pushStatus.enabled
+                ? pushStatus.hasServerKey
+                  ? 'Açık (FCM hazır)'
+                  : 'Açık (FCM anahtarı yok)'
+                : 'Kapalı'
+              : '-'
+          }
+        />
+        <Row
           title="Kayıtlı cihaz sayısı"
           subtitle={`${session.devices?.length || 0}`}
           right={<Text style={{ color: colors.subtext }}>{notifEnabled ? '✓' : ''}</Text>}
         />
         <Button title="Cihaz kaydını güncelle" onPress={handleRegisterDevice} loading={busy} variant="ghost" />
         <Button title="Push izni ver & token kaydet" onPress={handleEnablePush} loading={busy} variant="ghost" />
+        <Button title="Test bildirim gönder" onPress={handleTestPush} loading={busy} variant="ghost" />
         <Text style={styles.note}>Not: `expo run` / EAS build ile gerçek cihazda push token daha stabil alınır.</Text>
       </View>
 

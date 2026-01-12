@@ -132,8 +132,44 @@ function createMobilePushNotifier({ getDefaultDb, logger }) {
         return { ok: true, sent: totalSent };
     }
 
-    return { notifyIncomingMessage };
+    async function sendTestPush({ userId, title, body, imageUrl, data }) {
+        if (!config.PUSH_NOTIFICATIONS_ENABLED) return { ok: true, skipped: true, reason: 'disabled' };
+        if (!config.PUSH_FCM_SERVER_KEY) return { ok: true, skipped: true, reason: 'missing_server_key' };
+        if (!userId) return { ok: false, error: 'Missing userId' };
+
+        const defaultDb = getDefaultDb();
+        const pushTargets = defaultDb.mobileDevices.getActivePushTargetsByUserId.all(userId);
+        const tokens = pushTargets
+            .filter(target => target.push_provider === 'fcm' && target.push_token)
+            .map(target => target.push_token);
+
+        if (tokens.length === 0) return { ok: true, sent: 0 };
+
+        const notification = {
+            title: String(title || 'Test'),
+            body: String(body || 'Test notification'),
+            ...(imageUrl ? { image: normalizeAbsoluteUrl(imageUrl) } : {})
+        };
+
+        const result = await sendFcmLegacy({
+            serverKey: config.PUSH_FCM_SERVER_KEY,
+            tokens,
+            notification,
+            data: data && typeof data === 'object' ? data : { event: 'test' }
+        });
+
+        return result.ok ? { ok: true, sent: result.sent || 0 } : result;
+    }
+
+    function getStatus() {
+        return {
+            enabled: Boolean(config.PUSH_NOTIFICATIONS_ENABLED),
+            hasServerKey: Boolean(config.PUSH_FCM_SERVER_KEY),
+            publicBaseUrl: config.PUBLIC_BASE_URL || null
+        };
+    }
+
+    return { notifyIncomingMessage, sendTestPush, getStatus };
 }
 
 module.exports = { createMobilePushNotifier };
-

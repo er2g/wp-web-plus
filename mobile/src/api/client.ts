@@ -213,6 +213,22 @@ export function createApiClient() {
     mobileAccounts,
     mobileMe,
     mobileLogout,
+    mobilePushStatus: async (input: { accessToken: string }) => {
+      return requestJson<{ enabled: boolean; hasServerKey: boolean; publicBaseUrl: string | null }>('/api/mobile/push/status', {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${input.accessToken}` },
+      });
+    },
+    mobilePushTest: async (input: { accessToken: string; title?: string; body?: string }) => {
+      return requestJson<{ success: true; result: any }>('/api/mobile/push/test', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${input.accessToken}` },
+        json: {
+          ...(input.title ? { title: input.title } : {}),
+          ...(input.body ? { body: input.body } : {}),
+        },
+      });
+    },
     upsertDevice,
     getNotificationSettings,
     updateNotificationSettings,

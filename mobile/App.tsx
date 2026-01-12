@@ -1,9 +1,11 @@
 import { StatusBar } from 'expo-status-bar';
+import * as Notifications from 'expo-notifications';
 import { useEffect, useState } from 'react';
 import { SafeAreaView, StyleSheet, Text, View } from 'react-native';
 
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { ErrorBoundary } from './src/crash/ErrorBoundary';
+import { SessionProvider } from './src/session/SessionContext';
 import { colors } from './src/theme/colors';
 
 export default function App() {
@@ -23,6 +25,18 @@ export default function App() {
     return () => {
       if (previousHandler) ErrorUtilsAny.setGlobalHandler(previousHandler);
     };
+  }, []);
+
+  useEffect(() => {
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowAlert: true,
+        shouldShowBanner: true,
+        shouldShowList: true,
+        shouldPlaySound: true,
+        shouldSetBadge: false,
+      }),
+    });
   }, []);
 
   return (
@@ -48,7 +62,9 @@ export default function App() {
         </View>
       ) : (
         <ErrorBoundary onError={(e) => console.error('React render error', e)}>
-          <RootNavigator />
+          <SessionProvider>
+            <RootNavigator />
+          </SessionProvider>
         </ErrorBoundary>
       )}
       <StatusBar style="light" />

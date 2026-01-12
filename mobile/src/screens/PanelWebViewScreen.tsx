@@ -1,6 +1,7 @@
 import Constants from 'expo-constants';
 
 import { WebViewTabScreen } from './WebViewTabScreen';
+import { useSession } from '../session/SessionContext';
 
 function ensureTrailingSlash(url: string) {
   const trimmed = String(url || '').trim();
@@ -9,7 +10,16 @@ function ensureTrailingSlash(url: string) {
 }
 
 export function PanelWebViewScreen() {
-  const url = ensureTrailingSlash((Constants.expoConfig?.extra as any)?.panelUrl || 'https://rammfire.com/wp/');
-  return <WebViewTabScreen url={url} />;
-}
+  const session = useSession();
+  const baseUrl = ensureTrailingSlash(session.baseUrl || (Constants.expoConfig?.extra as any)?.panelUrl || 'https://rammfire.com/wp/');
+  const accessToken = session.tokens?.accessToken || null;
 
+  const url = accessToken ? `${baseUrl}auth/mobile/session?redirect=/` : baseUrl;
+
+  return (
+    <WebViewTabScreen
+      url={url}
+      headers={accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined}
+    />
+  );
+}
