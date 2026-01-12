@@ -4,8 +4,8 @@
   "main": "index.ts",
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
     "doctor": "npx --yes expo-doctor"
@@ -24,6 +24,7 @@
     "react-native-safe-area-context": "5.6.0",
     "react-native-screens": "~4.16.0",
     "react-native-web": "^0.21.0",
+    "react-native-webview": "13.15.0",
     "socket.io-client": "^4.6.0"
   },
   "devDependencies": {

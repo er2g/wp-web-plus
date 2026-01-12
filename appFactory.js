@@ -456,6 +456,18 @@ function createApp() {
     app.use('/api/mobile', apiIpLimiter, mobileRoutes);
     app.use('/api', apiIpLimiter, apiUserLimiter, apiRoutes);
 
+    app.get('/phone/', (req, res) => {
+        res.redirect(302, '/phone');
+    });
+
+    app.get('/phone', (req, res) => {
+        if (req.session && req.session.authenticated) {
+            res.sendFile(path.join(__dirname, 'public', 'phone.html'));
+        } else {
+            res.redirect('/');
+        }
+    });
+
     app.get('/', (req, res) => {
         if (req.session && req.session.authenticated) {
             res.sendFile(path.join(__dirname, 'public', 'index.html'));

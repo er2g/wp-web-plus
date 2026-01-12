@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Telefon Ayarları</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" rel="stylesheet" />
+  <link href="css/style.css" rel="stylesheet" />
+  <style>
+    .phone-wrap{max-width:860px;margin:0 auto;padding:18px}
+    .phone-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
+    .phone-title{font-size:20px;font-weight:800;color:var(--text, #fff)}
+    .phone-sub{color:rgba(255,255,255,.65);font-size:13px}
+    .phone-card{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:14px;margin-top:12px}
+    .rowline{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.08)}
+    .rowline:last-child{border-bottom:none}
+    .rowleft{display:flex;flex-direction:column;gap:2px}
+    .rowtitle{font-weight:700}
+    .rowsub{color:rgba(255,255,255,.6);font-size:12px}
+    .btnx{background:#25D366;border:none;color:#06110a;padding:10px 14px;border-radius:12px;font-weight:800;cursor:pointer}
+    .btnx.secondary{background:rgba(255,255,255,.10);color:#fff;border:1px solid rgba(255,255,255,.12)}
+    .btnx.danger{background:rgba(255,75,75,.18);color:#ffb3b3;border:1px solid rgba(255,75,75,.25)}
+    .btnx:disabled{opacity:.55;cursor:not-allowed}
+    .inputx{width:100%;background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.14);border-radius:12px;padding:10px 12px;color:#fff}
+    .hint{color:rgba(255,255,255,.6);font-size:12px;line-height:18px;margin-top:8px}
+    .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace}
+    .pill{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border-radius:999px;background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.12);color:#fff;font-size:12px}
+    .err{color:#ffb3b3}
+    .ok{color:#b9ffd0}
+  </style>
+</head>
+<body>
+  <div class="phone-wrap">
+    <div class="phone-header">
+      <div>
+        <div class="phone-title">Telefon Ayarları</div>
+        <div class="phone-sub">Bu sayfa WebView içinden kullanılsın diye basit tutuldu.</div>
+      </div>
+      <div class="pill">
+        <i class="bi bi-phone"></i>
+        <span id="statusText">Yükleniyor…</span>
+      </div>
+    </div>
+
+    <div class="phone-card">
+      <div class="rowline">
+        <div class="rowleft">
+          <div class="rowtitle">Kullanıcı</div>
+          <div class="rowsub" id="meText">-</div>
+        </div>
+        <button class="btnx secondary" id="refreshBtn">Yenile</button>
+      </div>
+      <div class="rowline">
+        <div class="rowleft">
+          <div class="rowtitle">DeviceId</div>
+          <div class="rowsub mono" id="deviceIdText">-</div>
+        </div>
+        <button class="btnx secondary" id="registerDeviceBtn">Cihazı Kaydet</button>
+      </div>
+      <div class="hint">
+        Not: Buradaki ayarlar <span class="mono">/api/mobile/*</span> endpoint’leri üzerinden tutulur; web panelin geri kalanı WebView’de çalışır.
+      </div>
+    </div>
+
+    <div class="phone-card">
+      <div class="rowline">
+        <div class="rowleft">
+          <div class="rowtitle">Bildirimler</div>
+          <div class="rowsub">Genel bildirimleri aç/kapat</div>
+        </div>
+        <input type="checkbox" id="enabledToggle" />
+      </div>
+      <div class="rowline">
+        <div class="rowleft">
+          <div class="rowtitle">Gönderen adı</div>
+          <div class="rowsub">Bildirimde isim göster</div>
+        </div>
+        <input type="checkbox" id="showSenderNameToggle" />
+      </div>
+      <div class="rowline">
+        <div class="rowleft">
+          <div class="rowtitle">Gönderen foto</div>
+          <div class="rowsub">Bildirimde foto göster</div>
+        </div>
+        <input type="checkbox" id="showSenderPhotoToggle" />
+      </div>
+      <div class="rowline">
+        <div class="rowleft">
+          <div class="rowtitle">Mesaj önizleme</div>
+          <div class="rowsub">Bildirimde mesaj içeriği</div>
+        </div>
+        <input type="checkbox" id="showMessagePreviewToggle" />
+      </div>
+
+      <div style="height:12px"></div>
+      <div class="rowleft">
+        <div class="rowtitle">Bildirim sesi (opsiyonel)</div>
+        <div class="rowsub">Örn: <span class="mono">default</span> — boş bırakırsan <span class="mono">null</span> olur</div>
+      </div>
+      <div style="height:10px"></div>
+      <input class="inputx" id="soundInput" placeholder="default" />
+      <div style="height:10px"></div>
+      <button class="btnx" id="saveNotifBtn">Kaydet</button>
+      <div class="hint" id="notifHint"></div>
+    </div>
+
+    <div class="phone-card">
+      <div class="rowleft">
+        <div class="rowtitle">Kayıtlı Cihazlar</div>
+        <div class="rowsub">Bu kullanıcı için kayıtlı cihaz listesi</div>
+      </div>
+      <div style="height:10px"></div>
+      <div id="devicesList"></div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    function setStatus(text, kind) {
+      const el = $('statusText');
+      el.textContent = text;
+      el.className = kind === 'ok' ? 'ok' : (kind === 'err' ? 'err' : '');
+    }
+
+    function getOrCreateDeviceId() {
+      const key = 'wp_panel_device_id';
+      const existing = localStorage.getItem(key);
+      if (existing && existing.length >= 8) return existing;
+      const id = 'wv-' + Math.random().toString(16).slice(2) + '-' + Date.now().toString(16);
+      localStorage.setItem(key, id);
+      return id;
+    }
+
+    async function api(path, options) {
+      const url = String(path || '').replace(/^\/+/, ''); // keep relative: "api/mobile/..."
+      const res = await fetch(url, {
+        credentials: 'include',
+        cache: 'no-store',
+        ...options
+      });
+      const ct = (res.headers.get('content-type') || '').toLowerCase();
+      const payload = ct.includes('application/json') ? await res.json().catch(() => null) : await res.text().catch(() => '');
+      if (!res.ok) {
+        const message = payload && payload.error ? payload.error : (payload && payload.message ? payload.message : `HTTP ${res.status}`);
+        const err = new Error(message);
+        err.status = res.status;
+        err.payload = payload;
+        throw err;
+      }
+      return payload;
+    }
+
+    function bindToggle(id, key, state) {
+      const el = $(id);
+      el.checked = Boolean(state[key]);
+      el.onchange = async () => {
+        $('notifHint').textContent = '';
+        try {
+          setStatus('Kaydediliyor…');
+          await api('api/mobile/notification-settings', {
+            method: 'PUT',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ [key]: el.checked })
+          });
+          setStatus('OK', 'ok');
+        } catch (e) {
+          setStatus('Hata', 'err');
+          $('notifHint').textContent = e && e.message ? e.message : 'Hata';
+          $('notifHint').className = 'hint err';
+        }
+      };
+    }
+
+    async function loadAll() {
+      setStatus('Yükleniyor…');
+      $('notifHint').textContent = '';
+      $('notifHint').className = 'hint';
+
+      const deviceId = getOrCreateDeviceId();
+      $('deviceIdText').textContent = deviceId;
+
+      const me = await api('api/mobile/me', { method: 'GET' });
+      $('meText').textContent = me && me.user ? `${me.user.displayName || me.user.username} (${me.user.role})` : '-';
+
+      const ns = me && me.notificationSettings ? me.notificationSettings : {};
+      bindToggle('enabledToggle', 'enabled', {
+        enabled: ns.enabled !== undefined ? Boolean(ns.enabled) : true
+      });
+      bindToggle('showSenderNameToggle', 'showSenderName', {
+        showSenderName: ns.show_sender_name !== undefined ? Boolean(ns.show_sender_name) : true
+      });
+      bindToggle('showSenderPhotoToggle', 'showSenderPhoto', {
+        showSenderPhoto: ns.show_sender_photo !== undefined ? Boolean(ns.show_sender_photo) : true
+      });
+      bindToggle('showMessagePreviewToggle', 'showMessagePreview', {
+        showMessagePreview: ns.show_message_preview !== undefined ? Boolean(ns.show_message_preview) : true
+      });
+
+      $('soundInput').value = ns.sound || '';
+
+      const devices = Array.isArray(me.devices) ? me.devices : [];
+      const list = $('devicesList');
+      list.innerHTML = '';
+      if (!devices.length) {
+        list.innerHTML = '<div class="hint">Kayıtlı cihaz yok.</div>';
+      } else {
+        for (const d of devices) {
+          const row = document.createElement('div');
+          row.className = 'rowline';
+          const left = document.createElement('div');
+          left.className = 'rowleft';
+          left.innerHTML = `
+            <div class="rowtitle"><span class="mono">${(d.device_id || '').replace(/</g,'&lt;')}</span></div>
+            <div class="rowsub">${(d.platform || '-')}${d.is_active ? ' · aktif' : ' · pasif'}</div>
+          `;
+          const btn = document.createElement('button');
+          btn.className = 'btnx danger';
+          btn.textContent = 'Kaldır';
+          btn.onclick = async () => {
+            try {
+              btn.disabled = true;
+              setStatus('Siliniyor…');
+              await api(`api/mobile/devices/${encodeURIComponent(d.device_id)}`, { method: 'DELETE' });
+              await loadAll();
+              setStatus('OK', 'ok');
+            } catch (e) {
+              setStatus('Hata', 'err');
+              alert(e && e.message ? e.message : 'Hata');
+            } finally {
+              btn.disabled = false;
+            }
+          };
+          row.appendChild(left);
+          row.appendChild(btn);
+          list.appendChild(row);
+        }
+      }
+
+      setStatus('Hazır', 'ok');
+    }
+
+    $('refreshBtn').onclick = async () => {
+      try {
+        $('refreshBtn').disabled = true;
+        await loadAll();
+      } catch (e) {
+        setStatus('Hata', 'err');
+        alert(e && e.message ? e.message : 'Hata');
+      } finally {
+        $('refreshBtn').disabled = false;
+      }
+    };
+
+    $('registerDeviceBtn').onclick = async () => {
+      try {
+        $('registerDeviceBtn').disabled = true;
+        setStatus('Kaydediliyor…');
+        const deviceId = getOrCreateDeviceId();
+        await api('api/mobile/devices', {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            deviceId,
+            platform: 'webview',
+            pushProvider: 'fcm',
+            pushToken: null,
+            appVersion: null,
+            locale: navigator.language || null,
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || null
+          })
+        });
+        await loadAll();
+        setStatus('OK', 'ok');
+      } catch (e) {
+        setStatus('Hata', 'err');
+        alert(e && e.message ? e.message : 'Hata');
+      } finally {
+        $('registerDeviceBtn').disabled = false;
+      }
+    };
+
+    $('saveNotifBtn').onclick = async () => {
+      try {
+        $('saveNotifBtn').disabled = true;
+        $('notifHint').textContent = '';
+        $('notifHint').className = 'hint';
+        setStatus('Kaydediliyor…');
+        const sound = String($('soundInput').value || '').trim();
+        await api('api/mobile/notification-settings', {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ sound: sound ? sound.slice(0, 100) : null })
+        });
+        await loadAll();
+        setStatus('OK', 'ok');
+      } catch (e) {
+        setStatus('Hata', 'err');
+        $('notifHint').textContent = e && e.message ? e.message : 'Hata';
+        $('notifHint').className = 'hint err';
+      } finally {
+        $('saveNotifBtn').disabled = false;
+      }
+    };
+
+    // If someone hits /phone/ (trailing slash) the relative API paths break.
+    // Keep this page intended for /phone (no slash).
+    if (location.pathname.endsWith('/')) {
+      setStatus('URL hatalı: /phone (sonunda / olmasın)', 'err');
+    } else {
+      loadAll().catch((e) => {
+        setStatus('Hata', 'err');
+        $('meText').textContent = e && e.message ? e.message : 'Hata';
+      });
+    }
+  </script>
+</body>
+</html>
+

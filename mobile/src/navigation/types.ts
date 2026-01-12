@@ -1,23 +1,10 @@
-export type RootStackParamList = {
-  Auth: undefined;
-  Main: undefined;
-};
-
-export type AuthStackParamList = {
-  Login: undefined;
-};
-
 export type MainTabParamList = {
-  ChatsTab: undefined;
-  SettingsTab: undefined;
+  PanelTab: undefined;
+  PhoneTab: undefined;
 };
 
+// Legacy (kept to avoid breaking existing screen typings)
 export type ChatsStackParamList = {
   Chats: undefined;
   Chat: { chatId: string; title?: string | null };
 };
-
-export type SettingsStackParamList = {
-  Settings: undefined;
-};
-
