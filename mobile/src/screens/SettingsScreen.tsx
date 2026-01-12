@@ -116,10 +116,10 @@ export function SettingsScreen() {
     setBusy(true);
     try {
       const registration = await registerForPushAsync();
-      if (!registration) {
+      if (!registration.ok) {
         Alert.alert(
-          'Push aktif değil',
-          'Bildirim izni verilmemiş olabilir ya da Android tarafında Firebase (google-services.json) yapılandırması eksik olabilir.'
+          'Push token alınamadı',
+          `${registration.message}\n\nAdım: ${registration.step}${registration.detail ? `\nDetay: ${registration.detail}` : ''}`
         );
         return;
       }
@@ -130,8 +130,8 @@ export function SettingsScreen() {
           accessToken,
           deviceId: id,
           platform: Platform.OS,
-          pushProvider: registration.provider,
-          pushToken: registration.token,
+          pushProvider: registration.value.provider,
+          pushToken: registration.value.token,
           appVersion: Constants.expoConfig?.version || null,
           locale: null,
           timezone: null,
