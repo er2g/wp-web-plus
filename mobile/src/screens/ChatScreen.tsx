@@ -403,7 +403,7 @@ const styles = StyleSheet.create({
   bubbleOther: { alignSelf: 'flex-start', backgroundColor: colors.card },
   msgText: { color: colors.text, fontSize: 14, lineHeight: 20 },
   msgTextDeleted: { color: colors.subtext, fontStyle: 'italic' },
-  msgMeta: { marginTop: 8, color: colors.subtext, fontSize: 11 },
+  msgMeta: { color: colors.subtext, fontSize: 11 },
   footer: { marginTop: 8, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
   ack: { fontSize: 12, fontWeight: '700' },
   composer: {
