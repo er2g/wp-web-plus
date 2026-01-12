@@ -17,9 +17,20 @@ npm install
 npm run android
 ```
 
+## Özellikler (şu an)
+- Token bazlı giriş + kalıcı oturum (SecureStore)
+- Sohbet listesi + arama
+- Sohbet detayında mesajlar + mesaj gönderme
+- Mobil bildirim ayarları (backend `/api/mobile/notification-settings`)
+- Sohbet sessize alma (backend `/api/mobile/chats/:id/notification-settings`)
+- Cihaz kaydı + push token denemesi (gerçek cihaz / EAS build ile daha stabil)
+
+## Kontroller
+- `npm run typecheck`
+- `npm run doctor`
+
 ## Backend gereksinimi
 - Mobil login: `POST /api/mobile/login`
 - Bearer token ile REST: `GET /api/chats` vb.
 
 Detaylı yol haritası: `docs/MOBILE_APP_PLAN.md`
-
