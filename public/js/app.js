@@ -1276,8 +1276,20 @@ function initMonaco() {
 
 // API Helper
 function getCsrfToken() {
-    const match = document.cookie.match(/(?:^|; )XSRF-TOKEN=([^;]+)/);
-    return match ? decodeURIComponent(match[1]) : null;
+    const raw = String(document.cookie || '');
+    if (!raw) return null;
+
+    // Handle duplicate cookies (same name with different Path) by taking the last value.
+    const parts = raw.split(';').map(p => p.trim()).filter(Boolean);
+    let token = null;
+    for (const part of parts) {
+        const idx = part.indexOf('=');
+        if (idx === -1) continue;
+        const name = part.slice(0, idx).trim();
+        const value = part.slice(idx + 1);
+        if (name === 'XSRF-TOKEN') token = value;
+    }
+    return token ? decodeURIComponent(token) : null;
 }
 
 async function api(url, method, body, fetchOptions) {
@@ -1301,7 +1313,9 @@ async function api(url, method, body, fetchOptions) {
         cache: 'no-store'
     };
     if (body) options.body = JSON.stringify(body);
-    const response = await fetch(url, options);
+
+    const requestOnce = async () => fetch(url, options);
+    let response = await requestOnce();
     if (response.status === 429 && url === 'api/accounts') {
         return { accounts: [], currentAccountId: activeAccountId };
     }
@@ -1314,6 +1328,28 @@ async function api(url, method, body, fetchOptions) {
     }
     if (!response.ok) {
         const message = (data && data.error) ? data.error : (rawText || 'API Error');
+
+        // Common when a browser has stale/duplicate cookies after a deploy/path change.
+        // Refresh CSRF cookie once and retry.
+        if (response.status === 403 && message === 'Invalid CSRF token' && !['GET', 'HEAD'].includes(method.toUpperCase())) {
+            try {
+                await fetch('auth/check', { method: 'GET', credentials: 'include', cache: 'no-store' });
+                const retryHeaders = { ...headers };
+                const retryToken = getCsrfToken();
+                if (retryToken) retryHeaders['X-CSRF-Token'] = retryToken;
+                const retryOptions = { ...options, headers: retryHeaders };
+                const retryRes = await fetch(url, retryOptions);
+                const retryText = await retryRes.text();
+                const retryData = retryText ? JSON.parse(retryText) : null;
+                if (!retryRes.ok) {
+                    throw new Error((retryData && retryData.error) ? retryData.error : (retryText || 'API Error'));
+                }
+                return retryData;
+            } catch (e) {
+                throw new Error(message);
+            }
+        }
+
         throw new Error(message);
     }
     return data;

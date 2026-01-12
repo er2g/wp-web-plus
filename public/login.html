@@ -60,9 +60,18 @@
 
     <script>
         function getCookie(name) {
-            const value = `; ${document.cookie}`;
-            const parts = value.split(`; ${name}=`);
-            if (parts.length === 2) return parts.pop().split(';').shift();
+            const raw = String(document.cookie || '');
+            if (!raw) return null;
+            const parts = raw.split(';').map(p => p.trim()).filter(Boolean);
+            let found = null;
+            for (const part of parts) {
+                const idx = part.indexOf('=');
+                if (idx === -1) continue;
+                const key = part.slice(0, idx).trim();
+                const value = part.slice(idx + 1);
+                if (key === name) found = value;
+            }
+            return found;
         }
 
         document.getElementById('loginForm').addEventListener('submit', async (e) => {
@@ -70,19 +79,28 @@
             const username = document.getElementById('username').value;
             const password = document.getElementById('password').value;
             const errorDiv = document.getElementById('error');
-            const csrfToken = getCookie('XSRF-TOKEN');
+            let csrfToken = getCookie('XSRF-TOKEN');
 
             try {
-                const response = await fetch('auth/login', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-XSRF-TOKEN': csrfToken
-                    },
-                    body: JSON.stringify({ username, password })
-                });
+                const attemptLogin = async () => {
+                    const response = await fetch('auth/login', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-XSRF-TOKEN': csrfToken
+                        },
+                        body: JSON.stringify({ username, password })
+                    });
+                    const data = await response.json();
+                    return { response, data };
+                };
 
-                const data = await response.json();
+                let { response, data } = await attemptLogin();
+                if (!response.ok && data && data.error === 'Invalid CSRF token') {
+                    await fetch('auth/check', { method: 'GET', credentials: 'include', cache: 'no-store' });
+                    csrfToken = getCookie('XSRF-TOKEN');
+                    ({ response, data } = await attemptLogin());
+                }
 
                 if (data.success) {
                     window.location.href = './';
