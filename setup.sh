@@ -22,7 +22,6 @@ fi
 echo "[1/4] Creating directory structure..."
 mkdir -p logs
 mkdir -p data
-mkdir -p public/mobile
 mkdir -p data/session
 mkdir -p data/media
 mkdir -p data/accounts
