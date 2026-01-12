@@ -101,7 +101,10 @@ export function SettingsScreen() {
     try {
       const registration = await registerForPushAsync();
       if (!registration) {
-        Alert.alert('İzin gerekli', 'Bildirim izni verilmedi veya cihaz token alınamadı.');
+        Alert.alert(
+          'Push yapılandırılmadı',
+          'Bu APK build’inde push bildirimleri devre dışı. Push için Android tarafında Firebase (google-services.json) yapılandırması gerekiyor.'
+        );
         return;
       }
 

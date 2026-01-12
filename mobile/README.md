@@ -23,7 +23,9 @@ npm run android
 - Sohbet detayında mesajlar + mesaj gönderme
 - Mobil bildirim ayarları (backend `/api/mobile/notification-settings`)
 - Sohbet sessize alma (backend `/api/mobile/chats/:id/notification-settings`)
-- Cihaz kaydı + push token denemesi (gerçek cihaz / EAS build ile daha stabil)
+- Cihaz kaydı (push entegrasyonu için hazır API: `/api/mobile/devices`)
+
+Not: Push bildirimleri için Android’de Firebase yapılandırması (`google-services.json`) gerekir.
 
 ## Kontroller
 - `npm run typecheck`
