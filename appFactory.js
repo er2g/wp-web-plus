@@ -456,11 +456,12 @@ function createApp() {
     app.use('/api/mobile', apiIpLimiter, mobileRoutes);
     app.use('/api', apiIpLimiter, apiUserLimiter, apiRoutes);
 
-    app.get('/phone/', (req, res) => {
-        res.redirect(302, '/phone');
-    });
-
     app.get('/phone', (req, res) => {
+        const originalUrl = req.originalUrl || req.url || '';
+        if (String(originalUrl).endsWith('/')) {
+            return res.redirect(302, String(originalUrl).replace(/\/+$/, ''));
+        }
+
         if (req.session && req.session.authenticated) {
             res.sendFile(path.join(__dirname, 'public', 'phone.html'));
         } else {
