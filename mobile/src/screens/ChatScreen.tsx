@@ -204,6 +204,13 @@ export function ChatScreen() {
     };
   }, [realtime, upsertIncoming]);
 
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (!realtime.connected) void load();
+    }, 12_000);
+    return () => clearInterval(t);
+  }, [load, realtime.connected]);
+
   const loadMute = useCallback(async () => {
     try {
       const res = await callApi((accessToken) =>
