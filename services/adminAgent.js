@@ -11,6 +11,63 @@ class AdminAgent {
         this.tools = this.defineTools();
     }
 
+    isAiAssignmentRequest(text) {
+        const normalized = String(text || '').trim().toLowerCase();
+        if (!normalized) return false;
+        const hasAiWord = /\b(ai|yapay zeka|asistan|bot)\b/.test(normalized);
+        const hasAssignWord = /\b(ata|atama|bağla|bagla|assign)\b/.test(normalized);
+        // Allow suffixes like "sohbetine", "sohbete", etc.
+        const mentionsChat = /\bsohbet/.test(normalized) || /\bchat\b/.test(normalized);
+        return hasAiWord && hasAssignWord && mentionsChat;
+    }
+
+    hasRecentAssignmentNotice(history = []) {
+        if (!Array.isArray(history) || history.length === 0) return false;
+        const tail = history.slice(-8);
+        return tail.some((entry) => String(entry?.text || '').includes('[AI_ASSIGN_NOTICE]'));
+    }
+
+    hasAssignmentDetails(text) {
+        const normalized = String(text || '').toLowerCase();
+        if (!normalized) return false;
+        const hasStyle = /\b(resmi|samimi|kibar|nazik|esprili|ciddi|kısa|kisa|uzun|tonu|üslup|uslup|karakter|rol)\b/.test(normalized);
+        const hasTrigger = /\b(sadece|her mesaj|her gelen|komut|tetik|trigger|etiket|mention|@)\b/.test(normalized);
+        const hasLimits = /\b(asla|yasak|kural|sınır|sinir|18\+|küfür|kufur|politik|tıbbi|tibbi|finans|gizli)\b/.test(normalized);
+        return hasStyle || hasTrigger || hasLimits;
+    }
+
+    extractChatQuery(text) {
+        const raw = String(text || '').trim();
+        if (!raw) return null;
+        const m1 = raw.match(/^\s*(.+?)\s+(sohbetine|sohbete|sohbeti\s+için|sohbeti\s+icin)\b/i);
+        if (m1 && m1[1]) return m1[1].trim().slice(0, 120);
+        const m2 = raw.match(/\bsohbet\s*:\s*([^\n]+)$/i);
+        if (m2 && m2[1]) return m2[1].trim().slice(0, 120);
+        return null;
+    }
+
+    injectAssignmentClarificationNotice(history, userMessage) {
+        const userText = String(userMessage || '').trim();
+        if (!this.isAiAssignmentRequest(userText)) return false;
+        if (this.hasRecentAssignmentNotice(history)) return false;
+        if (this.hasAssignmentDetails(userText)) return false;
+
+        const chatQuery = this.extractChatQuery(userText);
+        const chatLabel = chatQuery ? `"${chatQuery}"` : 'hedef sohbet';
+
+        history.push({
+            role: 'user',
+            text: [
+                '[AI_ASSIGN_NOTICE]',
+                `User asked to assign an AI/bot to ${chatLabel}.`,
+                'Before using any tools (especially create_script), ask 3-5 short clarifying questions about: persona/tone, when to reply (trigger rules), boundaries/forbidden topics, language/length, and cooldown/spam protection.',
+                'Do NOT create or update any script until the user answers.'
+            ].join(' ')
+        });
+
+        return true;
+    }
+
     defineTools() {
         return {
             find_chat: {
@@ -25,11 +82,11 @@ class AdminAgent {
                 }
             },
             create_script: {
-                description: 'Create a new script/bot. Use this to assign a bot or create a new automation.',
+                description: 'Create a new script/bot. Use this to assign a bot or create a new automation. Prefer robust, production-ready scripts (guard rails, cooldown, history formatting).',
                 parameters: {
                     name: 'Name of the script (e.g., "Pirate Bot for Mom")',
                     description: 'Short description',
-                    code: 'The JavaScript code for the script. MUST be valid JS.',
+                    code: 'The JavaScript code for the script. MUST be valid JS. Use helpers like msg, reply(), sendMessage(), buildHistory(), formatHistory(), aiGenerate(), storage.',
                     filter: 'JSON string for trigger_filter (e.g., {"chatIds": ["..."]})'
                 },
                 execute: async ({ name, description, code, filter }) => {
@@ -151,12 +208,33 @@ class AdminAgent {
         }).join('\n');
 
         const scriptExample = `
-// Example Bot Code
+// Example Bot Code (message-triggered, safe + detailed)
 if (msg.isFromMe) return;
-const history = buildHistory({ limit: 10 });
-const prompt = "Reply as a pirate to: " + msg.body;
-const reply = await aiGenerate(prompt);
-await reply(reply);
+if (!msg.body || !String(msg.body).trim()) return;
+
+// If you include the trigger message separately (msg.body), avoid double-including it in history:
+const history = buildHistory({ limit: 25, excludeTriggerMessage: true });
+const historyText = formatHistory(history, { includeTimestamps: true });
+
+const prompt = [
+  "You are a helpful WhatsApp assistant.",
+  "Write a clear, complete, and polite reply in Turkish.",
+  "",
+  "Conversation history (oldest -> newest, excluding the latest incoming message):",
+  historyText,
+  "",
+  "Latest incoming message:",
+  msg.fromName + ": " + msg.body
+].join("\\n");
+
+// Optional: cooldown to prevent rapid-fire loops
+const key = "lastReplyAt:" + msg.chatId;
+const lastReplyAt = Number(storage.get(key) || 0);
+if (Date.now() - lastReplyAt < 2500) return;
+
+const aiText = await aiGenerate(prompt, { temperature: 0.4 });
+storage.set(key, Date.now());
+await reply(aiText);
 `;
 
         return `
@@ -174,6 +252,9 @@ RULES:
 5. "code" for create_script must be valid JavaScript. Use 'aiGenerate' for AI features.
 6. NO MARKDOWN in the JSON output. Return pure JSON.
 7. "final_response" should be a clear, natural language message to the user. DO NOT return lone braces, brackets, or placeholder characters.
+8. Be thorough: in "final_response", include assumptions, what you did/will do, and concrete next steps (how to test/where to click).
+9. When generating scripts, prefer complete solutions: input validation, ignore self-messages, optional cooldown via storage, and readable prompts (use formatHistory).
+10. If the user asks to assign an AI/bot to a chat (\"... sohbetine AI/bot ata\"), ask clarifying questions (persona, trigger rules, boundaries) before using create_script.
 
 Script Code Example:
 ${JSON.stringify(scriptExample)}
@@ -190,7 +271,20 @@ JSON OUTPUT SCHEMA:
     
         async process(history, userMessage, userContext) {
             let currentHistory = this.normalizeHistory(history);
-            currentHistory.push({ role: 'user', text: userMessage });
+            const userText = String(userMessage || '').trim();
+            const lastEntry = currentHistory.length ? currentHistory[currentHistory.length - 1] : null;
+            const lastRole = lastEntry?.role || null;
+            const lastText = typeof lastEntry?.text === 'string' ? lastEntry.text.trim() : '';
+
+            // Avoid duplicating the last user message: the frontend often sends the
+            // new message already included in `history`.
+            if (userText && !(lastRole === 'user' && lastText === userText)) {
+                currentHistory.push({ role: 'user', text: userText });
+            }
+
+            // Nudge the model to ask clarifying questions (persona/boundaries/trigger)
+            // instead of creating a script immediately.
+            this.injectAssignmentClarificationNotice(currentHistory, userText);
 
             const maxTurns = 5; // Prevent infinite loops
             let turn = 0;

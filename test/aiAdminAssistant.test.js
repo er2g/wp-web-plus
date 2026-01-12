@@ -266,3 +266,42 @@ test('AI admin chat does not create scripts for other chat names', async () => {
     const scripts = defaultContext.db.scripts.getAll.all();
     assert.equal(scripts.length, 0);
 });
+
+test('AI admin chat asks clarifying questions before assigning a bot to a chat', async () => {
+    const client = createClient();
+    const loginRes = await client.login('admin', 'test-password');
+    assert.equal(loginRes.status, 200);
+
+    const configRes = await client.api('POST', '/api/ai/config', { apiKey: 'local-ai-key' });
+    assert.equal(configRes.status, 200);
+
+    defaultContext.db.chats.upsert.run('abdulkadir-123@c.us', 'Abdulkadir', 0, null, 'Hello', Date.now(), 0);
+
+    let called = 0;
+    let lastPrompt = null;
+    aiService.generateJson = async (options) => {
+        called += 1;
+        lastPrompt = options?.prompt || null;
+        return {
+            thought: 'Ask questions first',
+            tool_name: null,
+            tool_params: null,
+            final_response: 'Tamam. Botun karakteri nasil olsun ve hangi konulara girmesin? Her mesaja mi yoksa sadece belirli komutlara mi cevap versin?'
+        };
+    };
+
+    const res = await client.api('POST', '/api/ai/admin-chat', {
+        message: 'Abdulkadir sohbetine AI ata',
+        history: []
+    });
+    assert.equal(res.status, 200);
+    const parsed = JSON.parse(res.body);
+    assert.equal(parsed.success, true);
+    assert.match(parsed.response, /karakter/i);
+    assert.equal(called, 1);
+    assert.ok(lastPrompt);
+    assert.match(String(lastPrompt), /\[AI_ASSIGN_NOTICE\]/);
+
+    const scripts = defaultContext.db.scripts.getAll.all();
+    assert.equal(scripts.length, 0);
+});

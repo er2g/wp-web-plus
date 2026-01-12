@@ -6,6 +6,7 @@ const config = require('../config');
 const accountManager = require('../services/accountManager');
 const { passwordMeetsPolicy, verifyPassword } = require('../services/passwords');
 const { sendError } = require('../lib/httpResponses');
+const { normalizeAccessToken, verifyAccessToken } = require('../services/mobileAuth');
 
 const isProduction = process.env.NODE_ENV === 'production';
 
@@ -131,6 +132,58 @@ function createAuthRouter({ redisClient, redisPrefix } = {}) {
             memoryClearAttempts(ip);
         }
     };
+
+    function safeRedirectTarget(candidate) {
+        if (typeof candidate !== 'string') return '/';
+        const trimmed = candidate.trim();
+        if (!trimmed.startsWith('/')) return '/';
+        if (trimmed.startsWith('//')) return '/';
+        return trimmed;
+    }
+
+    router.get('/mobile/session', (req, res) => {
+        const redirectTo = safeRedirectTarget(req.query?.redirect);
+        const tokenCandidate = req.query?.token || req.headers?.authorization || null;
+        const token = normalizeAccessToken(tokenCandidate);
+        if (!token) {
+            return sendError(req, res, 401, 'Not authenticated');
+        }
+
+        let payload;
+        try {
+            payload = verifyAccessToken(token);
+        } catch (error) {
+            return sendError(req, res, 401, 'Not authenticated');
+        }
+
+        const userId = payload?.sub ? parseInt(payload.sub, 10) : null;
+        if (!userId) {
+            return sendError(req, res, 401, 'Not authenticated');
+        }
+
+        const db = accountManager.getAccountContext(accountManager.getDefaultAccountId()).db;
+        const user = db.users.getById.get(userId);
+        if (!user || !user.is_active) {
+            return sendError(req, res, 401, 'Not authenticated');
+        }
+
+        res.setHeader('Cache-Control', 'no-store');
+        res.setHeader('Referrer-Policy', 'no-referrer');
+
+        req.session.regenerate(err => {
+            if (err) {
+                req.log?.error('Failed to regenerate session after mobile session exchange', { error: err.message });
+                return sendError(req, res, 500, 'Session error');
+            }
+            req.session.authenticated = true;
+            req.session.userId = user.id;
+            req.session.role = user.role || 'agent';
+            if (payload?.accountId) {
+                req.session.accountId = String(payload.accountId);
+            }
+            return res.redirect(302, redirectTo);
+        });
+    });
 
     router.post('/login', async (req, res, next) => {
         const ip = getClientIp(req);

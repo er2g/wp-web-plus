@@ -3309,6 +3309,9 @@ async function startSync() {
 }
 
 let syncProgressPoller = null;
+let lastFullSyncRunId = null;
+let fullSyncReloadedChatsForRun = false;
+let fullSyncReloadedMessagesForRun = false;
 
 function scheduleSyncProgressPoll() {
     if (syncProgressPoller) {
@@ -3328,24 +3331,59 @@ async function loadSyncProgress() {
 }
 
 function updateSyncProgress(progress) {
-    if (!progress || progress.status === 'idle') return;
-    console.log('Sync progress:', progress);
+    if (!progress) return;
 
-    if (progress.status === 'done') {
-        if (syncProgressPoller) {
-            clearInterval(syncProgressPoller);
-            syncProgressPoller = null;
+    // Full sync progress (backend: GET /api/sync/progress)
+    if (typeof progress.runId !== 'undefined' && typeof progress.status === 'string') {
+        if (progress.status === 'idle') return;
+        console.log('Sync progress:', progress);
+
+        if (lastFullSyncRunId !== progress.runId) {
+            lastFullSyncRunId = progress.runId;
+            fullSyncReloadedChatsForRun = false;
+            fullSyncReloadedMessagesForRun = false;
         }
-        showToast('Senkronizasyon tamamlandi', 'success');
-        reloadChatLists();
-        loadAllMessages();
-    } else if (progress.status === 'failed') {
-        if (syncProgressPoller) {
-            clearInterval(syncProgressPoller);
-            syncProgressPoller = null;
+
+        // Backend uses status: running | done | error
+        if (progress.status === 'done') {
+            if (syncProgressPoller) {
+                clearInterval(syncProgressPoller);
+                syncProgressPoller = null;
+            }
+            showToast('Senkronizasyon tamamlandi', 'success');
+            reloadChatLists();
+            loadAllMessages();
+            return;
         }
-        showToast('Senkronizasyon hatasi: ' + (progress.error || 'Bilinmeyen hata'), 'error');
+
+        if (progress.status === 'error' || progress.status === 'failed') {
+            if (syncProgressPoller) {
+                clearInterval(syncProgressPoller);
+                syncProgressPoller = null;
+            }
+            showToast('Senkronizasyon hatasi: ' + (progress.error || 'Bilinmeyen hata'), 'error');
+            return;
+        }
+
+        // While still running, refresh UI as soon as history is available (don't wait for media/profile tasks).
+        const chatsTotal = progress?.chats?.total || 0;
+        const chatsIndexed = progress?.chats?.indexed || 0;
+        const chatsBackfilled = progress?.chats?.backfilled || 0;
+
+        if (!fullSyncReloadedChatsForRun && (chatsIndexed > 0 || chatsBackfilled > 0)) {
+            fullSyncReloadedChatsForRun = true;
+            reloadChatLists();
+        }
+
+        if (!fullSyncReloadedMessagesForRun && chatsTotal > 0 && chatsBackfilled >= chatsTotal) {
+            fullSyncReloadedMessagesForRun = true;
+            loadAllMessages();
+        }
+
+        return;
     }
+
+    // Legacy sync progress (socket event), keep it as a no-op (sync_complete handles UI).
 }
 
 // Chat actions

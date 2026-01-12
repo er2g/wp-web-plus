@@ -381,6 +381,13 @@ function createApp() {
         }
     });
 
+    app.use('/mobile', (req, res, next) => {
+        if (req.path === '/' && !req.originalUrl.split('?')[0].endsWith('/')) {
+             return res.redirect('./mobile/');
+        }
+        next();
+    }, express.static(path.join(__dirname, 'public', 'mobile'), { index: 'index.html' }));
+    
     app.use(express.static(path.join(__dirname, 'public'), { index: false }));
 
     app.get('/healthz', (req, res) => {

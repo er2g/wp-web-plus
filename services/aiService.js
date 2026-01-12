@@ -10,7 +10,7 @@ class AiService {
     constructor() {
         this.apiKey = config.GEMINI_API_KEY;
         this.vertexApiKey = config.VERTEX_API_KEY;
-        this.model = 'gemini-1.5-flash'; // Optimized for speed and cost
+        this.model = 'gemini-2.5-flash';
         this.provider = 'gemini';
         this.geminiBaseUrl = 'https://generativelanguage.googleapis.com/v1beta/models';
         this.vertexBaseUrl = 'https://aiplatform.googleapis.com/v1';

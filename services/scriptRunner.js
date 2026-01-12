@@ -167,7 +167,7 @@ class ScriptRunner {
         const maxTokensParsed = Number.parseInt(String(maxTokensCandidate ?? ''), 10);
         const maxTokens = Number.isFinite(maxTokensParsed)
             ? Math.max(256, Math.min(8192, maxTokensParsed))
-            : 1024;
+            : 4096;
 
         const tempCandidate = overrides.temperature ?? filterAi.temperature;
         const tempParsed = Number.parseFloat(String(tempCandidate ?? ''));
@@ -254,11 +254,44 @@ class ScriptRunner {
                     const botLabel = options.botLabel || 'Bot';
                     const userLabel = options.userLabel || 'Kullanici';
                     const peerLabel = options.peerLabel || 'Karsi';
+                    const excludeMessageIds = new Set();
+                    const excludeTriggerMessage = options.excludeTriggerMessage === true;
+                    const dedupe = options.dedupe !== false;
+
+                    const normalizeExcludeList = (value) => {
+                        if (!value) return [];
+                        if (Array.isArray(value)) return value;
+                        return [value];
+                    };
+
+                    for (const candidate of normalizeExcludeList(options.excludeMessageIds)) {
+                        const id = typeof candidate === 'string' ? candidate.trim() : '';
+                        if (id) excludeMessageIds.add(id);
+                    }
+                    if (excludeTriggerMessage) {
+                        const id = typeof triggerData?.messageId === 'string' ? triggerData.messageId.trim() : '';
+                        if (id) excludeMessageIds.add(id);
+                    }
+
                     const seenIds = new Set();
+                    const seenFingerprints = new Set();
                     return rows.map((row) => {
-                        if (row.message_id && seenIds.has(row.message_id)) return null;
-                        if (row.message_id) seenIds.add(row.message_id);
+                        const messageId = typeof row.message_id === 'string' ? row.message_id : null;
+                        if (messageId && excludeMessageIds.has(messageId)) return null;
+                        if (dedupe && messageId && seenIds.has(messageId)) return null;
+                        if (dedupe && messageId) seenIds.add(messageId);
+
                         const isFromMe = row.is_from_me === 1 || row.isFromMe === 1 || row.isFromMe === true;
+                        if (dedupe) {
+                            const body = String(row.body || '').trim();
+                            const fromNumber = String(row.from_number || row.fromNumber || '').trim();
+                            const type = String(row.type || '').trim();
+                            const timestamp = Number(row.timestamp) || 0;
+                            const fingerprint = `${isFromMe ? 1 : 0}|${fromNumber}|${type}|${timestamp}|${body.slice(0, 500)}`;
+                            if (seenFingerprints.has(fingerprint)) return null;
+                            seenFingerprints.add(fingerprint);
+                        }
+
                         const isBot = isFromMe && self.isBotMessage(row);
                         const role = isBot ? 'BOT' : (isFromMe ? 'USER' : 'PEER');
                         const sender = isBot

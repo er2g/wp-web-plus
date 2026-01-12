@@ -8,3 +8,5 @@ check_logs.js
 .env
 .DS_Store
 public/mobile/
+public/*.apk
+routes/*.bak.*
