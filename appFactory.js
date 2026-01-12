@@ -9,7 +9,9 @@ const cors = require('cors');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
-const { randomUUID, randomBytes } = require('crypto');
+const crypto = require('crypto');
+const fs = require('fs');
+const { randomUUID, randomBytes } = crypto;
 const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const swaggerUi = require('swagger-ui-express');
 
@@ -379,6 +381,73 @@ function createApp() {
         } else {
             res.redirect('/');
         }
+    });
+
+    function getPushPublicMediaSecret() {
+        return String(config.PUSH_PUBLIC_MEDIA_SECRET || config.SESSION_SECRET || '');
+    }
+
+    function signPublicMedia({ accountId, filename, exp }) {
+        const secret = getPushPublicMediaSecret();
+        if (!secret) return null;
+        const input = `${accountId}:${filename}:${exp}`;
+        return crypto.createHmac('sha256', secret).update(input).digest('hex');
+    }
+
+    function timingSafeEqualHex(a, b) {
+        const aBuf = Buffer.from(String(a || ''), 'utf8');
+        const bBuf = Buffer.from(String(b || ''), 'utf8');
+        if (aBuf.length !== bBuf.length) return false;
+        return crypto.timingSafeEqual(aBuf, bBuf);
+    }
+
+    app.get('/public/media/:accountId/:filename', (req, res) => {
+        const accountId = String(req.params.accountId || '').trim();
+        const filenameRaw = String(req.params.filename || '').trim();
+
+        if (!/^[a-z0-9-]{1,40}$/.test(accountId)) {
+            return sendError(req, res, 400, 'Invalid account id');
+        }
+
+        const filename = decodeURIComponent(filenameRaw);
+        if (!/^profile_[a-f0-9]{40}\.(jpg|png|webp)$/.test(filename)) {
+            return sendError(req, res, 400, 'Invalid filename');
+        }
+
+        const exp = parseInt(String(req.query?.exp || ''), 10);
+        const sig = String(req.query?.sig || '').trim();
+        if (!Number.isFinite(exp) || exp <= Date.now()) {
+            return sendError(req, res, 403, 'Link expired');
+        }
+
+        const expected = signPublicMedia({ accountId, filename, exp });
+        if (!expected || !sig || !timingSafeEqualHex(expected, sig)) {
+            return sendError(req, res, 403, 'Invalid signature');
+        }
+
+        const account = accountManager.findAccount(accountId);
+        if (!account) {
+            return sendError(req, res, 404, 'Account not found');
+        }
+
+        const mediaDir = path.join(config.DATA_DIR, 'accounts', accountId, 'media');
+        const resolvedMediaDir = path.resolve(mediaDir);
+        const filePath = path.join(mediaDir, filename);
+        const resolvedFilePath = path.resolve(filePath);
+        if (!resolvedFilePath.startsWith(resolvedMediaDir + path.sep)) {
+            return sendError(req, res, 400, 'Invalid path');
+        }
+
+        try {
+            if (!fs.existsSync(resolvedFilePath)) {
+                return sendError(req, res, 404, 'Not found');
+            }
+        } catch {
+            return sendError(req, res, 404, 'Not found');
+        }
+
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        return res.sendFile(resolvedFilePath);
     });
     
     app.use(express.static(path.join(__dirname, 'public'), { index: false }));

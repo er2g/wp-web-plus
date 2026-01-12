@@ -1,6 +1,6 @@
 import Constants from 'expo-constants';
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { Alert, Linking, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { Platform } from 'react-native';
 
 import { createApiClient } from '../api/client';
@@ -170,6 +170,8 @@ export function SettingsScreen() {
   const showSenderName = ns?.showSenderName ?? true;
   const showSenderPhoto = ns?.showSenderPhoto ?? true;
   const showMessagePreview = ns?.showMessagePreview ?? true;
+  const androidChannel = ns?.androidChannel ?? 'messages_strong';
+  const strongMode = androidChannel === 'messages_strong';
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -209,6 +211,17 @@ export function SettingsScreen() {
           subtitle="Bildirimde mesaj içeriği"
           value={showMessagePreview}
           onChange={(v) => void applyNotifPatch({ showMessagePreview: v })}
+        />
+        <ToggleRow
+          title="Güçlü bildirim"
+          subtitle="Ekranda popup + güçlü titreşim (Android kanal)"
+          value={strongMode}
+          onChange={(v) => void applyNotifPatch({ androidChannel: v ? 'messages_strong' : 'messages' })}
+        />
+        <Button
+          title="Android bildirim ayarlarını aç"
+          onPress={() => Linking.openSettings().catch(() => undefined)}
+          variant="ghost"
         />
 
         <View style={styles.card}>

@@ -114,7 +114,8 @@ const notificationSettingsSchema = z.object({
         if (typeof v !== 'string') return v;
         const trimmed = v.trim();
         return trimmed ? trimmed.slice(0, 100) : null;
-    }, z.union([z.string(), z.null()]).optional())
+    }, z.union([z.string(), z.null()]).optional()),
+    androidChannel: z.enum(['messages', 'messages_strong']).optional()
 }).strict();
 
 const chatIdParamsSchema = z.object({
@@ -332,6 +333,7 @@ router.put('/notification-settings', requireAuth, validate({ body: notificationS
     const showSenderName = body.showSenderName !== undefined ? (body.showSenderName ? 1 : 0) : (current.show_sender_name ?? 1);
     const showSenderPhoto = body.showSenderPhoto !== undefined ? (body.showSenderPhoto ? 1 : 0) : (current.show_sender_photo ?? 1);
     const showMessagePreview = body.showMessagePreview !== undefined ? (body.showMessagePreview ? 1 : 0) : (current.show_message_preview ?? 1);
+    const androidChannel = body.androidChannel !== undefined ? body.androidChannel : (current.android_channel || 'messages_strong');
     const sound = body.sound !== undefined ? body.sound : (current.sound ?? null);
 
     db.mobileNotificationSettings.upsert.run(
@@ -340,6 +342,7 @@ router.put('/notification-settings', requireAuth, validate({ body: notificationS
         showSenderName,
         showSenderPhoto,
         showMessagePreview,
+        androidChannel,
         sound
     );
 

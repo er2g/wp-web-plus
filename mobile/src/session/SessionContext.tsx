@@ -38,6 +38,7 @@ function normalizeSettings(row: any): MobileNotificationSettings {
   const showSenderName = row?.showSenderName ?? row?.show_sender_name ?? 1;
   const showSenderPhoto = row?.showSenderPhoto ?? row?.show_sender_photo ?? 1;
   const showMessagePreview = row?.showMessagePreview ?? row?.show_message_preview ?? 1;
+  const androidChannel = String(row?.androidChannel ?? row?.android_channel ?? 'messages_strong');
   const sound = row?.sound ?? null;
 
   return {
@@ -45,6 +46,7 @@ function normalizeSettings(row: any): MobileNotificationSettings {
     showSenderName: Boolean(showSenderName),
     showSenderPhoto: Boolean(showSenderPhoto),
     showMessagePreview: Boolean(showMessagePreview),
+    androidChannel: androidChannel === 'messages' ? 'messages' : 'messages_strong',
     sound: sound ? String(sound) : null,
   };
 }
@@ -245,6 +247,7 @@ export function SessionProvider(props: { children: ReactNode }) {
           showSenderName: patch.showSenderName,
           showSenderPhoto: patch.showSenderPhoto,
           showMessagePreview: patch.showMessagePreview,
+          androidChannel: patch.androidChannel,
           sound: patch.sound,
         })
       );

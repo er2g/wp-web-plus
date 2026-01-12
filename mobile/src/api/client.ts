@@ -153,6 +153,7 @@ export function createApiClient() {
     showSenderName?: boolean;
     showSenderPhoto?: boolean;
     showMessagePreview?: boolean;
+    androidChannel?: 'messages' | 'messages_strong';
     sound?: string | null;
   }) {
     return requestJson<any>('/api/mobile/notification-settings', {
@@ -163,6 +164,7 @@ export function createApiClient() {
         ...(input.showSenderName !== undefined ? { showSenderName: input.showSenderName } : {}),
         ...(input.showSenderPhoto !== undefined ? { showSenderPhoto: input.showSenderPhoto } : {}),
         ...(input.showMessagePreview !== undefined ? { showMessagePreview: input.showMessagePreview } : {}),
+        ...(input.androidChannel !== undefined ? { androidChannel: input.androidChannel } : {}),
         ...(input.sound !== undefined ? { sound: input.sound } : {}),
       },
     });

@@ -128,6 +128,7 @@ const envSchema = z.object({
     PUSH_FCM_SERVER_KEY: optionalString(),
     PUSH_FCM_SERVICE_ACCOUNT_JSON: optionalString(),
     PUSH_FCM_SERVICE_ACCOUNT_PATH: optionalString(),
+    PUSH_PUBLIC_MEDIA_SECRET: optionalString(),
     PUBLIC_BASE_URL: optionalString()
 }).passthrough();
 
@@ -246,5 +247,6 @@ module.exports = {
     PUSH_FCM_SERVER_KEY: env.PUSH_FCM_SERVER_KEY,
     PUSH_FCM_SERVICE_ACCOUNT_JSON: env.PUSH_FCM_SERVICE_ACCOUNT_JSON,
     PUSH_FCM_SERVICE_ACCOUNT_PATH: env.PUSH_FCM_SERVICE_ACCOUNT_PATH,
+    PUSH_PUBLIC_MEDIA_SECRET: env.PUSH_PUBLIC_MEDIA_SECRET,
     PUBLIC_BASE_URL: env.PUBLIC_BASE_URL
 };

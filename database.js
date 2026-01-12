@@ -255,6 +255,7 @@ function createDatabase(config) {
         show_sender_name INTEGER DEFAULT 1,
         show_sender_photo INTEGER DEFAULT 1,
         show_message_preview INTEGER DEFAULT 1,
+        android_channel TEXT DEFAULT 'messages_strong',
         sound TEXT,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -613,6 +614,15 @@ function createDatabase(config) {
                     db.exec('ALTER TABLE users ADD COLUMN ai_provider TEXT');
                 }
             }
+        },
+        {
+            version: 18,
+            name: 'add_android_channel_to_mobile_notification_settings',
+            apply: () => {
+                if (!columnExists('mobile_notification_settings', 'android_channel')) {
+                    db.exec(`ALTER TABLE mobile_notification_settings ADD COLUMN android_channel TEXT DEFAULT 'messages_strong'`);
+                }
+            }
         }
     ];
 
@@ -956,20 +966,21 @@ function createDatabase(config) {
         getByUserId: db.prepare('SELECT * FROM mobile_notification_settings WHERE user_id = ?'),
         upsert: db.prepare(`
             INSERT INTO mobile_notification_settings
-            (user_id, enabled, show_sender_name, show_sender_photo, show_message_preview, sound, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+            (user_id, enabled, show_sender_name, show_sender_photo, show_message_preview, android_channel, sound, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
             ON CONFLICT(user_id) DO UPDATE SET
                 enabled = excluded.enabled,
                 show_sender_name = excluded.show_sender_name,
                 show_sender_photo = excluded.show_sender_photo,
                 show_message_preview = excluded.show_message_preview,
+                android_channel = excluded.android_channel,
                 sound = excluded.sound,
                 updated_at = datetime('now')
         `),
         ensureDefault: db.prepare(`
             INSERT INTO mobile_notification_settings
-            (user_id, enabled, show_sender_name, show_sender_photo, show_message_preview, sound, updated_at)
-            VALUES (?, 1, 1, 1, 1, NULL, datetime('now'))
+            (user_id, enabled, show_sender_name, show_sender_photo, show_message_preview, android_channel, sound, updated_at)
+            VALUES (?, 1, 1, 1, 1, 'messages_strong', NULL, datetime('now'))
             ON CONFLICT(user_id) DO NOTHING
         `)
     };

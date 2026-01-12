@@ -16,6 +16,43 @@ function normalizeAbsoluteUrl(pathOrUrl) {
     return `${base}/${suffix}`;
 }
 
+function getPushPublicMediaSecret() {
+    return String(config.PUSH_PUBLIC_MEDIA_SECRET || config.SESSION_SECRET || '');
+}
+
+function signPublicMedia({ accountId, filename, exp }) {
+    const secret = getPushPublicMediaSecret();
+    if (!secret) return null;
+    const input = `${accountId}:${filename}:${exp}`;
+    return crypto.createHmac('sha256', secret).update(input).digest('hex');
+}
+
+function createSignedPublicProfilePicUrl({ accountId, filename }) {
+    if (!config.PUBLIC_BASE_URL) return null;
+    if (!accountId || !filename) return null;
+    if (!/^[a-z0-9-]{1,40}$/.test(String(accountId))) return null;
+    if (!/^profile_[a-f0-9]{40}\.(jpg|png|webp)$/.test(String(filename))) return null;
+
+    const exp = Date.now() + 24 * 60 * 60 * 1000;
+    const sig = signPublicMedia({ accountId: String(accountId), filename: String(filename), exp });
+    if (!sig) return null;
+
+    const base = String(config.PUBLIC_BASE_URL).replace(/\/+$/, '');
+    return `${base}/public/media/${encodeURIComponent(String(accountId))}/${encodeURIComponent(String(filename))}?exp=${exp}&sig=${sig}`;
+}
+
+function normalizeChatPhotoUrl({ accountId, chatPhoto }) {
+    if (!chatPhoto) return null;
+    const raw = String(chatPhoto);
+    if (raw.startsWith('api/media/')) {
+        const filename = raw.slice('api/media/'.length).split('?')[0];
+        const decoded = decodeURIComponent(filename);
+        const signed = createSignedPublicProfilePicUrl({ accountId, filename: decoded });
+        if (signed) return signed;
+    }
+    return normalizeAbsoluteUrl(raw);
+}
+
 function chunk(array, size) {
     const out = [];
     for (let i = 0; i < array.length; i += size) {
@@ -140,7 +177,7 @@ function createMobilePushNotifier({ getDefaultDb, logger }) {
         return accessToken;
     }
 
-    async function sendFcmV1({ tokens, notification, data }) {
+    async function sendFcmV1({ tokens, notification, data, channelId }) {
         if (!serviceAccount || !v1ProjectId) return { ok: false, error: 'Missing service account' };
         if (!Array.isArray(tokens) || tokens.length === 0) return { ok: true, sent: 0 };
 
@@ -149,6 +186,7 @@ function createMobilePushNotifier({ getDefaultDb, logger }) {
 
         const endpoint = `https://fcm.googleapis.com/v1/projects/${encodeURIComponent(v1ProjectId)}/messages:send`;
         const image = notification?.image ? String(notification.image) : null;
+        const resolvedChannelId = channelId || notification?.android_channel_id || 'messages_strong';
 
         let sent = 0;
         for (const token of tokens) {
@@ -164,7 +202,10 @@ function createMobilePushNotifier({ getDefaultDb, logger }) {
                         },
                         android: {
                             priority: 'HIGH',
-                            notification: image ? { image } : undefined
+                            notification: {
+                                channel_id: resolvedChannelId,
+                                ...(image ? { image } : {})
+                            }
                         },
                         data: data && typeof data === 'object' ? data : undefined
                     }
@@ -204,10 +245,12 @@ function createMobilePushNotifier({ getDefaultDb, logger }) {
                 show_sender_name: 1,
                 show_sender_photo: 1,
                 show_message_preview: 1,
+                android_channel: 'messages_strong',
                 sound: null
             };
 
             if (settings.enabled === 0) continue;
+            const channelId = settings.android_channel === 'messages' ? 'messages' : 'messages_strong';
 
             const chatSettings = defaultDb.mobileChatNotificationSettings.getByKey.get(user.id, accountId, msgData.chatId);
             if (chatSettings?.muted_until && Number(chatSettings.muted_until) > nowMs) {
@@ -224,11 +267,12 @@ function createMobilePushNotifier({ getDefaultDb, logger }) {
             const body = settings.show_message_preview === 0
                 ? 'Yeni mesaj'
                 : String(msgData.body || (msgData.type === 'document' ? '[Dosya]' : '[Medya]') || '').slice(0, 200);
-            const image = settings.show_sender_photo === 0 ? null : normalizeAbsoluteUrl(chatPhoto);
+            const image = settings.show_sender_photo === 0 ? null : normalizeChatPhotoUrl({ accountId, chatPhoto });
 
             const notification = {
                 title,
                 body,
+                android_channel_id: channelId,
                 ...(image ? { image } : {})
             };
 
@@ -243,7 +287,7 @@ function createMobilePushNotifier({ getDefaultDb, logger }) {
 
             try {
                 const result = serviceAccount
-                    ? await sendFcmV1({ tokens, notification, data })
+                    ? await sendFcmV1({ tokens, notification, data, channelId })
                     : await sendFcmLegacy({
                         serverKey: config.PUSH_FCM_SERVER_KEY,
                         tokens,
@@ -270,6 +314,8 @@ function createMobilePushNotifier({ getDefaultDb, logger }) {
         if (!userId) return { ok: false, error: 'Missing userId' };
 
         const defaultDb = getDefaultDb();
+        const settings = defaultDb.mobileNotificationSettings.getByUserId.get(userId) || { android_channel: 'messages_strong' };
+        const channelId = settings.android_channel === 'messages' ? 'messages' : 'messages_strong';
         const pushTargets = defaultDb.mobileDevices.getActivePushTargetsByUserId.all(userId);
         const tokens = pushTargets
             .filter(target => target.push_provider === 'fcm' && target.push_token)
@@ -280,6 +326,7 @@ function createMobilePushNotifier({ getDefaultDb, logger }) {
         const notification = {
             title: String(title || 'Test'),
             body: String(body || 'Test notification'),
+            android_channel_id: channelId,
             ...(imageUrl ? { image: normalizeAbsoluteUrl(imageUrl) } : {})
         };
 
@@ -287,7 +334,8 @@ function createMobilePushNotifier({ getDefaultDb, logger }) {
             ? await sendFcmV1({
                 tokens,
                 notification,
-                data: data && typeof data === 'object' ? data : { event: 'test' }
+                data: data && typeof data === 'object' ? data : { event: 'test' },
+                channelId
             })
             : await sendFcmLegacy({
                 serverKey: config.PUSH_FCM_SERVER_KEY,

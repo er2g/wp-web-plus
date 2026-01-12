@@ -48,11 +48,26 @@ export async function registerForPushAsync(): Promise<PushRegistrationResult> {
 
   try {
     if (Platform.OS === 'android') {
-      await Notifications.setNotificationChannelAsync('default', {
-        name: 'Default',
-        importance: Notifications.AndroidImportance.MAX,
-        vibrationPattern: [0, 250, 250, 250],
+      await Notifications.setNotificationChannelAsync('messages', {
+        name: 'Mesajlar',
+        importance: Notifications.AndroidImportance.HIGH,
+        vibrationPattern: [0, 150, 90, 150],
         lightColor: '#2563eb',
+        enableVibrate: true,
+        showBadge: true,
+        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+        sound: 'default',
+      });
+
+      await Notifications.setNotificationChannelAsync('messages_strong', {
+        name: 'Mesajlar (Güçlü)',
+        importance: Notifications.AndroidImportance.MAX,
+        vibrationPattern: [0, 350, 120, 350, 120, 500],
+        lightColor: '#2563eb',
+        enableVibrate: true,
+        showBadge: true,
+        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+        sound: 'default',
       });
     }
   } catch (err) {

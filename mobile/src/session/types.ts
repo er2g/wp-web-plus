@@ -10,6 +10,7 @@ export type MobileNotificationSettings = {
   showSenderName: boolean;
   showSenderPhoto: boolean;
   showMessagePreview: boolean;
+  androidChannel: 'messages' | 'messages_strong';
   sound: string | null;
 };
 
@@ -25,4 +26,3 @@ export type MobileDevice = {
 };
 
 export type MobileAccount = { id: string; name: string; createdAt: number; status?: string };
-
