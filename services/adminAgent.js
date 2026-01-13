@@ -271,7 +271,7 @@ RULES:
 7. "final_response" should be a clear, natural language message to the user. DO NOT return lone braces, brackets, or placeholder characters.
 8. Be thorough: in "final_response", include assumptions, what you did/will do, and concrete next steps (how to test/where to click).
 9. When generating scripts, prefer complete solutions: input validation, ignore self-messages, optional cooldown via storage, and readable prompts (use formatHistory).
-10. If the user asks to assign an AI/bot to a chat (\"... sohbetine AI/bot ata\"), ask clarifying questions (persona, trigger rules, boundaries) before using create_script.
+10. If the user asks to assign an AI/bot to a chat ("... sohbetine AI/bot ata"), ask clarifying questions (persona, trigger rules, boundaries) before using create_script.
 
 Script Code Example:
 ${JSON.stringify(scriptExample)}

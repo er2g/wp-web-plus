@@ -1640,6 +1640,10 @@ class WhatsAppClient {
                     // Ignore quote errors, keep message flowing
                 }
             }
+            const timestampSec = Number(msg.timestamp) || Number(msg?._data?.t) || 0;
+            const timestampEstimated = timestampSec <= 0 ? 1 : 0;
+            const timestampMs = timestampEstimated ? Date.now() : timestampSec * 1000;
+
             const msgData = {
                 messageId: msg.id._serialized,
                 chatId: chat.id._serialized,
@@ -1649,7 +1653,8 @@ class WhatsAppClient {
                 fromNumber: fromMe ? (this.info?.wid?.user || this.extractPhoneFromId(msg.from)) : this.getSenderNumber(contact, msg),
                 body,
                 type: msg.type,
-                timestamp: msg.timestamp * 1000,
+                timestamp: timestampMs,
+                timestampEstimated,
                 isGroup: chat.isGroup,
                 isFromMe: fromMe,
                 quotedMessageId,

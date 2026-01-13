@@ -333,7 +333,7 @@ test('AI admin chat blocks tool usage for AI assignment until details provided',
     ];
 
     let callCount = 0;
-    aiService.generateJson = async (options) => responses[Math.min(callCount++, responses.length - 1)];
+    aiService.generateJson = async (_options) => responses[Math.min(callCount++, responses.length - 1)];
 
     const res = await client.api('POST', '/api/ai/admin-chat', {
         message: 'Abdulkadir sohbetine AI ata',

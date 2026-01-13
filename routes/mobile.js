@@ -381,8 +381,6 @@ router.put('/chats/:id/notification-settings', requireAuth, validate({ params: c
         }
     }
 
-    const row = db.mobileChatNotificationSettings.getByKey.get(userId, accountId, chatId);
-
     if (req.validatedBody.androidChannel !== undefined) {
         db.mobileChatNotificationSettings.upsertAndroidChannel.run(userId, accountId, chatId, req.validatedBody.androidChannel);
     }

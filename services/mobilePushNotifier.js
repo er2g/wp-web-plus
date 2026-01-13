@@ -8,6 +8,16 @@ const FCM_V1_SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
 
 const PUSH_DEBOUNCE_MS = 1200;
 const PUSH_MAX_SYNC_BACKLOG_AGE_MS = 60_000;
+const PUSH_MAX_SYNC_CLOCK_SKEW_MS = 5_000;
+
+function parseSqliteDateTimeToMs(value) {
+    if (!value) return null;
+    const raw = String(value).trim();
+    if (!raw) return null;
+    const iso = raw.includes('T') ? raw : `${raw.replace(' ', 'T')}Z`;
+    const ms = Date.parse(iso);
+    return Number.isFinite(ms) ? ms : null;
+}
 
 function normalizeAbsoluteUrl(pathOrUrl) {
     if (!pathOrUrl) return null;
@@ -219,6 +229,8 @@ function createMobilePushNotifier({ getDefaultDb, logger }) {
                             priority: 'HIGH',
                             notification: {
                                 channel_id: resolvedChannelId,
+                                sound: 'default',
+                                visibility: 'PUBLIC',
                                 ...(resolvedTag ? { tag: resolvedTag } : {}),
                                 ...(resolvedCount && resolvedCount > 1 ? { notification_count: resolvedCount } : {}),
                                 ...(image ? { image } : {})
@@ -252,8 +264,20 @@ function createMobilePushNotifier({ getDefaultDb, logger }) {
 
         try {
             const running = accountDb?.syncRuns?.getRunning?.get?.() || null;
-            if (running && msgTs && (nowMs - msgTs) > PUSH_MAX_SYNC_BACKLOG_AGE_MS) {
-                return { ok: true, skipped: true, reason: 'sync_backlog' };
+            if (running) {
+                const startedAtMs = parseSqliteDateTimeToMs(running.started_at);
+                if (Number(msgData.timestampEstimated) === 1) {
+                    return { ok: true, skipped: true, reason: 'sync_backlog_estimated_ts' };
+                }
+                if (!msgTs) {
+                    return { ok: true, skipped: true, reason: 'sync_backlog_unknown_ts' };
+                }
+                if (startedAtMs && msgTs < startedAtMs - PUSH_MAX_SYNC_CLOCK_SKEW_MS) {
+                    return { ok: true, skipped: true, reason: 'sync_backlog_before_run' };
+                }
+                if ((nowMs - msgTs) > PUSH_MAX_SYNC_BACKLOG_AGE_MS) {
+                    return { ok: true, skipped: true, reason: 'sync_backlog_age' };
+                }
             }
         } catch (e) {}
 

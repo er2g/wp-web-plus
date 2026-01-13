@@ -24,15 +24,87 @@ const injectedMobileFix = `
       meta.setAttribute('name', 'viewport');
       head.appendChild(meta);
     }
-    meta.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no');
+    meta.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover');
+
+    var root = document.documentElement;
+    if (root) root.classList.add('wp_panel_webview');
+
+    var applyBodyClass = function () {
+      try {
+        if (document.body) document.body.classList.add('wp_panel_webview');
+      } catch (e) {}
+    };
+    applyBodyClass();
+    document.addEventListener('DOMContentLoaded', applyBodyClass, { once: true });
+
+    var updateViewportVars = function () {
+      try {
+        var vv = window.visualViewport;
+        var height = vv && vv.height ? vv.height : window.innerHeight;
+        if (root) root.style.setProperty('--wp_vvh', (height * 0.01) + 'px');
+
+        var kb = 0;
+        if (vv && vv.height) {
+          kb = Math.max(0, window.innerHeight - vv.height - (vv.offsetTop || 0));
+        }
+        if (root) root.style.setProperty('--wp_kb', kb + 'px');
+      } catch (e) {}
+    };
+
+    updateViewportVars();
+    window.addEventListener('resize', updateViewportVars);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', updateViewportVars);
+      window.visualViewport.addEventListener('scroll', updateViewportVars);
+    }
 
     var style = document.getElementById('__wp_panel_mobile_fix');
     if (!style) {
       style = document.createElement('style');
       style.id = '__wp_panel_mobile_fix';
-      style.textContent = 'html, body { overflow-x: hidden !important; overscroll-behavior-x: none !important; }';
+      style.textContent = [
+        'html.wp_panel_webview, body.wp_panel_webview {',
+        '  height: calc(var(--wp_vvh, 1vh) * 100) !important;',
+        '  width: 100% !important;',
+        '  overflow-x: hidden !important;',
+        '  overscroll-behavior: none !important;',
+        '  -webkit-text-size-adjust: 100%;',
+        '}',
+        'html.wp_panel_webview #uiRoot { height: calc(var(--wp_vvh, 1vh) * 100) !important; }',
+        'html.wp_panel_webview .chat-area { height: calc(var(--wp_vvh, 1vh) * 100) !important; }',
+        'html.wp_panel_webview .settings-panel { height: calc((var(--wp_vvh, 1vh) * 100) - 16px) !important; }',
+        'html.wp_panel_webview textarea, html.wp_panel_webview input { font-size: 16px !important; }',
+        'html.wp_panel_webview .chat-input-area { padding-bottom: calc(10px + env(safe-area-inset-bottom)) !important; }',
+        'html.wp_panel_webview, body.wp_panel_webview { overscroll-behavior-x: none !important; }',
+        'html.wp_panel_webview * { -webkit-tap-highlight-color: rgba(0,0,0,0); }',
+      ].join('\\n');
       head.appendChild(style);
     }
+
+    var focusHandler = function (event) {
+      try {
+        var target = event && event.target ? event.target : null;
+        if (!target) return;
+        var isTextField = target.tagName === 'TEXTAREA' || target.tagName === 'INPUT' || target.isContentEditable;
+        if (!isTextField) return;
+        updateViewportVars();
+        setTimeout(function () {
+          try {
+            if (typeof target.scrollIntoView === 'function') {
+              target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+            }
+          } catch (e) {}
+          try {
+            var container = document.getElementById('messagesContainer');
+            if (!container) return;
+            var distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+            if (distanceFromBottom < 160) container.scrollTop = container.scrollHeight;
+          } catch (e) {}
+        }, 60);
+      } catch (e) {}
+    };
+
+    document.addEventListener('focusin', focusHandler);
   } catch (e) {}
 })(); true;
 `;
