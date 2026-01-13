@@ -171,7 +171,7 @@ export function createApiClient() {
   }
 
   async function listChats(input: { accessToken: string; accountId?: string }) {
-    return requestJson<Array<{ chat_id: string; name?: string | null }>>('/api/chats', {
+    return requestJson<any[]>('/api/chats', {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${input.accessToken}`,
@@ -244,6 +244,15 @@ export function createApiClient() {
     listChats,
     getChatMessages,
     sendMessage,
+    markChatRead: async (input: { accessToken: string; accountId?: string; chatId: string }) => {
+      return requestJson<any>(`/api/chats/${encodeURIComponent(input.chatId)}/mark-read`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${input.accessToken}`,
+          ...(input.accountId ? { 'X-Account-Id': input.accountId } : {}),
+        },
+      });
+    },
     getChatNotificationSettings: async (input: { accessToken: string; accountId?: string; chatId: string }) => {
       return requestJson<any>(`/api/mobile/chats/${encodeURIComponent(input.chatId)}/notification-settings`, {
         method: 'GET',

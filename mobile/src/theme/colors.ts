@@ -1,11 +1,11 @@
 export const colors = {
-  bg: '#0b1220',
-  card: '#111a2f',
-  border: '#223055',
+  // WhatsApp-ish dark palette
+  bg: '#0b141a',
+  card: '#111b21',
+  border: '#1f2c33',
   text: '#ffffff',
-  subtext: '#b8c2d8',
-  primary: '#2563eb',
+  subtext: '#8696a0',
+  primary: '#00a884',
   danger: '#ef4444',
   success: '#22c55e',
 };
-

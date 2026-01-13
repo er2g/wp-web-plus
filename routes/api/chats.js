@@ -1,11 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const { z } = require('zod');
+const crypto = require('crypto');
 
 const { LIMITS, validateChatId, validateNote } = require('../../lib/apiValidation');
 const { sendError } = require('../../lib/httpResponses');
 const { queryLimit, queryOffset, queryString } = require('../../lib/zodHelpers');
 const { validate } = require('../middleware/validate');
+const config = require('../../config');
 
 const booleanLike = z.preprocess((value) => {
     if (value === undefined || value === null || value === '') return undefined;
@@ -77,16 +79,59 @@ const tagParamsSchema = z.object({
     tagId: intLike('Invalid tag id')
 }).strict();
 
+function getPublicBaseUrl() {
+    const raw = config.PUBLIC_BASE_URL ? String(config.PUBLIC_BASE_URL).trim() : '';
+    return raw ? raw.replace(/\/+$/, '') : '';
+}
+
+function getPublicMediaSecret() {
+    return String(config.PUSH_PUBLIC_MEDIA_SECRET || config.SESSION_SECRET || '');
+}
+
+function signPublicMedia({ accountId, filename, exp }) {
+    const secret = getPublicMediaSecret();
+    if (!secret) return null;
+    const input = `${accountId}:${filename}:${exp}`;
+    return crypto.createHmac('sha256', secret).update(input).digest('hex');
+}
+
+function createSignedPublicProfilePicUrl({ accountId, profilePic }) {
+    const base = getPublicBaseUrl();
+    if (!base) return null;
+    if (!accountId || !profilePic) return null;
+
+    const raw = String(profilePic);
+    if (!raw.startsWith('api/media/')) return null;
+    const filename = decodeURIComponent(raw.slice('api/media/'.length).split('?')[0]);
+
+    if (!/^[a-z0-9-]{1,40}$/i.test(String(accountId))) return null;
+    if (!/^profile_[a-f0-9]{40}\.(jpg|png|webp)$/.test(String(filename))) return null;
+
+    const exp = Date.now() + 24 * 60 * 60 * 1000;
+    const sig = signPublicMedia({ accountId: String(accountId), filename: String(filename), exp });
+    if (!sig) return null;
+
+    return `${base}/public/media/${encodeURIComponent(String(accountId))}/${encodeURIComponent(String(filename))}?exp=${exp}&sig=${sig}`;
+}
+
+function withProfilePicUrl(accountId, row) {
+    if (!row || typeof row !== 'object') return row;
+    const profile_pic = row.profile_pic || null;
+    const profile_pic_url = createSignedPublicProfilePicUrl({ accountId, profilePic: profile_pic });
+    return profile_pic_url ? { ...row, profile_pic_url } : row;
+}
+
 router.get('/', (req, res) => {
     const tagFilter = (req.query.tag || '').trim();
     const archivedQuery = req.query.archived;
     const archived = archivedQuery === true || archivedQuery === 1
         || (typeof archivedQuery === 'string' && ['1', 'true'].includes(archivedQuery.trim().toLowerCase()));
     const archivedFlag = archived ? 1 : 0;
+    const accountId = req.account?.account?.id || req.session?.accountId || req.auth?.accountId || null;
 
     if (!tagFilter) {
         const list = archived ? req.account.db.chats.getArchived.all() : req.account.db.chats.getActive.all();
-        return res.json(list);
+        return res.json(Array.isArray(list) ? list.map((row) => withProfilePicUrl(accountId, row)) : list);
     }
 
     const tagId = /^\d+$/.test(tagFilter) ? parseInt(tagFilter, 10) : null;
@@ -102,12 +147,13 @@ router.get('/', (req, res) => {
     const chats = req.account.db.db.prepare(
         `SELECT * FROM chats WHERE is_archived = ? AND chat_id IN (${placeholders}) ORDER BY last_message_at DESC`
     ).all(archivedFlag, ...chatIds);
-    return res.json(chats);
+    return res.json(Array.isArray(chats) ? chats.map((row) => withProfilePicUrl(accountId, row)) : chats);
 });
 
 router.get('/search', validate({ query: chatSearchQuerySchema }), (req, res) => {
     const { q: query, tag: tagFilter, note: noteQuery, archived, limit, offset } = req.validatedQuery;
     const archivedFlag = archived ? 1 : 0;
+    const accountId = req.account?.account?.id || req.session?.accountId || req.auth?.accountId || null;
 
     if (!query && !tagFilter && !noteQuery) return res.json([]);
 
@@ -142,7 +188,7 @@ router.get('/search', validate({ query: chatSearchQuerySchema }), (req, res) => 
             ORDER BY last_message_at DESC
             LIMIT ? OFFSET ?
         `).all(archivedFlag, '%' + query + '%', limit, offset);
-        return res.json(results);
+        return res.json(Array.isArray(results) ? results.map((row) => withProfilePicUrl(accountId, row)) : results);
     }
 
     const filterIds = chatIds ? Array.from(chatIds) : null;
@@ -161,7 +207,7 @@ router.get('/search', validate({ query: chatSearchQuerySchema }), (req, res) => 
             ORDER BY last_message_at DESC
             LIMIT ? OFFSET ?
         `).all(...params);
-        return res.json(results);
+        return res.json(Array.isArray(results) ? results.map((row) => withProfilePicUrl(accountId, row)) : results);
     }
 
     const placeholders = filterIds.map(() => '?').join(',');
@@ -172,7 +218,7 @@ router.get('/search', validate({ query: chatSearchQuerySchema }), (req, res) => 
         ORDER BY last_message_at DESC
         LIMIT ? OFFSET ?
     `).all(archivedFlag, ...filterIds, limit, offset);
-    return res.json(results);
+    return res.json(Array.isArray(results) ? results.map((row) => withProfilePicUrl(accountId, row)) : results);
 });
 
 router.post('/:id/archive', validate({ params: chatIdParamSchema }), async (req, res) => {

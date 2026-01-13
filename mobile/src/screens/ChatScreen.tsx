@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { useRoute } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 
 import { createApiClient } from '../api/client';
 import { useRealtime } from '../realtime/RealtimeContext';
 import { useSession } from '../session/SessionContext';
 import { colors } from '../theme/colors';
-import { Button } from '../ui/components/Button';
 import type { ChatsStackParamList } from '../navigation/types';
 import type { RouteProp } from '@react-navigation/native';
 
@@ -54,6 +53,7 @@ function ackLabel(ack: number) {
 
 export function ChatScreen() {
   const route = useRoute<ChatRoute>();
+  const nav = useNavigation();
   const session = useSession();
   const api = useMemo(() => createApiClient(), []);
   const realtime = useRealtime();
@@ -70,6 +70,7 @@ export function ChatScreen() {
   );
 
   const chatId = route.params.chatId;
+  const title = route.params.title || chatId;
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -94,6 +95,46 @@ export function ChatScreen() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    try {
+      nav.setOptions?.({ title: title || 'Sohbet' });
+    } catch {}
+  }, [nav, title]);
+
+  useEffect(() => {
+    try {
+      nav.setOptions?.({
+        headerRight: () => (
+          <Pressable
+            onPress={() => {
+              const active = mutedUntil && mutedUntil > Date.now();
+              Alert.alert(
+                'Sohbet bildirimi',
+                active ? `Sessizde: ${formatTime(mutedUntil)}` : 'Sessiz değil',
+                [
+                  { text: '1 saat sessiz', onPress: () => void setMute(Date.now() + 60 * 60 * 1000) },
+                  { text: '1 gün sessiz', onPress: () => void setMute(Date.now() + 24 * 60 * 60 * 1000) },
+                  { text: 'Sessizi kapat', onPress: () => void setMute(null) },
+                  { text: 'İptal', style: 'cancel' }
+                ]
+              );
+            }}
+            hitSlop={12}
+            style={({ pressed }) => [{ paddingHorizontal: 12, paddingVertical: 8, opacity: pressed ? 0.7 : 1 }]}
+          >
+            <Text style={{ color: colors.text, fontSize: 20, fontWeight: '900' }}>{'⋮'}</Text>
+          </Pressable>
+        ),
+      });
+    } catch {}
+  }, [mutedUntil, nav]);
+
+  useEffect(() => {
+    // Mark as read when opening the chat (best effort).
+    void callApi((accessToken) => api.markChatRead({ accessToken, accountId: accountId || undefined, chatId })).catch(() => undefined);
+    // Also clear local unread badge quickly by reloading chats via realtime event on server.
+  }, [accountId, api, callApi, chatId]);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -301,22 +342,6 @@ export function ChatScreen() {
 
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <View style={styles.topActions}>
-        <Text style={styles.muteText}>
-          {mutedUntil && mutedUntil > Date.now() ? `Sessiz: ${formatTime(mutedUntil)}` : 'Sessiz: kapalı'}
-        </Text>
-        <View style={styles.muteButtons}>
-          <Pressable onPress={() => void setMute(Date.now() + 60 * 60 * 1000)} style={({ pressed }) => [styles.muteBtn, pressed && styles.muteBtnPressed]}>
-            <Text style={styles.muteBtnText}>1s</Text>
-          </Pressable>
-          <Pressable onPress={() => void setMute(Date.now() + 24 * 60 * 60 * 1000)} style={({ pressed }) => [styles.muteBtn, pressed && styles.muteBtnPressed]}>
-            <Text style={styles.muteBtnText}>1g</Text>
-          </Pressable>
-          <Pressable onPress={() => void setMute(null)} style={({ pressed }) => [styles.muteBtn, pressed && styles.muteBtnPressed]}>
-            <Text style={styles.muteBtnText}>Aç</Text>
-          </Pressable>
-        </View>
-      </View>
       <FlatList
         data={messages}
         keyExtractor={(item, idx) => String(item?.message_id || item?.id || idx)}
@@ -362,10 +387,17 @@ export function ChatScreen() {
           style={styles.input}
           multiline
         />
-        <View style={{ width: 10 }} />
-        <View style={{ width: 100 }}>
-          <Button title="Gönder" onPress={handleSend} disabled={!text.trim()} loading={busy} />
-        </View>
+        <Pressable
+          onPress={() => void handleSend()}
+          disabled={!text.trim() || busy}
+          style={({ pressed }) => [
+            styles.sendBtn,
+            (!text.trim() || busy) && styles.sendBtnDisabled,
+            pressed && styles.sendBtnPressed,
+          ]}
+        >
+          <Text style={styles.sendBtnText}>{'➤'}</Text>
+        </Pressable>
       </View>
     </KeyboardAvoidingView>
   );
@@ -373,64 +405,48 @@ export function ChatScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
-  topActions: {
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-    backgroundColor: colors.bg,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  muteText: { color: colors.subtext, fontSize: 12, flex: 1 },
-  muteButtons: { flexDirection: 'row', gap: 8 },
-  muteBtn: {
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-  },
-  muteBtnPressed: { opacity: 0.7 },
-  muteBtnText: { color: colors.text, fontWeight: '700', fontSize: 12 },
   list: { padding: 16, paddingBottom: 8 },
   bubble: {
     maxWidth: '88%',
-    padding: 12,
-    borderRadius: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 10,
     marginBottom: 10,
-    borderWidth: 1,
-    borderColor: colors.border,
   },
-  bubbleMe: { alignSelf: 'flex-end', backgroundColor: '#13264a' },
-  bubbleOther: { alignSelf: 'flex-start', backgroundColor: colors.card },
-  msgText: { color: colors.text, fontSize: 14, lineHeight: 20 },
+  bubbleMe: { alignSelf: 'flex-end', backgroundColor: '#005c4b' },
+  bubbleOther: { alignSelf: 'flex-start', backgroundColor: '#1f2c33' },
+  msgText: { color: colors.text, fontSize: 15, lineHeight: 21 },
   msgTextDeleted: { color: colors.subtext, fontStyle: 'italic' },
-  msgMeta: { color: colors.subtext, fontSize: 11 },
-  footer: { marginTop: 8, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
+  msgMeta: { color: '#d1d7db', fontSize: 11 },
+  footer: { marginTop: 6, flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', gap: 6 },
   ack: { fontSize: 12, fontWeight: '700' },
   composer: {
     flexDirection: 'row',
-    padding: 12,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    backgroundColor: colors.card,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    gap: 10,
+    backgroundColor: colors.bg,
     alignItems: 'flex-end',
   },
   input: {
     flex: 1,
     minHeight: 44,
     maxHeight: 140,
-    backgroundColor: colors.bg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 12,
-    paddingHorizontal: 12,
+    backgroundColor: '#1f2c33',
+    borderRadius: 20,
+    paddingHorizontal: 14,
     paddingVertical: 10,
     color: colors.text,
   },
+  sendBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sendBtnDisabled: { opacity: 0.5 },
+  sendBtnPressed: { opacity: 0.8 },
+  sendBtnText: { color: '#0b141a', fontSize: 18, fontWeight: '900' },
 });

@@ -5,6 +5,7 @@ import { SafeAreaView, StyleSheet, Text, View } from 'react-native';
 
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { ErrorBoundary } from './src/crash/ErrorBoundary';
+import { RealtimeProvider } from './src/realtime/RealtimeContext';
 import { SessionProvider } from './src/session/SessionContext';
 import { colors } from './src/theme/colors';
 
@@ -63,7 +64,9 @@ export default function App() {
       ) : (
         <ErrorBoundary onError={(e) => console.error('React render error', e)}>
           <SessionProvider>
-            <RootNavigator />
+            <RealtimeProvider>
+              <RootNavigator />
+            </RealtimeProvider>
           </SessionProvider>
         </ErrorBoundary>
       )}

@@ -1,5 +1,6 @@
 export type MainTabParamList = {
-  PanelTab: undefined;
+  ChatsTab: undefined;
+  ToolsTab: undefined;
   PhoneTab: undefined;
 };
 
