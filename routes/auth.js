@@ -7,6 +7,7 @@ const accountManager = require('../services/accountManager');
 const { passwordMeetsPolicy, verifyPassword } = require('../services/passwords');
 const { sendError } = require('../lib/httpResponses');
 const { normalizeAccessToken, verifyAccessToken } = require('../services/mobileAuth');
+const { createLink: createMobileSessionLink, consume: consumeMobileSessionLink } = require('../services/mobileSessionLinkService');
 
 const isProduction = process.env.NODE_ENV === 'production';
 
@@ -180,6 +181,79 @@ function createAuthRouter({ redisClient, redisPrefix } = {}) {
             req.session.role = user.role || 'agent';
             if (payload?.accountId) {
                 req.session.accountId = String(payload.accountId);
+            }
+            return res.redirect(302, redirectTo);
+        });
+    });
+
+    router.get('/mobile/session-link', (req, res) => {
+        const redirectTo = safeRedirectTarget(req.query?.redirect);
+        const tokenCandidate = req.headers?.authorization || null;
+        const token = normalizeAccessToken(tokenCandidate);
+        if (!token) {
+            return sendError(req, res, 401, 'Not authenticated');
+        }
+
+        let payload;
+        try {
+            payload = verifyAccessToken(token);
+        } catch (error) {
+            return sendError(req, res, 401, 'Not authenticated');
+        }
+
+        const userId = payload?.sub ? parseInt(payload.sub, 10) : null;
+        if (!userId) {
+            return sendError(req, res, 401, 'Not authenticated');
+        }
+
+        const db = accountManager.getAccountContext(accountManager.getDefaultAccountId()).db;
+        const user = db.users.getById.get(userId);
+        if (!user || !user.is_active) {
+            return sendError(req, res, 401, 'Not authenticated');
+        }
+
+        const { code, expiresInMs } = createMobileSessionLink({
+            userId,
+            accountId: payload?.accountId || null,
+            redirectTo
+        });
+
+        const base = (config.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
+        const url = base
+            ? `${base}/auth/mobile/session-exchange?code=${encodeURIComponent(code)}&redirect=${encodeURIComponent(redirectTo)}`
+            : `/auth/mobile/session-exchange?code=${encodeURIComponent(code)}&redirect=${encodeURIComponent(redirectTo)}`;
+
+        res.setHeader('Cache-Control', 'no-store');
+        return res.json({ success: true, url, expiresInMs });
+    });
+
+    router.get('/mobile/session-exchange', (req, res) => {
+        const redirectTo = safeRedirectTarget(req.query?.redirect);
+        const code = typeof req.query?.code === 'string' ? req.query.code.trim() : '';
+        if (!code) return sendError(req, res, 400, 'Missing code');
+
+        const entry = consumeMobileSessionLink(code);
+        if (!entry) return sendError(req, res, 403, 'Invalid or expired code');
+
+        const db = accountManager.getAccountContext(accountManager.getDefaultAccountId()).db;
+        const user = db.users.getById.get(entry.userId);
+        if (!user || !user.is_active) {
+            return sendError(req, res, 401, 'Not authenticated');
+        }
+
+        res.setHeader('Cache-Control', 'no-store');
+        res.setHeader('Referrer-Policy', 'no-referrer');
+
+        req.session.regenerate(err => {
+            if (err) {
+                req.log?.error('Failed to regenerate session after mobile browser session exchange', { error: err.message });
+                return sendError(req, res, 500, 'Session error');
+            }
+            req.session.authenticated = true;
+            req.session.userId = user.id;
+            req.session.role = user.role || 'agent';
+            if (entry.accountId) {
+                req.session.accountId = String(entry.accountId);
             }
             return res.redirect(302, redirectTo);
         });

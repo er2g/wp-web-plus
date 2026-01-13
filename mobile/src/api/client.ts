@@ -102,6 +102,16 @@ export function createApiClient() {
     });
   }
 
+  async function mobileBrowserSessionLink(input: { accessToken: string; redirect?: string }) {
+    const qs = input.redirect ? `?redirect=${encodeURIComponent(input.redirect)}` : '';
+    return requestJson<{ success: true; url: string; expiresInMs: number }>(`/auth/mobile/session-link${qs}`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${input.accessToken}`,
+      },
+    });
+  }
+
   async function mobileLogout(input: { accessToken: string; refreshToken?: string | null; all?: boolean }) {
     return requestJson<{ success: true }>('/api/mobile/logout', {
       method: 'POST',
@@ -214,6 +224,7 @@ export function createApiClient() {
     mobileLogin,
     mobileAccounts,
     mobileMe,
+    mobileBrowserSessionLink,
     mobileLogout,
     mobilePushStatus: async (input: { accessToken: string }) => {
       return requestJson<{

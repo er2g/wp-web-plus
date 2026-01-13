@@ -1,6 +1,7 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Alert, Linking, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { createApiClient } from '../api/client';
 import { useSession } from '../session/SessionContext';
 import { colors } from '../theme/colors';
 import { Button } from '../ui/components/Button';
@@ -21,7 +22,27 @@ async function openUrl(url: string) {
 
 export function ToolsScreen() {
   const session = useSession();
+  const api = useMemo(() => createApiClient(), []);
   const base = useMemo(() => ensureTrailingSlash(session.baseUrl), [session.baseUrl]);
+  const [busy, setBusy] = useState(false);
+
+  async function openAuthed(path: string) {
+    if (session.status !== 'signedIn' || !session.tokens?.accessToken) {
+      await openUrl(`${base}${path.replace(/^\/+/, '')}`);
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await session.callApi((accessToken) =>
+        api.mobileBrowserSessionLink({ accessToken, redirect: `/${path.replace(/^\/+/, '')}` })
+      );
+      await openUrl(res.url);
+    } catch (err) {
+      Alert.alert('Açılamadı', err instanceof Error ? err.message : 'Bilinmeyen hata');
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -32,11 +53,11 @@ export function ToolsScreen() {
 
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>Panel</Text>
-        <Button title="Web Panel (tarayıcıda)" onPress={() => void openUrl(base)} />
+        <Button title="Web Panel (tarayıcıda)" onPress={() => void openAuthed('/')} loading={busy} />
         <View style={{ height: 10 }} />
-        <Button title="Raporlar" variant="ghost" onPress={() => void openUrl(`${base}reports.html`)} />
+        <Button title="Raporlar" variant="ghost" onPress={() => void openAuthed('/reports.html')} loading={busy} />
         <View style={{ height: 10 }} />
-        <Button title="Admin Chat" variant="ghost" onPress={() => void openUrl(`${base}admin-chat.html`)} />
+        <Button title="Admin Chat" variant="ghost" onPress={() => void openAuthed('/admin-chat.html')} loading={busy} />
       </View>
 
       <View style={styles.card}>
@@ -65,4 +86,3 @@ const styles = StyleSheet.create({
   sectionTitle: { color: colors.text, fontSize: 14, fontWeight: '800', marginBottom: 10 },
   note: { color: colors.subtext, fontSize: 13, lineHeight: 18 },
 });
-
