@@ -60,7 +60,8 @@ export function ChatScreen() {
   const callApi = session.callApi;
   const accountId = session.accountId;
 
-  const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [sending, setSending] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [text, setText] = useState('');
   const [mutedUntil, setMutedUntil] = useState<number | null>(null);
@@ -74,7 +75,7 @@ export function ChatScreen() {
   const title = route.params.title || chatId;
 
   const load = useCallback(async () => {
-    setBusy(true);
+    setRefreshing(true);
     try {
       const res = await callApi((accessToken) =>
         api.getChatMessages({
@@ -89,7 +90,7 @@ export function ChatScreen() {
     } catch (err) {
       Alert.alert('Hata', err instanceof Error ? err.message : 'Bilinmeyen hata');
     } finally {
-      setBusy(false);
+      setRefreshing(false);
     }
   }, [accountId, api, callApi, chatId]);
 
@@ -283,15 +284,12 @@ export function ChatScreen() {
   }, [loadMute]);
 
   async function setMute(ms: number | null) {
-    setBusy(true);
     try {
       await callApi((accessToken) => api.setChatMute({ accessToken, accountId: accountId || undefined, chatId, mutedUntil: ms }));
       await loadMute();
       Alert.alert('OK', ms ? 'Sohbet sessize alındı.' : 'Sessiz kaldırıldı.');
     } catch (err) {
       Alert.alert('Hata', err instanceof Error ? err.message : 'Bilinmeyen hata');
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -315,7 +313,7 @@ export function ChatScreen() {
     setMessages((prev) => [optimistic, ...prev]);
     setText('');
 
-    setBusy(true);
+    setSending(true);
     try {
       const result = await callApi((accessToken) =>
         api.sendMessage({
@@ -351,7 +349,7 @@ export function ChatScreen() {
       );
       Alert.alert('Gönderim hatası', err instanceof Error ? err.message : 'Bilinmeyen hata');
     } finally {
-      setBusy(false);
+      setSending(false);
     }
   }
 
@@ -362,7 +360,7 @@ export function ChatScreen() {
         keyExtractor={(item, idx) => String(item?.message_id || item?.id || idx)}
         inverted
         contentContainerStyle={styles.list}
-        refreshing={busy}
+        refreshing={refreshing}
         onRefresh={load}
         renderItem={({ item }) => {
           const fromMe = Boolean(item?.is_from_me ?? item?.isFromMe ?? item?.from_me ?? item?.fromMe);
@@ -404,10 +402,10 @@ export function ChatScreen() {
         />
         <Pressable
           onPress={() => void handleSend()}
-          disabled={!text.trim() || busy}
+          disabled={!text.trim() || sending}
           style={({ pressed }) => [
             styles.sendBtn,
-            (!text.trim() || busy) && styles.sendBtnDisabled,
+            (!text.trim() || sending) && styles.sendBtnDisabled,
             pressed && styles.sendBtnPressed,
           ]}
         >

@@ -257,6 +257,9 @@ function createMobilePushNotifier({ getDefaultDb, logger }) {
         if (!config.PUSH_NOTIFICATIONS_ENABLED) return { ok: true, skipped: true };
         if (!config.PUSH_FCM_SERVER_KEY && !serviceAccount) return { ok: true, skipped: true };
         if (!msgData || !msgData.chatId || !msgData.messageId) return { ok: true, skipped: true };
+        if (msgData.isFromMe === true || msgData.isFromMe === 1 || msgData.is_from_me === 1) {
+            return { ok: true, skipped: true, reason: 'from_me' };
+        }
 
         const defaultDb = getDefaultDb();
         const nowMs = Date.now();

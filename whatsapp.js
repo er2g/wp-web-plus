@@ -1094,6 +1094,9 @@ class WhatsAppClient {
         });
 
         this.client.on('message', async (msg) => {
+            // whatsapp-web.js can emit "message" for outgoing messages too on some builds;
+            // avoid double-processing and never treat fromMe messages as incoming.
+            if (msg?.fromMe) return;
             await this.handleMessage(msg, false);
         });
 
