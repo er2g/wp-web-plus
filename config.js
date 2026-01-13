@@ -6,7 +6,10 @@ const { z } = require('zod');
 
 // Load environment variables from .env file
 try {
-    require('dotenv').config({ quiet: true });
+    const isNodeTestRunner = process.env.NODE_ENV === 'test' || (Array.isArray(process.execArgv) && process.execArgv.includes('--test'));
+    if (!isNodeTestRunner) {
+        require('dotenv').config({ quiet: true });
+    }
 } catch (e) {
     // dotenv not installed, using defaults
 }
@@ -63,6 +66,8 @@ const envSchema = z.object({
     GEMINI_API_KEY: optionalString(),
     VERTEX_API_KEY: optionalString(),
     SESSION_SECRET: requiredString('change-this-secret-in-production'),
+    SESSION_COOKIE_TTL_DAYS: positiveInt(3650),
+    SESSION_COOKIE_ROLLING: booleanLike(true),
 
     ADMIN_BOOTSTRAP_USERNAME: requiredString('admin'),
     ADMIN_BOOTSTRAP_PASSWORD: optionalString(),
@@ -120,7 +125,7 @@ const envSchema = z.object({
     // Mobile API (token-based auth)
     MOBILE_JWT_SECRET: optionalString(),
     MOBILE_ACCESS_TOKEN_TTL_SEC: positiveInt(15 * 60),
-    MOBILE_REFRESH_TOKEN_TTL_DAYS: positiveInt(30),
+    MOBILE_REFRESH_TOKEN_TTL_DAYS: positiveInt(3650),
     MOBILE_MAX_DEVICES_PER_USER: positiveInt(20),
 
     // Push notifications (optional)
@@ -164,6 +169,8 @@ module.exports = {
     ADMIN_BOOTSTRAP_USERNAME: env.ADMIN_BOOTSTRAP_USERNAME,
     ADMIN_BOOTSTRAP_PASSWORD: env.ADMIN_BOOTSTRAP_PASSWORD || env.SITE_PASSWORD || 'changeme',
     ADMIN_BOOTSTRAP_NAME: env.ADMIN_BOOTSTRAP_NAME,
+    SESSION_COOKIE_TTL_DAYS: env.SESSION_COOKIE_TTL_DAYS,
+    SESSION_COOKIE_ROLLING: env.SESSION_COOKIE_ROLLING,
 
     // CORS Origins (required)
     CORS_ORIGINS: env.CORS_ORIGINS,

@@ -278,16 +278,20 @@ function createApp() {
         next();
     });
 
+    const sessionCookieTtlDays = Math.max(1, Number(config.SESSION_COOKIE_TTL_DAYS) || 3650);
+    const sessionCookieMaxAgeMs = sessionCookieTtlDays * 24 * 60 * 60 * 1000;
+
     const sessionOptions = {
         secret: config.SESSION_SECRET,
         name: 'whatsapp.sid',
         resave: false,
         saveUninitialized: false,
+        rolling: Boolean(config.SESSION_COOKIE_ROLLING),
         cookie: {
             secure: isProduction,
             httpOnly: true,
             sameSite: 'lax',
-            maxAge: 24 * 60 * 60 * 1000,
+            maxAge: sessionCookieMaxAgeMs,
             path: '/'
         }
     };
