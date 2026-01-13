@@ -633,6 +633,16 @@ function createDatabase(config) {
                     db.exec(`ALTER TABLE mobile_chat_notification_settings ADD COLUMN android_channel TEXT`);
                 }
             }
+        },
+        {
+            version: 20,
+            name: 'add_last_read_at_to_chats',
+            apply: () => {
+                if (!columnExists('chats', 'last_read_at')) {
+                    db.exec('ALTER TABLE chats ADD COLUMN last_read_at INTEGER');
+                }
+                db.exec('CREATE INDEX IF NOT EXISTS idx_chats_last_read_at ON chats(last_read_at)');
+            }
         }
     ];
 
@@ -699,6 +709,8 @@ function createDatabase(config) {
         updateAck: db.prepare(`UPDATE messages SET ack = ? WHERE message_id = ?`),
         markDeletedForEveryone: db.prepare(`UPDATE messages SET is_deleted_for_everyone = 1, deleted_for_everyone_at = ? WHERE message_id = ?`),
         getByChatId: db.prepare(`SELECT * FROM messages WHERE chat_id = ? ORDER BY timestamp DESC LIMIT ? OFFSET ?`),
+        getMaxTimestampByChatId: db.prepare(`SELECT MAX(timestamp) as ts FROM messages WHERE chat_id = ?`),
+        countUnreadAfter: db.prepare(`SELECT COUNT(*) as n FROM messages WHERE chat_id = ? AND is_from_me = 0 AND timestamp > ?`),
         getAll: db.prepare(`SELECT * FROM messages ORDER BY timestamp DESC LIMIT ? OFFSET ?`),
         search: db.prepare(`SELECT * FROM messages WHERE body LIKE ? ORDER BY timestamp DESC LIMIT 100`),
         getStats: db.prepare(`
@@ -726,6 +738,8 @@ function createDatabase(config) {
         getArchived: db.prepare(`SELECT * FROM chats WHERE is_archived = 1 ORDER BY last_message_at DESC`),
         getById: db.prepare(`SELECT * FROM chats WHERE chat_id = ?`),
         setArchived: db.prepare(`UPDATE chats SET is_archived = ?, updated_at = datetime('now') WHERE chat_id = ?`),
+        setUnreadCount: db.prepare(`UPDATE chats SET unread_count = ?, updated_at = datetime('now') WHERE chat_id = ?`),
+        markRead: db.prepare(`UPDATE chats SET unread_count = 0, last_read_at = ?, updated_at = datetime('now') WHERE chat_id = ?`),
         search: db.prepare(`SELECT * FROM chats WHERE name LIKE ? ORDER BY last_message_at DESC LIMIT ? OFFSET ?`)
     };
 

@@ -264,6 +264,45 @@ export function createApiClient() {
         },
       });
     },
+    getWhatsappSettings: async (input: { accessToken: string; accountId?: string }) => {
+      return requestJson<any>('/api/whatsapp/settings', {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${input.accessToken}`,
+          ...(input.accountId ? { 'X-Account-Id': input.accountId } : {}),
+        },
+      });
+    },
+    updateWhatsappSettings: async (input: {
+      accessToken: string;
+      accountId?: string;
+      ghostMode?: boolean;
+      downloadMedia?: boolean;
+      downloadProfilePictures?: boolean;
+      syncOnConnect?: boolean;
+      maxMessagesPerChat?: number;
+      uploadToDrive?: boolean;
+      downloadMediaOnSync?: boolean;
+    }) => {
+      const patch: any = {
+        ...(input.ghostMode !== undefined ? { ghostMode: input.ghostMode } : {}),
+        ...(input.downloadMedia !== undefined ? { downloadMedia: input.downloadMedia } : {}),
+        ...(input.downloadProfilePictures !== undefined ? { downloadProfilePictures: input.downloadProfilePictures } : {}),
+        ...(input.syncOnConnect !== undefined ? { syncOnConnect: input.syncOnConnect } : {}),
+        ...(input.maxMessagesPerChat !== undefined ? { maxMessagesPerChat: input.maxMessagesPerChat } : {}),
+        ...(input.uploadToDrive !== undefined ? { uploadToDrive: input.uploadToDrive } : {}),
+        ...(input.downloadMediaOnSync !== undefined ? { downloadMediaOnSync: input.downloadMediaOnSync } : {}),
+      };
+
+      return requestJson<any>('/api/whatsapp/settings', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${input.accessToken}`,
+          ...(input.accountId ? { 'X-Account-Id': input.accountId } : {}),
+        },
+        json: patch,
+      });
+    },
     getChatNotificationSettings: async (input: { accessToken: string; accountId?: string; chatId: string }) => {
       return requestJson<any>(`/api/mobile/chats/${encodeURIComponent(input.chatId)}/notification-settings`, {
         method: 'GET',

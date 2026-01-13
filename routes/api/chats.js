@@ -261,6 +261,22 @@ router.post('/:id/unarchive', validate({ params: chatIdParamSchema }), async (re
     return res.json({ success: true });
 });
 
+router.post('/:id/mark-read', validate({ params: chatIdParamSchema }), async (req, res) => {
+    const chatId = req.validatedParams.id;
+    try {
+        const result = await req.account.whatsapp.markAsRead(chatId);
+        return res.json(result);
+    } catch (error) {
+        // Prefer clearing the local unread state even if WhatsApp is not connected.
+        try {
+            const lastAt = Number(req.account.db.messages.getMaxTimestampByChatId.get(chatId)?.ts) || 0;
+            req.account.db.chats.markRead.run(lastAt || Date.now(), chatId);
+        } catch (e) {}
+
+        return res.json({ success: true, seenSent: false, reason: error?.message || 'markAsRead_failed' });
+    }
+});
+
 router.get('/:id/messages', validate({ params: chatIdParamSchema, query: paginationQuerySchema }), async (req, res) => {
     const { limit, offset } = req.validatedQuery;
     const chatId = req.validatedParams.id;

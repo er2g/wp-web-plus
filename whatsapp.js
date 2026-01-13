@@ -1688,6 +1688,18 @@ class WhatsAppClient {
 
             const lastPreview = msgData.body || (msg.hasMedia ? (msg.type === 'document' ? '[Dosya]' : '[Medya]') : '');
             const profilePic = await this.getChatProfilePic(chat);
+
+            let unreadCount = chat.unreadCount || 0;
+            try {
+                const existingChat = this.db.chats.getById.get(chat.id._serialized);
+                const lastReadAt = existingChat?.last_read_at ?? null;
+                if (fromMe) {
+                    unreadCount = 0;
+                } else if (lastReadAt !== null && lastReadAt !== undefined) {
+                    const currentUnread = Number(existingChat?.unread_count) || 0;
+                    unreadCount = msgData.timestamp <= Number(lastReadAt) ? 0 : currentUnread + 1;
+                }
+            } catch (e) {}
             
             this.db.chats.upsert.run(
                 chat.id._serialized,
@@ -1696,7 +1708,7 @@ class WhatsAppClient {
                 profilePic,
                 lastPreview.substring(0, 100),
                 msgData.timestamp,
-                chat.unreadCount || 0
+                unreadCount
             );
             if (chat.archived) {
                 try {
@@ -1952,6 +1964,21 @@ class WhatsAppClient {
             ? lastMsg.timestamp * 1000
             : (Number(existingChat?.last_message_at) || 0);
 
+        let unreadCount = chat.unreadCount || 0;
+        const lastReadAt = existingChat?.last_read_at ?? null;
+        if (lastReadAt !== null && lastReadAt !== undefined) {
+            try {
+                unreadCount = Number(this.db.messages.countUnreadAfter.get(chatId, Number(lastReadAt) || 0)?.n) || 0;
+            } catch (e) {
+                unreadCount = Number(existingChat?.unread_count) || 0;
+            }
+
+            // If our local state says "read", never let WhatsApp's unreadCount resurrect it.
+            if (lastAt && lastAt <= Number(lastReadAt)) {
+                unreadCount = 0;
+            }
+        }
+
         this.db.chats.upsert.run(
             chatId,
             chatName,
@@ -1959,7 +1986,7 @@ class WhatsAppClient {
             profilePic,
             String(lastPreview || '').substring(0, 100),
             lastAt,
-            chat.unreadCount || 0
+            unreadCount
         );
         if (chat.archived) {
             try {
@@ -2894,14 +2921,45 @@ class WhatsAppClient {
     }
 
     async markAsRead(chatId) {
-        if (this.settings.ghostMode) {
-            return { success: false, reason: 'Ghost Mode is enabled' };
-        }
-        if (!this.isReady()) throw new Error('WhatsApp not connected');
+        const id = typeof chatId === 'string' ? chatId.trim() : '';
+        if (!id) throw new Error('Invalid chatId');
 
-        const chat = await this.client.getChatById(chatId);
-        await chat.sendSeen();
-        return { success: true };
+        let lastReadAt = Date.now();
+        try {
+            const row = this.db.messages.getMaxTimestampByChatId.get(id);
+            const ts = Number(row?.ts) || 0;
+            lastReadAt = ts || (Number(this.db.chats.getById.get(id)?.last_message_at) || Date.now());
+        } catch (e) {}
+
+        try {
+            this.db.chats.markRead.run(lastReadAt, id);
+        } catch (e) {}
+
+        try {
+            this.emit('chat_updated', { chatId: id, unreadCount: 0, lastReadAt });
+        } catch (e) {}
+
+        if (this.settings.ghostMode) {
+            return { success: true, ghostMode: true, seenSent: false };
+        }
+
+        if (!this.isReady()) {
+            return { success: true, ghostMode: false, seenSent: false, reason: 'WhatsApp not connected' };
+        }
+
+        try {
+            const chat = await Promise.race([
+                this.client.getChatById(id),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Chat fetch timeout')), 10000))
+            ]);
+            await Promise.race([
+                chat.sendSeen(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('sendSeen timeout')), 10000))
+            ]);
+            return { success: true, ghostMode: false, seenSent: true };
+        } catch (error) {
+            return { success: true, ghostMode: false, seenSent: false, reason: error?.message || 'sendSeen_failed' };
+        }
     }
 
     async archiveChat(chatId) {

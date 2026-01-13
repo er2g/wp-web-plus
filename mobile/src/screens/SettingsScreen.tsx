@@ -4,6 +4,7 @@ import { Alert, Linking, Modal, Pressable, ScrollView, StyleSheet, Switch, Text,
 import { Platform } from 'react-native';
 
 import { createApiClient } from '../api/client';
+import { ApiError } from '../api/errors';
 import { registerForPushAsync } from '../notifications/push';
 import { useSession } from '../session/SessionContext';
 import { getOrCreateDeviceId } from '../session/deviceId';
@@ -28,6 +29,8 @@ export function SettingsScreen() {
   const [sound, setSound] = useState(session.notificationSettings?.sound || '');
   const [accountModal, setAccountModal] = useState(false);
   const [deviceId, setDeviceId] = useState<string | null>(null);
+  const [ghostMode, setGhostMode] = useState<boolean>(false);
+  const [ghostModeAvailable, setGhostModeAvailable] = useState<boolean>(false);
   const [pushStatus, setPushStatus] = useState<{
     enabled: boolean;
     mode: string;
@@ -52,6 +55,30 @@ export function SettingsScreen() {
       .then(setPushStatus)
       .catch(() => setPushStatus(null));
   }, [api, session]);
+
+  useEffect(() => {
+    if (session.status !== 'signedIn') return;
+    let alive = true;
+    void session
+      .callApi((accessToken) => api.getWhatsappSettings({ accessToken, accountId: session.accountId || undefined }))
+      .then((settings) => {
+        if (!alive) return;
+        setGhostMode(Boolean(settings?.ghostMode));
+        setGhostModeAvailable(true);
+      })
+      .catch((err) => {
+        if (!alive) return;
+        if (err instanceof ApiError && err.status === 403) {
+          setGhostModeAvailable(false);
+          return;
+        }
+        // If it fails for a transient reason, hide the toggle (we don't want scary errors on settings screen).
+        setGhostModeAvailable(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [api, session, session.accountId, session.status]);
 
   async function applyNotifPatch(patch: any) {
     setBusy(true);
@@ -173,6 +200,26 @@ export function SettingsScreen() {
   const androidChannel = ns?.androidChannel ?? 'messages_strong';
   const strongMode = androidChannel === 'messages_strong';
 
+  async function handleToggleGhostMode(v: boolean) {
+    setBusy(true);
+    try {
+      const res = await session.callApi((accessToken) =>
+        api.updateWhatsappSettings({ accessToken, accountId: session.accountId || undefined, ghostMode: v })
+      );
+      const applied = res?.settings?.ghostMode;
+      setGhostMode(applied === undefined ? v : Boolean(applied));
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) {
+        Alert.alert('Yetki yok', 'Ghost Mode için admin/manager yetkisi gerekiyor.');
+        setGhostModeAvailable(false);
+        return;
+      }
+      Alert.alert('Hata', err instanceof Error ? err.message : 'Bilinmeyen hata');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <Text style={styles.h1}>Ayarlar</Text>
@@ -239,6 +286,21 @@ export function SettingsScreen() {
           <Button title="Sesi Kaydet" onPress={handleSaveNotif} loading={busy} />
         </View>
       </View>
+
+      {ghostModeAvailable ? (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Gizlilik</Text>
+          <ToggleRow
+            title="Ghost Mode"
+            subtitle="Sohbet açınca 'okundu/görüldü' göndermeden yerelde okundu say"
+            value={ghostMode}
+            onChange={(v) => void handleToggleGhostMode(v)}
+          />
+          <Text style={styles.note}>
+            Not: Ghost Mode açıkken WhatsApp tarafında "okundu" gönderilmez; paneldeki okunmamış sayacı yerel olarak takip edilir.
+          </Text>
+        </View>
+      ) : null}
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Cihaz / Push</Text>

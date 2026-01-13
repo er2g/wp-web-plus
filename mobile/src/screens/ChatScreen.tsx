@@ -68,6 +68,7 @@ export function ChatScreen() {
   const pendingRef = useRef<Map<string, { tempId: string; chatId: string; body: string; timestamp: number; serverMessageId?: string }>>(
     new Map()
   );
+  const markReadTimer = useRef<any>(null);
 
   const chatId = route.params.chatId;
   const title = route.params.title || chatId;
@@ -140,6 +141,12 @@ export function ChatScreen() {
     messagesRef.current = messages;
   }, [messages]);
 
+  useEffect(() => {
+    return () => {
+      if (markReadTimer.current) clearTimeout(markReadTimer.current);
+    };
+  }, []);
+
   const upsertIncoming = useCallback(
     (normalized: any) => {
       const incomingChatId = String(normalized?.chatId || normalized?.chat_id || '').trim();
@@ -192,8 +199,16 @@ export function ChatScreen() {
         ack: isFromMe ? 0 : 0,
       };
       setMessages((prev) => [row, ...prev]);
+
+      if (!isFromMe) {
+        // Keep unread badge consistent while the chat is open (best effort, debounced).
+        if (markReadTimer.current) clearTimeout(markReadTimer.current);
+        markReadTimer.current = setTimeout(() => {
+          void callApi((accessToken) => api.markChatRead({ accessToken, accountId: accountId || undefined, chatId })).catch(() => undefined);
+        }, 400);
+      }
     },
-    [chatId]
+    [accountId, api, callApi, chatId]
   );
 
   useEffect(() => {
