@@ -910,9 +910,13 @@ class WhatsAppClient {
                 await this.destroy();
             }
 
+            const puppeteerOpts = { headless: true, args: this.config.PUPPETEER_ARGS };
+            if (this.config.PUPPETEER_EXECUTABLE_PATH) {
+                puppeteerOpts.executablePath = this.config.PUPPETEER_EXECUTABLE_PATH;
+            }
             this.client = new Client({
                 authStrategy: new LocalAuth({ dataPath: this.config.SESSION_DIR }),
-                puppeteer: { headless: true, args: this.config.PUPPETEER_ARGS }
+                puppeteer: puppeteerOpts
             });
             this.setupEventHandlers();
             this.log('info', 'whatsapp', 'Initializing WhatsApp client...');

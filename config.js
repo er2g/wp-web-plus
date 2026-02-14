@@ -109,6 +109,7 @@ const envSchema = z.object({
     SESSION_DIR: optionalString(),
     DB_PATH: optionalString(),
     MEDIA_DIR: optionalString(),
+    PUPPETEER_EXECUTABLE_PATH: optionalString(),
 
     DRIVE_FOLDER_ID: optionalString(),
     DRIVE_PUBLIC_SHARING: booleanLike(false),
@@ -234,6 +235,7 @@ module.exports = {
     },
     
     // WhatsApp
+    PUPPETEER_EXECUTABLE_PATH: env.PUPPETEER_EXECUTABLE_PATH || null,
     PUPPETEER_ARGS: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
